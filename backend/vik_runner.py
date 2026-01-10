@@ -2,7 +2,7 @@ import subprocess
 import sys
 import time
 
-INTERVAL = 1 * 60  # 10 minutes
+INTERVAL = 0.5 * 60  # 10 minutes
 
 while True:
     print("[RUNNER] Checking for new IDs...")
