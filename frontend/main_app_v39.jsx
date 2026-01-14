@@ -37,7 +37,7 @@ const UtilityOutageApp = () => {
   const [touchEnd, setTouchEnd] = useState(0);
   const [wheelDelta, setWheelDelta] = useState(0);
 
-  // Mock data - replace with actual API call to your backend
+    // To-Do - Replace Mock with Actual API call 
   useEffect(() => {
     const mockOutages = [
       {
