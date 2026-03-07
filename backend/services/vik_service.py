@@ -1,28 +1,28 @@
 """
 Core logic for extracting data from vik.
-Currently it works for the whole region. Might refactor it to scrape only for the city of Varna
 
 Pipeline:
 1. Downloads the official page
-    - if an error occurrs, it stops
-2. Parses the response with BeautifulSoup
-    - if the content is empty three times in a row, it stops
-3. The extracted content is processed using a LLM
-4. The output from the LLM is geocoded
+2. Parses all message urls from the response with BeautifulSoup
+3. Goes over all urls, extracts their id with regex and checks if the id comes after the one stored in state.json
+4. For each new url it again downloads the page and parses it with BeautifulSoup
+5. The extracted content is processed using a LLM
+6. The output from the LLM is geocoded
 ...
 """
 
 import json
 import time
+import re
 
 from geopy.geocoders import Nominatim
 
-from scraping.scrape import fetch_page, vik_parse
+from scraping.scrape import fetch_page, vik_parse_page, vik_parse_message
 from utility.json_wrapper import vik_get_last_id, vik_write_new_id
 from processing.ai_parser import ai_parse
 
-
-MISS_THRESHOLD = 3
+URL = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
+URL_PATTERN = re.compile(r'(\d+)\.html')
 # the prompt is quite long because nominatim is picky about some stuff
 AI_PROMPT = """
     You are a system that outputs strictly valid JSON.
@@ -77,75 +77,76 @@ AI_PROMPT = """
     - Ensure the JSON is syntactically valid.
     """
 
-consecutive_miss = 0
-msg_id = vik_get_last_id()
+msg_stored_id = vik_get_last_id()
+msg_latest_id = msg_stored_id
 geolocator = Nominatim(user_agent="city_shield")
 
 print("[VIK] Starting...")
 
-while True:
-    if consecutive_miss >= MISS_THRESHOLD:
-        print(f"[VIK] {consecutive_miss} misses in a row. Stopping...")
-        vik_write_new_id(msg_id)
-        break
-    
-    try:
-        response = fetch_page(f"https://vikvarna.com/bg/messages/breakdown/{msg_id}.html")
-    except:
-        print("[VIK] An error occurred while fetching the page. Stopping...")
-        vik_write_new_id(msg_id)
-        break
+try:
+    response = fetch_page(URL)
+except:
+    print("[VIK] An error occurred while fetching the page. Stopping...")
+    raise SystemExit(1)
 
-    data = vik_parse(response.text)
+msg_urls = vik_parse_page(response.text)
 
-    if not data:
-        consecutive_miss += 1
+for url in msg_urls:
+    print(url)
+    match = URL_PATTERN.search(url)
+    if not match:
+        print("[VIK] Couldn't find a match for this url: " + url)
         continue
-    else:
-        consecutive_miss = 0
 
-    # this might take some time if you are using a high param local llm 
-    # TODO: implement fallback in case the llm messes up
-    msg_content = f"{data["title"]}\n{data["content"]}"
-    print(msg_content)
+    message_id = int(match.group(1))
 
-    processed_data = ai_parse(AI_PROMPT, msg_content)
-
-    data_json = json.loads(processed_data)
-    print(data_json)
-
-    addresses = []
-
-    for location in data_json.get("locations", []):
-        location_name = location.get("location_name", "")
-
-        sublocations = location.get("sublocations")
-        if not sublocations:
-            addresses.append(location_name)
+    if message_id > msg_stored_id:
+        msg_latest_id = max(msg_latest_id, message_id)
+        try:
+            response = fetch_page(url)
+        except:
+            print("[VIK] An error occurred while fetching the message page.")
             continue
 
-        for sublocation in sublocations:
-            sublocation_name = sublocation.get("sublocation_name", "")
+        message = vik_parse_message(response.text)
+        msg_content = f"{message["title"]}\n{message["content"]}"
+        print(msg_content)
 
-            streets = sublocation.get("streets")
-            if not streets:
-                addresses.append(f"{sublocation_name} {location_name}")
+        processed_data = ai_parse(AI_PROMPT, msg_content)
+        data_json = json.loads(processed_data)
+        print(data_json)    
+        
+        addresses = []
+        for location in data_json.get("locations", []):
+            location_name = location.get("location_name", "")
+            sublocations = location.get("sublocations")
+
+            if not sublocations:
+                addresses.append(location_name)
                 continue
 
-            for street in streets:
-                addresses.append(f"{street} {sublocation_name} {location_name}")
+            for sublocation in sublocations:
+                sublocation_name = sublocation.get("sublocation_name", "")
+                streets = sublocation.get("streets")
+                
+                if not streets:
+                    addresses.append(f"{sublocation_name} {location_name}")
+                    continue
 
-    for address in addresses:
-        full_address = f"{address} Варна България"
-        print(full_address)
-        # this uses the nominatim free api (max 1 request/second)
-        location = geolocator.geocode(address)
-        if location:
-            print(f"Cords: {location.latitude} {location.longitude}")
-        else:
-            print("Location not found")
-        time.sleep(2)
+                for street in streets:
+                    addresses.append(f"{street} {sublocation_name} {location_name}")
 
-    msg_id += 1
+        for address in addresses:
+            full_address = f"{address} Варна България"
+            print(full_address)
 
-    time.sleep(3)
+            # this uses the nominatim free api (max 1 request/second)
+            location = geolocator.geocode(address)
+            if location:
+                print(f"Cords: {location.latitude} {location.longitude}")
+            else:
+                print("Location not found")
+            
+            time.sleep(2)
+
+vik_write_new_id(msg_latest_id)

@@ -14,9 +14,9 @@ def fetch_page(url, headers=None, timeout=10):
     response.raise_for_status()
     return response
 
-def vik_parse(html):
+def vik_parse_message(html):
     """
-    Parse HTML from vikvarna using BeautifulSoup.
+    Parse message HTML from vikvarna using BeautifulSoup.
     Returns a dictionary containing the message info.
     """
     soup = BeautifulSoup(html, "lxml")
@@ -36,6 +36,25 @@ def vik_parse(html):
         "content": content.get_text(strip=True)
     }
 
+def vik_parse_page(html):
+    """
+    Parse page HTML from vikvarna using BeautifulSoup.
+    Returns a list of all message urls.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    container = soup.select_one("#main_content")
+
+    messages = container.find_all("div", class_="list-item")
+
+    urls = []
+
+    for msg in messages:
+        url = msg.find("a").get("href")
+        urls.append(url)
+
+    return urls
+
 def vt_parse(html):
     """
     Parse HTML from varnatraffic using BeautifulSoup.
@@ -43,20 +62,22 @@ def vt_parse(html):
     """
     soup = BeautifulSoup(html, "lxml")
 
-    accordion_groups = soup.find_all("div", class_="accordion-group")
+    container = soup.select_one("#infoAccordion")
+
+    accordion_groups = container.find_all("div", class_="accordion-group")
 
     results = []
 
-    for group in accordion_groups:
-        data_id = group.get("data-id", "No ID")
+    for accordion in accordion_groups:
+        data_id = accordion.get("data-id", "No ID")
 
-        header_tag = group.find("a", class_="accordion-toggle")
+        header_tag = accordion.find("a", class_="accordion-toggle")
         header_text = header_tag.get_text(strip=True) if header_tag else "No header"
 
-        body_tag = group.find("div", class_="accordion-inner")
+        body_tag = accordion.find("div", class_="accordion-inner")
         body_text = body_tag.get_text(" ", strip=True) if body_tag else "No body"
 
-        time_tag = group.find("div", class_="info-time")
+        time_tag = accordion.find("div", class_="info-time")
         info_time = time_tag.get_text(strip=True) if time_tag else "No time"
 
         results.append({

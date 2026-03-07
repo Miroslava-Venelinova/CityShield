@@ -2,7 +2,7 @@ from geopy.geocoders import Nominatim
 
 geolocator = Nominatim(user_agent="city_shield")
 
-location = geolocator.geocode("Затвора, Варна")
+location = geolocator.geocode("Индустриална зона 'Планова', Варна, България")
 
 if location:
     print("Address:", location.address)
