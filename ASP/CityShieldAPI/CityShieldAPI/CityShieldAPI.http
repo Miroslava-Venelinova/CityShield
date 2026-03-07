@@ -1,0 +1,6 @@
+@CityShieldAPI_HostAddress = http://localhost:5276
+
+GET {{CityShieldAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

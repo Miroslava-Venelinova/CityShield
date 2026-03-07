@@ -1,0 +1,55 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36221.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityShieldAPI", "CityShieldAPI\CityShieldAPI.csproj", "{87E06165-0FF3-492C-BF92-903EEAF47190}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityShieldAPI.Data", "CityShieldAPI.Data\CityShieldAPI.Data.csproj", "{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityShieldAPI.Data.Models", "CityShieldAPI.Data.Models\CityShieldAPI.Data.Models.csproj", "{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityShieldAPI.Common", "CityShieldAPI.Common\CityShieldAPI.Common.csproj", "{FB1FA1B1-4D66-4357-AD9B-127F32BC3D64}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityShieldAPI.Core", "CityShieldAPI.Core\CityShieldAPI.Core.csproj", "{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityShieldAPI.DTOs", "CityShieldAPI.DTOs\CityShieldAPI.DTOs.csproj", "{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{87E06165-0FF3-492C-BF92-903EEAF47190}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{87E06165-0FF3-492C-BF92-903EEAF47190}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{87E06165-0FF3-492C-BF92-903EEAF47190}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{87E06165-0FF3-492C-BF92-903EEAF47190}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}.Release|Any CPU.Build.0 = Release|Any CPU
+		{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FB1FA1B1-4D66-4357-AD9B-127F32BC3D64}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FB1FA1B1-4D66-4357-AD9B-127F32BC3D64}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FB1FA1B1-4D66-4357-AD9B-127F32BC3D64}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FB1FA1B1-4D66-4357-AD9B-127F32BC3D64}.Release|Any CPU.Build.0 = Release|Any CPU
+		{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8865A26E-4ABF-4CA5-9EC3-95F1D593282F}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,16 @@
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\bin\Debug\net8.0\CityShieldAPI.Common.deps.json
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\bin\Debug\net8.0\CityShieldAPI.Common.runtimeconfig.json
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\bin\Debug\net8.0\CityShieldAPI.Common.dll
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\bin\Debug\net8.0\CityShieldAPI.Common.pdb
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.csproj.AssemblyReference.cache
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.GeneratedMSBuildEditorConfig.editorconfig
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.AssemblyInfoInputs.cache
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.AssemblyInfo.cs
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.csproj.CoreCompileInputs.cache
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\EFCoreNpgsqlNetTopologySuite.cs
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.sourcelink.json
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.dll
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\refint\CityShieldAPI.Common.dll
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.pdb
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\CityShieldAPI.Common.genruntimeconfig.cache
+E:\CityShield\CityShield\ASP\CityShieldAPI\CityShieldAPI.Common\obj\Debug\net8.0\ref\CityShieldAPI.Common.dll
