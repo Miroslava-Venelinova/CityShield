@@ -5,7 +5,7 @@ Currently it uses a local LLM (ollama). Might change in the future.
 
 import ollama
 
-def ai_parse(system_prompt: str, prompt: str) -> str:
+def ai_parse(system_prompt: str, user_prompt: str) -> str:
     """
     General function for AI parsing.
     """
@@ -13,7 +13,7 @@ def ai_parse(system_prompt: str, prompt: str) -> str:
     response = ollama.chat(
             #model="mistral",
             model = "qwen3:32b",
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             format = "json"
         )
 
