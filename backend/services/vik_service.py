@@ -12,37 +12,41 @@ Pipeline:
 """
 
 import json
-import time
 import re
+import uuid
 
-from geopy.geocoders import Nominatim
+from geopy import Photon
 
 from scraping.scrape import fetch_page, vik_parse_page, vik_parse_message
 from utility.json_wrapper import vik_get_last_id, vik_write_new_id
-from processing.ai_parser import ai_parse
+from processing import ai_parser, geocode_wrapper
 
 URL = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
 URL_PATTERN = re.compile(r'(\d+)\.html')
-# the prompt is quite long because nominatim is picky about some stuff
+
 AI_PROMPT = """
     You are a system that outputs strictly valid JSON.
 
-    Task:
-    You will receive a message in bulgarian from which you have to extract the information and generate a JSON file.
-
-    Clarifications regarding the information:
-    Abbreviations and their meaning: if it's said to be included, leave the abbreviation in the data. If said otherwise, do not include it in the final data e.g. "ул. Иван Вазов" -> Иван Вазов
-    ул. (улица) - street; do not include
-    бул. (булевард) - boulevard; include
-    ж.к. (жилищен комплекс) - residential complex; include
-    кв.	(квартал) - district; include
-    с. (село) - village; do not include
-    гр. (град) - city; do not include
-    м-т (местност) - locality; include
-    бл. (блок) - block; include
-    If something isn't from the things listed it falls under the "other" category - assume that it's some place/building like a school, factory, etc. and leave it like it was in the original message
-
-    Requirements:
+    === Task ===
+    You will receive a message in Bulgarian from which you have to extract information and generate a JSON file.
+    
+    === Clarifications ===
+    List of abbreviations and their meaning:
+    "ул." /улица/ - street
+    "бул." /булевард/ - boulevard
+    "ж.к." /жилищен комплекс/ - residential complex
+    "кв." /квартал/ - district
+    "с." /село/ - village
+    "гр." /град/ - city
+    "м-т" (NO DOT) /местност/ (can also be encountered as "м." or "м-ст") - locality
+    "к.к." /курортен комплекс/ (can also be encountered as "к.к-с")- resort complex
+    - If something isn't from the things listed do not include it.
+    - If there are details regarding what happend and who caused it - ignore it.
+    - The abbreviations must be written EXACTLY like from the list AND CONSIDER THE DOTS.
+    - Leave spaces between each word (including abbreviations)
+    - Remove all quotation marks from the locations
+        
+    === Requirements ===
     - Output ONLY valid JSON.
     - Do not include explanations, comments, or markdown.
     - Follow this exact schema:
@@ -51,35 +55,29 @@ AI_PROMPT = """
             [
                 {
                     "location_name": string,
-                    "sublocations": 
-                    [
-                        {
-                            "sublocation_name": string
-                            "streets": ["array of strings"]
-                        }
-                    ]
+                    "sublocations": array of strings
                 }
             ]
         "start_time": format "HH:MM",
-        "start_date": format "dd.MM.yyyy"
-        "end_time": format "HH:MM",
-        "end_date": format "dd.MM.yyyy"
+        "end_time": format "HH:MM"
     }
 
-    The "location_name" field must contain the name of the village/city. If the village/city isn't specified, put "Варна".
-    The "sublocation_name" field must contain the name of the district/locality. If there is something from the "other" category place it here.
-    For each street put the name of the street/boulevard. If there is some additional information (for example block number) put it before the street and separate it with comma.
-    If the start_date and end_date isn't specified in the message leave it null.
+    The "location_name" field must contain the name of the city/village/locality/district/residential complex.
+    The "sublocations" array includes streets/boulevards, each as a separate entry.
     
-    Constraints:
+    === Constraints ===:
     - Do not add extra fields.
     - If data is unknown, use null.
     - Ensure the JSON is syntactically valid.
     """
 
+geolocator = Photon(user_agent="city_shield", domain="localhost:2322", scheme="http")
+
 msg_stored_id = vik_get_last_id()
+
+print("===== last stored id =====")
+print(msg_stored_id)
 msg_latest_id = msg_stored_id
-geolocator = Nominatim(user_agent="city_shield")
 
 print("[VIK] Starting...")
 
@@ -92,6 +90,7 @@ except:
 msg_urls = vik_parse_page(response.text)
 
 for url in msg_urls:
+    print("--- url ---")
     print(url)
     match = URL_PATTERN.search(url)
     if not match:
@@ -110,43 +109,50 @@ for url in msg_urls:
 
         message = vik_parse_message(response.text)
         msg_content = f"{message["title"]}\n{message["content"]}"
+        print("--- message ---")
         print(msg_content)
 
-        processed_data = ai_parse(AI_PROMPT, msg_content)
-        data_json = json.loads(processed_data)
-        print(data_json)    
+        ai_extracted_data = ai_parser.ai_parse(AI_PROMPT, msg_content)
+        processed_data_json = json.loads(ai_extracted_data)
+        print("--- extracted data ---")
+        print(processed_data_json)
+
+        final_data = {
+            "id": str(uuid.uuid4()),
+            "original_message":{
+                "tile": message["title"],
+                "content": message["content"]
+            },
+            "locations": []
+        }
+
+        locations_data = { "locations": [] }
         
-        addresses = []
-        for location in data_json.get("locations", []):
+        for location in processed_data_json.get("locations", []):
             location_name = location.get("location_name", "")
+            
+            location_entry = {"location_name": location_name, "coords": [], "sublocations": []}
+
+            if location_name:
+                coords = geolocator.geocode(location_name + " Варна Варна България")
+                if coords:
+                    location_entry["coords"] = [coords.latitude, coords.longitude]
+
             sublocations = location.get("sublocations")
 
-            if not sublocations:
-                addresses.append(location_name)
-                continue
-
             for sublocation in sublocations:
-                sublocation_name = sublocation.get("sublocation_name", "")
-                streets = sublocation.get("streets")
-                
-                if not streets:
-                    addresses.append(f"{sublocation_name} {location_name}")
-                    continue
+                sublocation_entry = {"sublocation_name": sublocation, "coords": []}
+                coords = geolocator.geocode(sublocation + " Варна Варна България")
+                if coords:
+                    sublocation_entry["coords"] = [coords.latitude, coords.longitude]
 
-                for street in streets:
-                    addresses.append(f"{street} {sublocation_name} {location_name}")
+                location_entry["sublocations"].append(sublocation_entry)
+               
+            locations_data["locations"].append(location_entry)
 
-        for address in addresses:
-            full_address = f"{address} Варна България"
-            print(full_address)
-
-            # this uses the nominatim free api (max 1 request/second)
-            location = geolocator.geocode(address)
-            if location:
-                print(f"Cords: {location.latitude} {location.longitude}")
-            else:
-                print("Location not found")
-            
-            time.sleep(2)
+        final_data["locations"] = locations_data["locations"]
+        print("--- final data ---")
+        print(final_data)
+        print("=================================")
 
 vik_write_new_id(msg_latest_id)

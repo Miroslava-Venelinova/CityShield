@@ -11,10 +11,12 @@ def ai_parse(system_prompt: str, user_prompt: str) -> str:
     """
     # uncomment the model you want to use
     response = ollama.chat(
-            #model="mistral",
-            model = "qwen3:32b",
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            model = "qwen3.5",
+            #model = "qwen3.5:27b",
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             format = "json"
         )
+    
+    print(f"tokens used: prompt_eval={response["prompt_eval_count"]} eval={response["eval_count"]}")
 
     return response['message']['content']
