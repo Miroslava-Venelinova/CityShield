@@ -17,12 +17,15 @@ def fetch_page(url, headers=None, timeout=10):
 def vik_parse_message(html):
     """
     Parse message HTML from vikvarna using BeautifulSoup.
-    Returns a dictionary containing the message info.
+    Returns a dictionary containing the message info, or None if parsing fails.
     """
     soup = BeautifulSoup(html, "lxml")
 
     container = soup.select_one("#main_content")
-  
+    if container is None:
+        print("[scrape] vik_parse_message: #main_content not found in HTML.")
+        return None
+
     content = container.select_one(".view p")
     if not content:
         return None
@@ -31,7 +34,7 @@ def vik_parse_message(html):
     date = container.select_one(".list-item-date")
 
     return {
-        "title": title.get_text(strip=True),
+        "title": title.get_text(strip=True) if title else "",
         "date": date.get_text(strip=True) if date else None,
         "content": content.get_text(strip=True)
     }
@@ -39,30 +42,40 @@ def vik_parse_message(html):
 def vik_parse_page(html):
     """
     Parse page HTML from vikvarna using BeautifulSoup.
-    Returns a list of all message urls.
+    Returns a list of all message urls, or None if parsing fails.
     """
     soup = BeautifulSoup(html, "lxml")
 
     container = soup.select_one("#main_content")
+    if container is None:
+        print("[scrape] vik_parse_page: #main_content not found in HTML.")
+        return None
 
     messages = container.find_all("div", class_="list-item")
 
     urls = []
-
     for msg in messages:
-        url = msg.find("a").get("href")
-        urls.append(url)
+        a_tag = msg.find("a")
+        if a_tag is None:
+            print("[scrape] vik_parse_page: list-item has no <a> tag. Skipping...")
+            continue
+        url = a_tag.get("href")
+        if url:
+            urls.append(url)
 
     return urls
 
 def vt_parse(html):
     """
     Parse HTML from varnatraffic using BeautifulSoup.
-    Returns a dictionary with all messages.
+    Returns a list of message dicts, or None if parsing fails.
     """
     soup = BeautifulSoup(html, "lxml")
 
     container = soup.select_one("#infoAccordion")
+    if container is None:
+        print("[scrape] vt_parse: #infoAccordion not found in HTML.")
+        return None
 
     accordion_groups = container.find_all("div", class_="accordion-group")
 

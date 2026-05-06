@@ -3,7 +3,7 @@ Core logic for extracting data from varnatraffic.
 
 Pipeline:
 1. Downloads the official page
-    - if an error occurrs, it stops
+    - if an error occurs, it stops
 2. Parses the response with BeautifulSoup
 3. Checks if there are new ids. If there are none, it stops
 4. The extracted messages are processed using a LLM
@@ -48,11 +48,14 @@ def main():
 
     try:
         response = fetch_page(URL)
-    except:
-        print("[VT] An error occurred while fetching the page. Stopping...")
+    except Exception as e:
+        print(f"[VT] An error occurred while fetching the page: {e}. Stopping...")
         return
-    
+
     raw_messages = vt_parse(response.text)
+    if raw_messages is None:
+        print("[VT] Page parsing returned no data. Stopping...")
+        return
 
     # IMPORTANT: Currently all ids are stored in state.json. It works for now, but something like SQLite should be used in prod.
     stored_ids = set(vt_get_ids())
@@ -60,25 +63,38 @@ def main():
     # filters all messages that are already processed
     filtered_messages = [
         msg for msg in raw_messages
-        if msg["data_id"] not in stored_ids
+        if msg.get("data_id") not in stored_ids
     ]
 
     if not filtered_messages:
-        print("[VT] No new messages found.") 
-    else:
-        curr_data_ids = [item["data_id"] for item in filtered_messages if "data_id" in item]
+        print("[VT] No new messages found.")
+        return
 
-        for msg in filtered_messages:
-            msg_content = f"{msg["header"]}\n{msg["body"]}"
-            bus_lines = ai_parse(AI_PROMPT, msg_content)
-            bus_lines_json = json.loads(bus_lines)
-            final_data = {
-                "id": str(uuid.uuid4()),
-                "original_message": msg,
-                **bus_lines_json
-            }
-            print(final_data)
-        vt_write_new_ids(curr_data_ids)
+    curr_data_ids = [item["data_id"] for item in filtered_messages if "data_id" in item]
+
+    for msg in filtered_messages:
+        msg_content = f"{msg.get('header', '')}\n{msg.get('body', '')}"
+
+        raw_ai_output = ai_parse(AI_PROMPT, msg_content)
+        if raw_ai_output is None:
+            print(f"[VT] AI parsing failed for message id={msg.get('data_id')}. Skipping...")
+            continue
+
+        try:
+            bus_lines_json = json.loads(raw_ai_output)
+        except json.JSONDecodeError as e:
+            print(f"[VT] Could not parse AI output as JSON: {e}. Skipping...")
+            continue
+
+        final_data = {
+            "id": str(uuid.uuid4()),
+            "original_message": msg,
+            **bus_lines_json,
+        }
+        print(final_data)
+
+    vt_write_new_ids(curr_data_ids)
+
 
 if __name__ == "__main__":
     main()
