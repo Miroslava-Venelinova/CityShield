@@ -74,6 +74,7 @@ namespace CityShieldAPI.Core
                 Longitude = request.Longitude,
                 CreatedOnUTC = DateTime.UtcNow,
                 UpdatedOnUTC = DateTime.UtcNow,
+                RegionId = 32
             };
 
             await _context.Users.AddAsync(user);

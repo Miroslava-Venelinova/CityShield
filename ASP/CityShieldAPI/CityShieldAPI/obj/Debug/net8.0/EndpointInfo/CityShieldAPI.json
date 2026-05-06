@@ -66,6 +66,18 @@
           }
         }
       }
+    },
+    "/api/VK/submit-data": {
+      "post": {
+        "tags": [
+          "VK"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
     }
   },
   "components": {

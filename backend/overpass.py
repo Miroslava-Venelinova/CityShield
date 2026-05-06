@@ -4,24 +4,15 @@ import json
 OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
 
 QUERY = """
-[out:json][timeout:25];
+[out:json][timeout:120];
 
-// Get Varna city relation explicitly
-relation
-  ["name"="Варна"]
-  ["boundary"="administrative"]
-  ["type"="boundary"]
-  ->.varnaRel;
+area["name"="Варна"]["boundary"="administrative"]->.varna;
 
-// Convert relation to area
-.varnaRel map_to_area -> .varna;
-
-// Get districts (all common tagging styles)
 (
-  // admin subdivisions (rare but included)
+  // administrative districts
   relation(area.varna)
     ["boundary"="administrative"]
-    ["admin_level"~"9|10"];
+    ["admin_level"~"7|8|9|10"];
 
   // suburbs
   node(area.varna)["place"="suburb"];
@@ -45,7 +36,7 @@ def fetch_overpass_data(query: str) -> dict:
     response = requests.post(
         OVERPASS_URL,
         data=query,
-        timeout=60
+        timeout=120
     )
     response.raise_for_status()
     return response.json()

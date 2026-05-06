@@ -19,6 +19,9 @@ namespace CityShieldAPI.Data.Models
         public required decimal Latitude { get; set; }
         public required decimal Longitude { get; set; }
 
+        public required int RegionId { get; set; }
+        public int? StreetId { get; set; }
+
         public DateTime CreatedOnUTC { get; set; }
         public DateTime UpdatedOnUTC { get; set; }
     }
