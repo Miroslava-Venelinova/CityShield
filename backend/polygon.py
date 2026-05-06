@@ -1,8 +1,12 @@
+"""
+Module for forming a polygon from a list of streets.
+"""
+
 import math
 import warnings
 import osmnx as ox
 import geopandas as gpd
-from shapely.geometry import Point, LineString, Polygon, MultiLineString
+from shapely.geometry import Point, LineString
 from shapely.ops import linemerge, polygonize, unary_union
 import folium
 

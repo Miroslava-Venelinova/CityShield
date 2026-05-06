@@ -22,7 +22,7 @@ from processing import ai_parser
 
 VIK_URL = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
 VIK_URL_PATTERN = re.compile(r'(\d+)\.html')
-API_URL = "http://localhost:5276/api/VK/submit-data"
+API_URL = "https://localhost:7180/api/VK/submit-data"
 
 AI_PROMPT = """
     You are a system that outputs strictly valid JSON.
@@ -40,7 +40,7 @@ AI_PROMPT = """
     "гр." /град/ - city
     "м-т" (NO DOT) /местност/ (can also be encountered as "м." or "м-ст") - locality
     "к.к." /курортен комплекс/ (can also be encountered as "к.к-с") - resort complex
-    - If something isn't from the things listed do not include it.
+    - If something isn't from the things listed assume it's a building or something else and do not include it.
     - If there are details regarding what happend and who caused it - ignore it
         
     === Requirements ===
@@ -68,7 +68,7 @@ AI_PROMPT = """
     - Do not add extra fields.
     - If data is unknown, use null.
     - Ensure the JSON is syntactically valid.
-    - The abbreviations must be written EXACTLY like from the list AND CONSIDER THE DOTS.
+    - The abbreviations must be written EXACTLY like from the list (the variant in the leftmost position) AND CONSIDER THE DOTS.
     - Leave spaces between each word (including abbreviations).
     - Remove all quotation marks from the locations.
     """
@@ -129,10 +129,10 @@ def main():
             print(final_data)
             print("=================================")
 
-            response = requests.post(API_URL, json=final_data)
+            # its strongly advised to use a server certificate in prod 
+            response = requests.post(API_URL, json=final_data, verify=False)
             print("=== response ===")
             print(response.status_code)
-            print(response.json())
 
     vik_write_new_id(msg_latest_id)
 
