@@ -43,38 +43,42 @@ AI_PROMPT = """
     - Ensure the JSON is syntactically valid.
     """
 
-print("[VT] Starting...")
+def main():
+    print("[VT] Starting...")
 
-try:
-    response = fetch_page(URL)
-except:
-    print("[VT] An error occurred while fetching the page. Stopping...")
-    raise SystemExit(1)
+    try:
+        response = fetch_page(URL)
+    except:
+        print("[VT] An error occurred while fetching the page. Stopping...")
+        return
+    
+    raw_messages = vt_parse(response.text)
 
-raw_messages = vt_parse(response.text)
+    # IMPORTANT: Currently all ids are stored in state.json. It works for now, but something like SQLite should be used in prod.
+    stored_ids = set(vt_get_ids())
 
-# IMPORTANT: Currently all ids are stored in state.json. It works for now, but something like SQLite should be used in prod.
-stored_ids = set(vt_get_ids())
+    # filters all messages that are already processed
+    filtered_messages = [
+        msg for msg in raw_messages
+        if msg["data_id"] not in stored_ids
+    ]
 
-# filters all messages that are already processed
-filtered_messages = [
-    msg for msg in raw_messages
-    if msg["data_id"] not in stored_ids
-]
+    if not filtered_messages:
+        print("[VT] No new messages found.") 
+    else:
+        curr_data_ids = [item["data_id"] for item in filtered_messages if "data_id" in item]
 
-if not filtered_messages:
-    print("[VT] No new messages found.") 
-else:
-    curr_data_ids = [item["data_id"] for item in filtered_messages if "data_id" in item]
+        for msg in filtered_messages:
+            msg_content = f"{msg["header"]}\n{msg["body"]}"
+            bus_lines = ai_parse(AI_PROMPT, msg_content)
+            bus_lines_json = json.loads(bus_lines)
+            final_data = {
+                "id": str(uuid.uuid4()),
+                "original_message": msg,
+                **bus_lines_json
+            }
+            print(final_data)
+        vt_write_new_ids(curr_data_ids)
 
-    for msg in filtered_messages:
-        msg_content = f"{msg["header"]}\n{msg["body"]}"
-        bus_lines = ai_parse(AI_PROMPT, msg_content)
-        bus_lines_json = json.loads(bus_lines)
-        final_data = {
-            "id": str(uuid.uuid4()),
-            "original_message": msg,
-            **bus_lines_json
-        }
-        print(final_data)
-    vt_write_new_ids(curr_data_ids)
+if __name__ == "__main__":
+    main()
