@@ -1,12 +1,24 @@
+"""
+Script for seeding data.
+TODO: fix file path
+"""
+
 import json
 import psycopg2
 from psycopg2.extras import execute_batch
 
 # Connect to PostgreSQL
+#conn = psycopg2.connect(
+#    dbname="CityShieldDB",
+#    user="postgres",
+#    password="Niki_2009",
+#    host="localhost",
+#    port="5432"
+#)
 conn = psycopg2.connect(
-    dbname="CityShieldDB",
+    dbname="mydb",
     user="postgres",
-    password="Niki_2009",
+    password="postgres",
     host="localhost",
     port="5432"
 )

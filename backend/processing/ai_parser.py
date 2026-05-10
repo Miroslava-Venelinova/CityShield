@@ -14,11 +14,11 @@ def ai_parse(system_prompt: str, user_prompt: str) -> str | None:
     try:
         # uncomment the model you want to use
         response = ollama.chat(
-            model="qwen3:8b",
-            #model="qwen3:30b-a3b",
+            model="qwen3.5",
+            #model="qwen3.5:27b",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
+                {"role": "user", "content": user_prompt},
             ],
             format="json",
         )

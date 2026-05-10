@@ -7,7 +7,8 @@ Pipeline:
 3. Goes over all urls, extracts their id with regex and checks if the id comes after the one stored in state.json
 4. For each new url it again downloads the page and parses it with BeautifulSoup
 5. The extracted content is processed using a LLM
-6. The output from the LLM is sent to the ASP server
+6. If the "is_polygon" field is True a polygon is formed from the streets and saved as geojson 
+7. The output from the LLM is sent to the ASP server
 """
 
 import json
@@ -15,10 +16,12 @@ import re
 import uuid
 
 import requests
+import psycopg2
 
 from scraping.scrape import fetch_page, vik_parse_page, vik_parse_message
 from utility.json_wrapper import vik_get_last_id, vik_write_new_id
 from processing import ai_parser
+from polygon import streets_to_geojson
 
 VIK_URL = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
 VIK_URL_PATTERN = re.compile(r'(\d+)\.html')
@@ -132,6 +135,19 @@ def main():
                 print(f"[VIK] Could not parse AI output as JSON: {e}. Skipping...")
                 continue
 
+            # TODO: add guardrails here
+            for location in processed_data_json["locations"]:
+                if location["is_polygon"]:
+                    conn = psycopg2.connect(
+                        dbname="mydb",
+                        user="postgres",
+                        password="postgres",
+                        host="localhost",
+                        port="5432"
+                    )
+                    geojson = streets_to_geojson("Варна България", location["sublocations"], conn)
+                    location["polygon_geojson"] = geojson
+
             final_data = {
                 "id": str(uuid.uuid4()),
                 "original_message": {
@@ -146,6 +162,7 @@ def main():
             print("=================================")
 
             # its strongly advised to use a server certificate in prod
+            # also in prod retries and logging must be implemented
             try:
                 api_response = requests.post(API_URL, json=final_data, verify=False, timeout=10)
                 print("=== response ===")

@@ -2,6 +2,7 @@
 Module for forming a polygon from a list of streets.
 """
 
+import json
 import math
 import warnings
 import osmnx as ox
@@ -11,7 +12,7 @@ from shapely.ops import linemerge, polygonize, unary_union
 import folium
 
 # 1. ENABLE CACHING: Saves OSM data locally so you don't hit API limits on repeated runs
-ox.settings.use_cache = True
+ox.settings.use_cache = False
 
 # Suppress minor Shapely/GeoPandas warnings for a cleaner console output
 warnings.filterwarnings('ignore')
@@ -62,7 +63,7 @@ def batch_reproject_dict(geom_dict, src_crs, dst_crs="EPSG:4326"):
     gdf = gpd.GeoDataFrame({'name': names, 'geometry': geoms}, crs=src_crs).to_crs(dst_crs)
     return dict(zip(gdf['name'], gdf.geometry))
 
-def extract_city_block(place_name, street_names, extension_dist=200, output_html="block_visualization.html"):
+def extract_city_block(place_name, street_names, extension_dist=200, output_html=None):
     """Constructs a block polygon and saves an interactive Folium map."""
     
     print(f"Fetching data for {place_name} (Using cache if available)...")
@@ -120,44 +121,45 @@ def extract_city_block(place_name, street_names, extension_dist=200, output_html
         print("Warning: The extended streets do not enclose a fully closed polygon.")
 
     # 5. Folium Visualization (Optimized with Batch Reprojection)
-    print("Generating Folium map...")
+    if output_html:
+        print("Generating Folium map...")
     
-    # Calculate map center based on original geometries
-    bounds = gdf.geometry.union_all().bounds # minx, miny, maxx, maxy
-    center_lon, center_lat = (bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2
+        # Calculate map center based on original geometries
+        bounds = gdf.geometry.union_all().bounds # minx, miny, maxx, maxy
+        center_lon, center_lat = (bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2
+            
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=15, tiles="CartoDB positron")
+
+        # Batch reproject all geometries to WGS84 for the map
+        street_wgs84 = batch_reproject_dict(street_geoms, projected_crs)
+        extended_wgs84 = batch_reproject_dict(extended_geoms, projected_crs)
         
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=15, tiles="CartoDB positron")
+        # Layer: Original Streets
+        for name, geom in street_wgs84.items():
+            folium.GeoJson(geom, name=f"Original: {name}",
+                        style_function=lambda x: {'color': '#3388ff', 'weight': 6, 'opacity': 0.4}).add_to(m)
 
-    # Batch reproject all geometries to WGS84 for the map
-    street_wgs84 = batch_reproject_dict(street_geoms, projected_crs)
-    extended_wgs84 = batch_reproject_dict(extended_geoms, projected_crs)
-    
-    # Layer: Original Streets
-    for name, geom in street_wgs84.items():
-        folium.GeoJson(geom, name=f"Original: {name}",
-                       style_function=lambda x: {'color': '#3388ff', 'weight': 6, 'opacity': 0.4}).add_to(m)
+        # Layer: Extended Streets
+        for name, geom in extended_wgs84.items():
+            folium.GeoJson(geom, name=f"Extended: {name}",
+                        style_function=lambda x: {'color': '#555555', 'weight': 2, 'dashArray': '5, 5', 'opacity': 0.6}).add_to(m)
 
-    # Layer: Extended Streets
-    for name, geom in extended_wgs84.items():
-        folium.GeoJson(geom, name=f"Extended: {name}",
-                       style_function=lambda x: {'color': '#555555', 'weight': 2, 'dashArray': '5, 5', 'opacity': 0.6}).add_to(m)
+        # Layer: Extracted Edges & Final Polygon
+        if block_poly:
+            # Reproject edges
+            edges_gdf = gpd.GeoDataFrame({'geometry': block_edges}, crs=projected_crs).to_crs("EPSG:4326")
+            for idx, edge in enumerate(edges_gdf.geometry):
+                folium.GeoJson(edge, name=f"Block Edge {idx+1}",
+                            style_function=lambda x: {'color': '#ff3333', 'weight': 4, 'opacity': 0.9}).add_to(m)
+            
+            # Reproject Polygon
+            poly_gdf = gpd.GeoDataFrame({'geometry': [block_poly]}, crs=projected_crs).to_crs("EPSG:4326")
+            folium.GeoJson(poly_gdf.geometry.iloc[0], name="Final Block Polygon",
+                        style_function=lambda x: {'fillColor': '#28a745', 'color': '#28a745', 'weight': 2, 'fillOpacity': 0.3}).add_to(m)
 
-    # Layer: Extracted Edges & Final Polygon
-    if block_poly:
-        # Reproject edges
-        edges_gdf = gpd.GeoDataFrame({'geometry': block_edges}, crs=projected_crs).to_crs("EPSG:4326")
-        for idx, edge in enumerate(edges_gdf.geometry):
-            folium.GeoJson(edge, name=f"Block Edge {idx+1}",
-                           style_function=lambda x: {'color': '#ff3333', 'weight': 4, 'opacity': 0.9}).add_to(m)
-        
-        # Reproject Polygon
-        poly_gdf = gpd.GeoDataFrame({'geometry': [block_poly]}, crs=projected_crs).to_crs("EPSG:4326")
-        folium.GeoJson(poly_gdf.geometry.iloc[0], name="Final Block Polygon",
-                       style_function=lambda x: {'fillColor': '#28a745', 'color': '#28a745', 'weight': 2, 'fillOpacity': 0.3}).add_to(m)
-
-    folium.LayerControl().add_to(m)
-    m.save(output_html)
-    print(f"Success! Interactive map saved to: {output_html}")
+        folium.LayerControl().add_to(m)
+        m.save(output_html)
+        print(f"Success! Interactive map saved to: {output_html}")    
     
     return block_poly, original_crs, projected_crs
 
@@ -171,6 +173,96 @@ def is_point_in_block(lat, lon, block_poly, original_crs, projected_crs):
     point_proj = point_gdf.to_crs(projected_crs).geometry.iloc[0]
     return block_poly.covers(point_proj)
 
+def streets_to_geojson(
+    place_name,
+    raw_street_names,
+    conn,
+    extension_dist=200,
+    similarity_threshold=0.4
+):
+    """
+    Full pipeline:
+    raw input → normalize → DB fuzzy match → polygon → GeoJSON
+    """
+
+    # --- Step 1: resolve names via PostgreSQL ---
+    resolved_map = resolve_street_names(
+        raw_street_names,
+        conn,
+        similarity_threshold=similarity_threshold
+    )
+
+    resolved_names = []
+    for original, resolved in resolved_map.items():
+        if resolved:
+            resolved_names.append(resolved)
+        else:
+            print(f"Warning: Could not resolve '{original}'")
+
+    if len(resolved_names) < 3:
+        print("Error: Need at least 3 valid streets after normalization.")
+        return None
+
+    # Optional debug output
+    print("\nResolved street mapping:")
+    for k, v in resolved_map.items():
+        print(f"  {k} → {v}")
+
+    # --- Step 2: build polygon ---
+    polygon, original_crs, projected_crs = extract_city_block(
+        place_name=place_name,
+        street_names=resolved_names,
+        extension_dist=extension_dist,
+        output_html=None
+    )
+
+    if polygon is None:
+        print("Error: Polygon construction failed.")
+        return None
+
+    # --- Step 3: convert to GeoJSON (WGS84) ---
+    gdf = gpd.GeoDataFrame(
+        [{
+            "geometry": polygon,
+            "streets": resolved_names  # optional metadata
+        }],
+        crs=projected_crs
+    ).to_crs("EPSG:4326")
+
+    geojson = json.loads(gdf.to_json())
+
+    return geojson
+
+def resolve_street_names(input_names, conn, similarity_threshold=0.4, limit=1):
+    """
+    Resolves fuzzy street names using PostgreSQL pg_trgm similarity.
+
+    Args:
+        input_names (list[str]): User-provided street names
+        conn: psycopg2 connection
+        similarity_threshold (float): minimum similarity
+        limit (int): number of candidates per input
+
+    Returns:
+        dict: {input_name: best_match_from_db or None}
+    """
+    resolved = {}
+
+    with conn.cursor() as cur:
+        for name in input_names:
+            cur.execute("""
+                SELECT street_name, similarity(street_name, %s) AS sim
+                FROM streets
+                WHERE street_name %% %s
+                ORDER BY sim DESC
+                LIMIT %s;
+            """, (name, name, limit))
+
+            result = cur.fetchone()
+            resolved[name] = result[0] if result else None
+
+    return resolved
+
 # ==========================================
 # EXECUTABLE SCRIPT / EXAMPLE USAGE
 # ==========================================
@@ -182,18 +274,19 @@ if __name__ == "__main__":
     #    "Ивац Войвода",
     #    "Тихомир"
     #]
-    bounding_streets = [
-        "Акад. Андрей Сахаров",
-        "бул. Христо Смирненски",
-        "бул. Сливница",
-        "бул. Цар Освободител"
-    ]
+    #bounding_streets = [
+    #    "Акад. Андрей Сахаров",
+    #    "бул. Христо Смирненски",
+    #    "бул. Сливница",
+    #    "бул. Цар Освободител"
+    #]
     #bounding_streets = [
     #    "бул. Владислав Варненчик",
     #    "Младежка", 
     #    "Йордан Йовков",
     #    "Фантазия" 
     #]
+    bounding_streets = [ "Царевец", "Клокотница", "бул. Чаталджа"]
 
     html_file = "map.html"
 
