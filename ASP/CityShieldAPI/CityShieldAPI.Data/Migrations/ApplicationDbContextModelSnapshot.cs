@@ -23,6 +23,67 @@ namespace CityShieldAPI.Data.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "postgis");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("CityShieldAPI.Data.Models.FirebaseToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("FirebaseTokens");
+                });
+
+            modelBuilder.Entity("CityShieldAPI.Data.Models.Region", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("RegionName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("region_name");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("regions");
+                });
+
+            modelBuilder.Entity("CityShieldAPI.Data.Models.Street", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("StreetName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("street_name");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("streets");
+                });
+
             modelBuilder.Entity("CityShieldAPI.Data.Models.User", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -46,12 +107,29 @@ namespace CityShieldAPI.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("RegionId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("StreetId")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("UpdatedOnUTC")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("UserId");
 
                     b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("CityShieldAPI.Data.Models.FirebaseToken", b =>
+                {
+                    b.HasOne("CityShieldAPI.Data.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 #pragma warning restore 612, 618
         }

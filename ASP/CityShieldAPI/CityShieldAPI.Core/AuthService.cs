@@ -1,4 +1,4 @@
-﻿using CityShielAPI.Core.Contracts;
+﻿using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.Common;
 using CityShieldAPI.Data;
 using CityShieldAPI.Data.Models;
@@ -70,11 +70,12 @@ namespace CityShieldAPI.Core
             {
                 Email = request.Email,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-                Latitude = request.Latitude,
-                Longitude = request.Longitude,
+                Latitude = 0,
+                Longitude = 0,
                 CreatedOnUTC = DateTime.UtcNow,
                 UpdatedOnUTC = DateTime.UtcNow,
-                RegionId = 32
+                RegionId = request.RegionId,
+                StreetId = request.StreetId
             };
 
             await _context.Users.AddAsync(user);

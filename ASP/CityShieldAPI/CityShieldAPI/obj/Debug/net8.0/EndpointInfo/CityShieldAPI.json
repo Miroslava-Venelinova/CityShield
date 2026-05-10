@@ -72,6 +72,19 @@
         "tags": [
           "VK"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { }
+            },
+            "text/json": {
+              "schema": { }
+            },
+            "application/*+json": {
+              "schema": { }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK"
@@ -103,9 +116,8 @@
       "RegisterRequest": {
         "required": [
           "email",
-          "latitude",
-          "longitude",
-          "password"
+          "password",
+          "regionId"
         ],
         "type": "object",
         "properties": {
@@ -122,13 +134,14 @@
             "type": "string",
             "nullable": true
           },
-          "latitude": {
-            "type": "number",
-            "format": "double"
+          "regionId": {
+            "type": "integer",
+            "format": "int32"
           },
-          "longitude": {
-            "type": "number",
-            "format": "double"
+          "streetId": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
           }
         },
         "additionalProperties": false

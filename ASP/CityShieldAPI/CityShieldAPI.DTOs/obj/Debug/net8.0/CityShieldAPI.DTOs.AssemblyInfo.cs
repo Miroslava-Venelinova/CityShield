@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CityShieldAPI.DTOs")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6c63fb81ffb0b754b2fb823f4edd436a9fbc7a98")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+91e86b14503ef83129dae38b36736f820ea3bd25")]
 [assembly: System.Reflection.AssemblyProductAttribute("CityShieldAPI.DTOs")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CityShieldAPI.DTOs")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

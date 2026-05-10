@@ -4,7 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using CityShieldAPI.DTOs;
-namespace CityShielAPI.Core.Contracts
+
+namespace CityShieldAPI.Core.Contracts
 {
     public interface IAuthService
     {

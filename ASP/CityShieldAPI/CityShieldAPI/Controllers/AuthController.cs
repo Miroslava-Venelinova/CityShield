@@ -1,4 +1,4 @@
-﻿using CityShielAPI.Core.Contracts;
+﻿using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.DTOs;
 using Microsoft.AspNetCore.Mvc;
 

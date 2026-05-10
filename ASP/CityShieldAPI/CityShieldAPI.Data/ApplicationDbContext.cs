@@ -16,6 +16,8 @@ namespace CityShieldAPI.Data
 
         public DbSet<User> Users { get; set; }
         public DbSet<FirebaseToken> FirebaseTokens { get; set; }
+        public DbSet<Street> Streets { get; set; }
+        public DbSet<Region> Regions { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

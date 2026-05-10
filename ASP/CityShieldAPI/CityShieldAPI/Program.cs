@@ -1,6 +1,6 @@
-using CityShielAPI.Core.Contracts;
 using CityShieldAPI.Common;
 using CityShieldAPI.Core;
+using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 AuthConfig();
 
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IVKService, VKService>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle

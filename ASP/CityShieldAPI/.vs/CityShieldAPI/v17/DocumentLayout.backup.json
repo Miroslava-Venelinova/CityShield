@@ -7,52 +7,60 @@
       "RelativeMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|solutionrelative:cityshieldapi.core\\authservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\controllers\\vkcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\controllers\\vkcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\controllers\\authcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\controllers\\authcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.core\\contracts\\iauthservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|solutionrelative:cityshieldapi.core\\contracts\\iauthservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}|CityShieldAPI.Data\\CityShieldAPI.Data.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data\\applicationdbcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}|CityShieldAPI.Data\\CityShieldAPI.Data.csproj|solutionrelative:cityshieldapi.data\\applicationdbcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+      "AbsoluteMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.dtos\\auth\\registerrequest.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|solutionrelative:cityshieldapi.dtos\\auth\\registerrequest.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data.models\\user.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|solutionrelative:cityshieldapi.data.models\\user.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data.models\\firebasetoken.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|solutionrelative:cityshieldapi.data.models\\firebasetoken.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
-      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.dtos\\auth\\loginrequest.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|solutionrelative:cityshieldapi.dtos\\auth\\loginrequest.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\controllers\\authcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\controllers\\authcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.dtos\\auth\\userdto.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|solutionrelative:cityshieldapi.dtos\\auth\\userdto.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.dtos\\auth\\registerrequest.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{9F3B4F5B-A01B-431F-97EE-78FD6704DF66}|CityShieldAPI.DTOs\\CityShieldAPI.DTOs.csproj|solutionrelative:cityshieldapi.dtos\\auth\\registerrequest.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+      "AbsoluteMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.core\\vkservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|solutionrelative:cityshieldapi.core\\vkservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}|CityShieldAPI.Data\\CityShieldAPI.Data.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data\\migrations\\20260307132128_initial1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{9143F7BA-884D-44FC-B93D-9E3CA6EE0989}|CityShieldAPI.Data\\CityShieldAPI.Data.csproj|solutionrelative:cityshieldapi.data\\migrations\\20260307132128_initial1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+      "AbsoluteMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data.models\\street.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|solutionrelative:cityshieldapi.data.models\\street.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data.models\\region.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|solutionrelative:cityshieldapi.data.models\\region.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\controllers\\vkcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\controllers\\vkcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
+      "RelativeMoniker": "D:0:0:{87E06165-0FF3-492C-BF92-903EEAF47190}|CityShieldAPI\\CityShieldAPI.csproj|solutionrelative:cityshieldapi\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.core\\contracts\\ivkservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|solutionrelative:cityshieldapi.core\\contracts\\ivkservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.core\\contracts\\iauthservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{88E1F87D-02BA-4448-BD2F-0A05C1BCFFE8}|CityShieldAPI.Core\\CityShieldAPI.Core.csproj|solutionrelative:cityshieldapi.core\\contracts\\iauthservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|e:\\cityshield\\cityshield\\asp\\cityshieldapi\\cityshieldapi.data.models\\firebasetoken.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{10B24C1C-F49E-4EAD-AC8E-DD761BDC8F66}|CityShieldAPI.Data.Models\\CityShieldAPI.Data.Models.csproj|solutionrelative:cityshieldapi.data.models\\firebasetoken.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
   "DocumentGroupContainers": [
@@ -62,86 +70,24 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 7,
+          "SelectedChildIndex": 2,
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 1,
-              "Title": "VKController.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\VKController.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI\\Controllers\\VKController.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\VKController.cs",
-              "RelativeToolTip": "CityShieldAPI\\Controllers\\VKController.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAwAAAAYAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-05-06T09:34:43.522Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 3,
-              "Title": "IAuthService.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\Contracts\\IAuthService.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.Core\\Contracts\\IAuthService.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\Contracts\\IAuthService.cs",
-              "RelativeToolTip": "CityShieldAPI.Core\\Contracts\\IAuthService.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-05-04T19:52:10.606Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
               "DocumentIndex": 6,
-              "Title": "FirebaseToken.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\FirebaseToken.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.Data.Models\\FirebaseToken.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\FirebaseToken.cs",
-              "RelativeToolTip": "CityShieldAPI.Data.Models\\FirebaseToken.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAA8AAAABAAAAAAAAAA==",
+              "Title": "VKService.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\VKService.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Core\\VKService.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\VKService.cs",
+              "RelativeToolTip": "CityShieldAPI.Core\\VKService.cs",
+              "ViewState": "AgIAAA0AAAAAAAAAAAAAAEMAAAAhAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-05-04T14:55:16.608Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 5,
-              "Title": "User.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\User.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.Data.Models\\User.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\User.cs",
-              "RelativeToolTip": "CityShieldAPI.Data.Models\\User.cs",
-              "ViewState": "AgIAAAsAAAAAAAAAAAAQwBYAAAAcAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-05-04T14:53:55.442Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 4,
-              "Title": "ApplicationDbContext.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data\\ApplicationDbContext.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.Data\\ApplicationDbContext.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data\\ApplicationDbContext.cs",
-              "RelativeToolTip": "CityShieldAPI.Data\\ApplicationDbContext.cs",
-              "ViewState": "AgIAAAMAAAAAAAAAAAAAAA8AAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-05-04T14:19:01.752Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 2,
-              "Title": "AuthController.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\AuthController.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI\\Controllers\\AuthController.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\AuthController.cs",
-              "RelativeToolTip": "CityShieldAPI\\Controllers\\AuthController.cs",
-              "ViewState": "AgIAAA4AAAAAAAAAAAAQwBsAAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-07T13:30:49.197Z",
+              "WhenOpened": "2026-05-06T12:04:28.925Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 7,
+              "DocumentIndex": 11,
               "Title": "appsettings.json",
               "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\appsettings.json",
               "RelativeDocumentMoniker": "CityShieldAPI\\appsettings.json",
@@ -149,7 +95,8 @@
               "RelativeToolTip": "CityShieldAPI\\appsettings.json",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
-              "WhenOpened": "2026-03-07T13:25:53.431Z"
+              "WhenOpened": "2026-03-07T13:25:53.431Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -159,50 +106,92 @@
               "RelativeDocumentMoniker": "CityShieldAPI.Core\\AuthService.cs",
               "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\AuthService.cs",
               "RelativeToolTip": "CityShieldAPI.Core\\AuthService.cs",
-              "ViewState": "AgIAADEAAAAAAAAAAAA8wE0AAAAOAAAAAAAAAA==",
+              "ViewState": "AgIAAB4AAAAAAAAAAAA8wD8AAAA3AAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2026-03-07T13:08:33.312Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 12,
-              "Title": "20260307132128_Initial1.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data\\Migrations\\20260307132128_Initial1.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.Data\\Migrations\\20260307132128_Initial1.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data\\Migrations\\20260307132128_Initial1.cs",
-              "RelativeToolTip": "CityShieldAPI.Data\\Migrations\\20260307132128_Initial1.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "DocumentIndex": 10,
+              "Title": "Program.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Program.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI\\Program.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Program.cs",
+              "RelativeToolTip": "CityShieldAPI\\Program.cs",
+              "ViewState": "AgIAAAkAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-07T13:21:28.923Z"
+              "WhenOpened": "2026-03-07T12:30:58.023Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "User.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\User.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Data.Models\\User.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\User.cs",
+              "RelativeToolTip": "CityShieldAPI.Data.Models\\User.cs",
+              "ViewState": "AgIAAAYAAAAAAAAAAAAqwAkAAAARAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-04T14:53:55.442Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
               "DocumentIndex": 9,
-              "Title": "LoginRequest.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
-              "RelativeToolTip": "CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAYAAAAXAAAAAAAAAA==",
+              "Title": "VKController.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\VKController.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI\\Controllers\\VKController.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\VKController.cs",
+              "RelativeToolTip": "CityShieldAPI\\Controllers\\VKController.cs",
+              "ViewState": "AgIAAA4AAAAAAAAAAAAgwCQAAAAdAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-07T13:11:15.253Z"
+              "WhenOpened": "2026-05-06T09:34:43.522Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 11,
-              "Title": "RegisterRequest.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
-              "RelativeToolTip": "CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
-              "ViewState": "AgIAAAYAAAAAAAAAAAAAABQAAAA3AAAAAAAAAA==",
+              "DocumentIndex": 7,
+              "Title": "Street.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\Street.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Data.Models\\Street.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\Street.cs",
+              "RelativeToolTip": "CityShieldAPI.Data.Models\\Street.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAA4AAAAWAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-07T13:11:14.363Z"
+              "WhenOpened": "2026-05-06T11:41:38.663Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 10,
+              "DocumentIndex": 8,
+              "Title": "Region.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\Region.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Data.Models\\Region.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\Region.cs",
+              "RelativeToolTip": "CityShieldAPI.Data.Models\\Region.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABQAAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-06T11:42:42.616Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "AuthController.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\AuthController.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI\\Controllers\\AuthController.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Controllers\\AuthController.cs",
+              "RelativeToolTip": "CityShieldAPI\\Controllers\\AuthController.cs",
+              "ViewState": "AgIAAA0AAAAAAAAAAAAgwAAAAAAiAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-06T12:03:28.938Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
               "Title": "UserDTO.cs",
               "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\UserDTO.cs",
               "RelativeDocumentMoniker": "CityShieldAPI.DTOs\\Auth\\UserDTO.cs",
@@ -210,19 +199,72 @@
               "RelativeToolTip": "CityShieldAPI.DTOs\\Auth\\UserDTO.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAqwBAAAAAIAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-07T12:56:40.362Z"
+              "WhenOpened": "2026-03-07T12:56:40.362Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 8,
-              "Title": "Program.cs",
-              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Program.cs",
-              "RelativeDocumentMoniker": "CityShieldAPI\\Program.cs",
-              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI\\Program.cs",
-              "RelativeToolTip": "CityShieldAPI\\Program.cs",
-              "ViewState": "AgIAAAkAAAAAAAAAAAAAABoAAAAXAAAAAAAAAA==",
+              "DocumentIndex": 3,
+              "Title": "LoginRequest.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
+              "RelativeToolTip": "CityShieldAPI.DTOs\\Auth\\LoginRequest.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAYAAAAXAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-03-07T12:30:58.023Z"
+              "WhenOpened": "2026-03-07T13:11:15.253Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "RegisterRequest.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
+              "RelativeToolTip": "CityShieldAPI.DTOs\\Auth\\RegisterRequest.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAqwBIAAAATAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-07T13:11:14.363Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 12,
+              "Title": "IVKService.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\Contracts\\IVKService.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Core\\Contracts\\IVKService.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\Contracts\\IVKService.cs",
+              "RelativeToolTip": "CityShieldAPI.Core\\Contracts\\IVKService.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAwAAAA1AAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-06T12:04:20.127Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 13,
+              "Title": "IAuthService.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\Contracts\\IAuthService.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Core\\Contracts\\IAuthService.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Core\\Contracts\\IAuthService.cs",
+              "RelativeToolTip": "CityShieldAPI.Core\\Contracts\\IAuthService.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-04T19:52:10.606Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 14,
+              "Title": "FirebaseToken.cs",
+              "DocumentMoniker": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\FirebaseToken.cs",
+              "RelativeDocumentMoniker": "CityShieldAPI.Data.Models\\FirebaseToken.cs",
+              "ToolTip": "E:\\CityShield\\CityShield\\ASP\\CityShieldAPI\\CityShieldAPI.Data.Models\\FirebaseToken.cs",
+              "RelativeToolTip": "CityShieldAPI.Data.Models\\FirebaseToken.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAA8AAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-04T14:55:16.608Z"
             }
           ]
         }

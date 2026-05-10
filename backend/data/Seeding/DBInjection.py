@@ -5,6 +5,7 @@ TODO: fix file path
 
 import json
 import psycopg2
+import os
 from psycopg2.extras import execute_batch
 
 # Connect to PostgreSQL
@@ -22,16 +23,14 @@ conn = psycopg2.connect(
     host="localhost",
     port="5432"
 )
+abspath = os.path.abspath(__file__)
+dname = os.path.dirname(abspath)
+os.chdir(dname)
 
+print(os.getcwd())
 cur = conn.cursor()
 
 #SEED STREETS
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS Streets (
-        id SERIAL PRIMARY KEY,
-        street_name TEXT NOT NULL
-    );
-""")
 
 # Load JSON (array of strings)
 with open("streets.json", "r", encoding="UTF=8") as f:
@@ -43,12 +42,6 @@ insert_query = "INSERT INTO Streets (street_name) VALUES (%s);"
 execute_batch(cur, insert_query, data)
 
 #SEED REGIONS
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS Regions (
-        id SERIAL PRIMARY KEY,
-        region_name TEXT NOT NULL
-    );
-""")
 
 # Load JSON (array of strings)
 with open("regions.json", "r", encoding="UTF=8") as f:
