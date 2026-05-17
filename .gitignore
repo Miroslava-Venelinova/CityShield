@@ -1,4 +1,6 @@
 /frontend
+.env
+*.log
 *.vsidx
 *.pyc
 /backend/cache
