@@ -1,8 +1,11 @@
 """
 Entry point for the backend.
-Runs all services concurrently every 10 minutes using asyncio.
-Each service runs in its own thread (via asyncio.to_thread) so they
-don't block each other while still using the existing synchronous code.
+Runs all services concurrently using asyncio. Each service runs in an
+independent loop inside a dedicated thread (via asyncio.to_thread) so
+services never block each other.
+
+Per-service intervals are read from config (which reads from .env).
+Leave a service's interval blank in .env to use DEFAULT_INTERVAL.
 """
 
 import asyncio
@@ -10,13 +13,14 @@ import logging
 import sys
 from datetime import datetime
 
-from services import varnatraffic_service, vik_service, epro_service
+from config import cfg
+from services import epro_service, varnatraffic_service, vik_service
 
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
@@ -27,14 +31,14 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Config
+# Service registry
+# Each entry: (display_name, callable, interval_seconds | None)
+# None → falls back to cfg.DEFAULT_INTERVAL
 # ---------------------------------------------------------------------------
-INTERVAL_SECONDS = 600  # 10 minutes
-
-SERVICES = [
-    ("VarnaTraffic", varnatraffic_service.main),
-    ("VIK",          vik_service.main),
-    ("ePro",         epro_service.main),
+SERVICES: list[tuple[str, object, int | None]] = [
+    ("VarnaTraffic", varnatraffic_service.main, cfg.VT_INTERVAL),
+    ("VIK",          vik_service.main,          cfg.VIK_INTERVAL),
+    ("ePro",         epro_service.main,          cfg.EPRO_INTERVAL),
 ]
 
 # ---------------------------------------------------------------------------
@@ -43,10 +47,9 @@ SERVICES = [
 async def run_service(name: str, fn) -> None:
     """
     Run a synchronous service function in a thread so it doesn't block
-    the event loop.  Any unhandled exception is caught and logged here
+    the event loop. Any unhandled exception is caught and logged here
     so one crashing service never kills the others.
     """
-    log.info("[%s] Starting...", name)
     start = datetime.now()
     try:
         await asyncio.to_thread(fn)
@@ -56,23 +59,29 @@ async def run_service(name: str, fn) -> None:
         log.exception("[%s] Unhandled exception: %s", name, exc)
 
 
-async def run_all() -> None:
-    """Run every service concurrently and wait for all to finish."""
-    log.info("=" * 50)
-    log.info("Running all services at %s", datetime.now().strftime("%H:%M:%S"))
-    log.info("=" * 50)
-    await asyncio.gather(*(run_service(name, fn) for name, fn in SERVICES))
-    log.info("All services done.")
+async def service_loop(name: str, fn, interval: int) -> None:
+    """
+    Continuously run a single service on its own cadence.
+    The interval clock starts AFTER the service finishes, so a slow
+    run never causes two overlapping executions of the same service.
+    """
+    while True:
+        await run_service(name, fn)
+        log.info("[%s] Next run in %d minute(s).\n", name, interval // 60)
+        await asyncio.sleep(interval)
 
 
 # ---------------------------------------------------------------------------
-# Main loop
+# Main
 # ---------------------------------------------------------------------------
 async def main() -> None:
-    while True:
-        await run_all()
-        log.info("Sleeping for %d minutes...\n", INTERVAL_SECONDS // 60)
-        await asyncio.sleep(INTERVAL_SECONDS)
+    tasks = []
+    for name, fn, interval in SERVICES:
+        resolved = interval if interval is not None else cfg.DEFAULT_INTERVAL
+        log.info("Scheduling  %-16s  every %d min", name, resolved // 60)
+        tasks.append(asyncio.create_task(service_loop(name, fn, resolved)))
+
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

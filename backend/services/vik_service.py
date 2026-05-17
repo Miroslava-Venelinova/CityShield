@@ -1,31 +1,24 @@
 """
 Core logic for extracting data from vik.
-
-Pipeline:
-1. Downloads the official page
-2. Parses all message urls from the response with BeautifulSoup
-3. Goes over all urls, extracts their id with regex and checks if the id comes after the one stored in state.json
-4. For each new url it again downloads the page and parses it with BeautifulSoup
-5. The extracted content is processed using a LLM
-6. If the "is_polygon" field is True a polygon is formed from the streets and saved as geojson 
-7. The output from the LLM is sent to the ASP server
 """
 
 import json
+import logging
 import re
 import uuid
 
-import requests
 import psycopg2
+import requests
 
-from scraping.scrape import fetch_page, vik_parse_page, vik_parse_message
-from utility.json_wrapper import vik_get_last_id, vik_write_new_id
+from config import cfg
+from data.mongo.state_repository import vik_get_last_id, vik_write_new_id
+from processing.polygon import streets_to_geojson
 from processing import ai_parser
-from polygon import streets_to_geojson
+from scraping.scrape import fetch_page, vik_parse_message, vik_parse_page
 
-VIK_URL = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
+log = logging.getLogger(__name__)
+
 VIK_URL_PATTERN = re.compile(r'(\d+)\.html')
-API_URL = "https://localhost:7180/api/VK/submit-data"
 
 AI_PROMPT = """
     You are a system that outputs strictly valid JSON.
@@ -77,101 +70,131 @@ AI_PROMPT = """
     """
 
 def main():
+    # Step 3 (pre-loop): load the last processed message id from MongoDB
+    # so we can skip already-seen messages during iteration
     msg_stored_id = vik_get_last_id()
-
-    print("===== last stored id =====")
-    print(msg_stored_id)
+    log.info("[VIK] Last stored id: %d", msg_stored_id)
     msg_latest_id = msg_stored_id
 
-    print("[VIK] Starting...")
+    log.info("[VIK] Starting...")
 
+    # Step 1: download the main VIK listing page
     try:
-        page_response = fetch_page(VIK_URL)
-    except Exception as e:
-        print(f"[VIK] An error occurred while fetching the page: {e}. Stopping...")
+        page_response = fetch_page(cfg.VIK_URL)
+    except Exception as exc:
+        log.error("[VIK] Failed to fetch listing page: %s. Stopping.", exc)
         return
 
+    # Step 2: parse all message URLs out of the listing page with BeautifulSoup
     msg_urls = vik_parse_page(page_response.text)
     if msg_urls is None:
-        print("[VIK] Could not parse message URLs from the page. Stopping...")
+        log.error("[VIK] Could not parse message URLs from the page. Stopping.")
         return
 
     for url in msg_urls:
-        print("--- url ---")
-        print(url)
+        log.debug("[VIK] Processing url: %s", url)
+
+        # Step 3: extract the numeric id from the URL and compare with the stored id;
+        # skip anything we have already processed
         match = VIK_URL_PATTERN.search(url)
         if not match:
-            print("[VIK] Couldn't find a match for this url: " + url)
+            log.warning("[VIK] No numeric id found in url: %s. Skipping.", url)
             continue
 
         message_id = int(match.group(1))
 
-        if message_id > msg_stored_id:
-            msg_latest_id = max(msg_latest_id, message_id)
+        if message_id <= msg_stored_id:
+            continue
 
+        # TODO: maybe this is dumb because the first message usually has the last id
+        msg_latest_id = max(msg_latest_id, message_id)
+
+        # Step 4: download the individual message page and parse it with BeautifulSoup
+        try:
+            msg_response = fetch_page(url)
+        except Exception as exc:
+            log.error("[VIK] Failed to fetch message page (id=%d): %s. Skipping.", message_id, exc)
+            continue
+
+        message = vik_parse_message(msg_response.text)
+        if message is None:
+            log.warning("[VIK] Could not parse message content (id=%d). Skipping.", message_id)
+            continue
+
+        msg_content = f"{message['title']}\n{message['content']}"
+        log.debug("[VIK] Message content:\n%s", msg_content)
+
+        # Step 5: send the extracted text to the local LLM for structured data extraction
+        raw_ai_output = ai_parser.ai_parse(AI_PROMPT, msg_content)
+        if raw_ai_output is None:
+            log.error("[VIK] AI parsing failed (id=%d). Skipping.", message_id)
+            continue
+
+        try:
+            processed_data_json = json.loads(raw_ai_output)
+        except json.JSONDecodeError as exc:
+            log.error("[VIK] AI output is not valid JSON (id=%d): %s. Skipping.", message_id, exc)
+            continue
+
+        # TODO: add schema guardrails / validation here before processing locations
+        for location in processed_data_json.get("locations", []):
+            if not location.get("is_polygon"):
+                continue
+
+            # Step 6: when a location is marked as a polygon, build a GeoJSON
+            # polygon from the list of streets using PostGIS / Overpass data
+            conn = None
             try:
-                msg_response = fetch_page(url)
-            except Exception as e:
-                print(f"[VIK] An error occurred while fetching the message page: {e}. Skipping...")
-                continue
-
-            message = vik_parse_message(msg_response.text)
-            if message is None:
-                print("[VIK] Could not parse message content. Skipping...")
-                continue
-
-            msg_content = f"{message['title']}\n{message['content']}"
-            print("--- message ---")
-            print(msg_content)
-
-            raw_ai_output = ai_parser.ai_parse(AI_PROMPT, msg_content)
-            if raw_ai_output is None:
-                print(f"[VIK] AI parsing failed for message id={message_id}. Skipping...")
-                continue
-
-            try:
-                processed_data_json = json.loads(raw_ai_output)
-            except json.JSONDecodeError as e:
-                print(f"[VIK] Could not parse AI output as JSON: {e}. Skipping...")
-                continue
-
-            # TODO: add guardrails here
-            for location in processed_data_json["locations"]:
-                if location["is_polygon"]:
-                    conn = psycopg2.connect(
-                        dbname="mydb",
-                        user="postgres",
-                        password="postgres",
-                        host="localhost",
-                        port="5432"
+                conn = psycopg2.connect(
+                    dbname=cfg.POSTGRES_DB,
+                    user=cfg.POSTGRES_USER,
+                    password=cfg.POSTGRES_PASSWORD,
+                    host=cfg.POSTGRES_HOST,
+                    port=cfg.POSTGRES_PORT,
+                )
+                with conn:
+                    geojson = streets_to_geojson(
+                        "Варна България",
+                        location["sublocations"],
+                        conn,
                     )
-                    geojson = streets_to_geojson("Варна България", location["sublocations"], conn)
-                    location["polygon_geojson"] = geojson
+                location["polygon_geojson"] = geojson
+            except psycopg2.Error as exc:
+                log.error(
+                    "[VIK] PostGIS error while building polygon for '%s' (id=%d): %s. Skipping polygon.",
+                    location.get("location_name"), message_id, exc,
+                )
+                location["polygon_geojson"] = None
+            finally:
+                if conn is not None:
+                    conn.close()
 
-            final_data = {
-                "id": str(uuid.uuid4()),
-                "original_message": {
-                    "title": message["title"],
-                    "content": message["content"],
-                },
-                "processed_data": processed_data_json,
-            }
+        final_data = {
+            "id": str(uuid.uuid4()),
+            "original_message": {
+                "title": message["title"],
+                "content": message["content"],
+            },
+            "processed_data": processed_data_json,
+        }
 
-            print("--- final data ---")
-            print(final_data)
-            print("=================================")
+        log.debug("[VIK] Final payload: %s", final_data)
 
-            # its strongly advised to use a server certificate in prod
-            # also in prod retries and logging must be implemented
-            try:
-                api_response = requests.post(API_URL, json=final_data, verify=False, timeout=10)
-                print("=== response ===")
-                print(api_response.status_code)
-            except requests.RequestException as e:
-                print(f"[VIK] Failed to send data to API: {e}. Skipping...")
-                continue
+        # Step 7: POST the structured data to the ASP.NET API
+        # NOTE: verify=False is intentional for the local dev cert; swap for a
+        # real cert bundle in production. Retries / exponential back-off should
+        # also be added before going to production.
+        try:
+            api_response = requests.post(cfg.ASP_API_URL, json=final_data, verify=False, timeout=10)
+            api_response.raise_for_status()
+            log.info("[VIK] Submitted id=%d  HTTP %d", message_id, api_response.status_code)
+        except requests.RequestException as exc:
+            log.error("[VIK] Failed to submit data for id=%d: %s. Skipping.", message_id, exc)
+            continue
 
+    # Persist the highest id seen in this run so the next run starts from here
     vik_write_new_id(msg_latest_id)
+    log.info("[VIK] Done. Latest id persisted: %d", msg_latest_id)
 
 
 if __name__ == "__main__":

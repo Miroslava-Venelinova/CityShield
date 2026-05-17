@@ -1,11 +1,15 @@
 """
-Script for fetching data from overpass. 
+Script for fetching data from Overpass (OSM query API).
 """
 
-import requests
 import json
+import logging
 
-OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
+import requests
+
+from config import cfg
+
+log = logging.getLogger(__name__)
 
 QUERY = """
 [out:json][timeout:120];
@@ -37,11 +41,7 @@ OUTPUT_FILE = "names.json"
 
 
 def fetch_overpass_data(query: str) -> dict:
-    response = requests.post(
-        OVERPASS_URL,
-        data=query,
-        timeout=120
-    )
+    response = requests.post(cfg.OVERPASS_URL, data=query, timeout=120)
     response.raise_for_status()
     return response.json()
 
@@ -55,17 +55,17 @@ def extract_names(data: dict) -> list[str]:
 
 
 def main():
-    print("Querying Overpass API...")
+    log.info("Querying Overpass API at %s ...", cfg.OVERPASS_URL)
     data = fetch_overpass_data(QUERY)
 
-    print("Extracting names...")
+    log.info("Extracting names...")
     names = sorted(set(extract_names(data)))
 
-    print(f"Saving {len(names)} names to {OUTPUT_FILE}...")
+    log.info("Saving %d names to %s ...", len(names), OUTPUT_FILE)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(names, f, ensure_ascii=False, indent=2)
 
-    print("Done.")
+    log.info("Done.")
 
 
 if __name__ == "__main__":

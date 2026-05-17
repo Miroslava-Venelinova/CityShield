@@ -1,53 +1,68 @@
 """
-Wrapper module for geocoding
+Wrapper module for geocoding.
+NOTE: with the current approach this module is useless
 """
 
+import logging
 from geopy.geocoders import Nominatim
+
+from config import cfg
+
+log = logging.getLogger(__name__)
+
+_SEARCH_SUFFIX = " Варна Варна България"
+_PREFIXES = ("кв. ", "ж.к. ", "м-т ", "с. ", "гр. ", "к.к. ")
+
+
+def _make_geolocator() -> Nominatim:
+    return Nominatim(
+        user_agent=cfg.NOMINATIM_USER_AGENT,
+        domain=cfg.NOMINATIM_HOST,
+        scheme=cfg.NOMINATIM_SCHEME,
+    )
+
 
 def geocode_location(location_name: str):
     """
-    Function used for geocoding: city, village, locality, district, and residential complex
+    Geocode a city, village, locality, district, or residential complex.
+    Tries up to three strategies before giving up.
     """
-    geolocator = Nominatim(user_agent="city_shield", domain="localhost:8080", scheme="http")
-    prefixes = ("кв. ", "ж.к. ", "м-т ", "с. ", "гр. ", "к.к. ")
+    geolocator = _make_geolocator()
 
-    # first attempt - geocode the location name as it is
-    location = geolocator.geocode(location_name + " Варна Варна България")
-
+    # First attempt — geocode the location name as-is
+    location = geolocator.geocode(location_name + _SEARCH_SUFFIX)
     if location:
         return location
 
-    # second attempt - geocode without the prefix
-    for p in prefixes:
-        location_name = location_name.removeprefix(p)
-    location = geolocator.geocode(location_name + " Варна Варна България")
-    
+    # Second attempt — strip any known prefix then retry
+    stripped = location_name
+    for p in _PREFIXES:
+        stripped = stripped.removeprefix(p)
+    location = geolocator.geocode(stripped + _SEARCH_SUFFIX)
     if location:
         return location
-    
-    # third attempt - try with every possible prefix
-    for p in prefixes:
-            location_name = p + location_name
-            location = geolocator.geocode(location_name + " Варна Варна България")
-            if location:
-                return location
-            location_name = location_name.removeprefix(p)
+
+    # Third attempt — try prepending every possible prefix
+    for p in _PREFIXES:
+        candidate = p + stripped
+        location = geolocator.geocode(candidate + _SEARCH_SUFFIX)
+        if location:
+            return location
 
     return None
-    
+
+
 def geocode_sublocation(sublocation_name: str):
     """
-    Function used for geocoding: streets and boulevards 
+    Geocode a street or boulevard.
     """
-    geolocator = Nominatim(user_agent="city_shield", domain="localhost:8080", scheme="http")
+    geolocator = _make_geolocator()
 
-    # first attempt - geocode the location name as it is
-    location = geolocator.geocode(sublocation_name + " Варна Варна България")
+    # First attempt — geocode as-is
+    location = geolocator.geocode(sublocation_name + _SEARCH_SUFFIX)
     if location:
-         return location
-    
-    # second attempt - remove the prefix
-    # in osm streets do not have "ул."
-    sublocation_name = sublocation_name.replace("ул.", "").strip()
-    location = geolocator.geocode(sublocation_name + " Варна Варна България")
-    return location
+        return location
+
+    # Second attempt — strip "ул." prefix (OSM streets omit it)
+    stripped = sublocation_name.replace("ул.", "").strip()
+    return geolocator.geocode(stripped + _SEARCH_SUFFIX)
