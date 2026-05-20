@@ -4,3 +4,4 @@
 *.vsidx
 *.pyc
 /backend/cache
+backend/map.html
