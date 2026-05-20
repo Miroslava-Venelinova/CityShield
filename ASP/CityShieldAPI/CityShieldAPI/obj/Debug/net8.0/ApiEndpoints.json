@@ -32,6 +32,38 @@
     "ReturnTypes": []
   },
   {
+    "ContainingType": "FcmDemo.Controllers.TokensController",
+    "Method": "Register",
+    "RelativePath": "api/tokens",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "FcmDemo.Models.RegisterTokenRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "FcmDemo.Controllers.TokensController",
+    "Method": "Unregister",
+    "RelativePath": "api/tokens",
+    "HttpMethod": "DELETE",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "FcmDemo.Models.UnregisterTokenRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
     "ContainingType": "CityShieldAPI.Controllers.VKController",
     "Method": "SubmitData",
     "RelativePath": "api/VK/submit-data",

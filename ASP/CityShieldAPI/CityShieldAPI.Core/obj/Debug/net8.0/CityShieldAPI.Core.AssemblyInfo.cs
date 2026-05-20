@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CityShieldAPI.Core")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+91e86b14503ef83129dae38b36736f820ea3bd25")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4d4ceac08069aabc627769e355f4fc94efe29ff8")]
 [assembly: System.Reflection.AssemblyProductAttribute("CityShieldAPI.Core")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CityShieldAPI.Core")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -32,9 +32,7 @@ namespace CityShieldAPI.Controllers
             var locations = processedData.GetProperty("locations");
             var firstLocation = locations[0].GetProperty("location_name").GetString();
 
-            List<User> users = await _vkService.GetUsersInRangeAsync(locations);
-
-            return Ok(users);
+            return Ok(await _vkService.SendUsersNotificationAsync(locations));
         }
     }
 }

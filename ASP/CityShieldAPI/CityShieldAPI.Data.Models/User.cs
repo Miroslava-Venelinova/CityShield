@@ -1,4 +1,5 @@
-﻿using System;
+﻿using NetTopologySuite.Geometries;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -16,8 +17,10 @@ namespace CityShieldAPI.Data.Models
         public required string Email { get; set; }
         public required string PasswordHash { get; set; }
 
-        public required decimal Latitude { get; set; }
-        public required decimal Longitude { get; set; }
+        public required double Latitude { get; set; }
+        public required double Longitude { get; set; }
+
+        public Point Location { get; set; } = null!;
 
         public required int RegionId { get; set; }
         public int? StreetId { get; set; }

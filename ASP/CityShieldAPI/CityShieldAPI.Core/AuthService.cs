@@ -1,11 +1,13 @@
-﻿using CityShieldAPI.Core.Contracts;
-using CityShieldAPI.Common;
+﻿using CityShieldAPI.Common;
+using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.Data;
 using CityShieldAPI.Data.Models;
 using CityShieldAPI.DTOs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using NetTopologySuite;
+using NetTopologySuite.Geometries;
 using System;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
@@ -70,13 +72,17 @@ namespace CityShieldAPI.Core
             {
                 Email = request.Email,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-                Latitude = 0,
-                Longitude = 0,
+                Latitude = 43.20669594168909d,
+                Longitude = 27.923077151187115d,
                 CreatedOnUTC = DateTime.UtcNow,
                 UpdatedOnUTC = DateTime.UtcNow,
                 RegionId = request.RegionId,
                 StreetId = request.StreetId
             };
+
+            var geometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
+            user.Location = geometryFactory.CreatePoint(
+                new Coordinate(user.Longitude, user.Latitude));
 
             await _context.Users.AddAsync(user);
             await _context.SaveChangesAsync();

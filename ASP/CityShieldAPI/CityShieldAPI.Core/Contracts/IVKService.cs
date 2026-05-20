@@ -11,5 +11,7 @@ namespace CityShieldAPI.Core.Contracts
     public interface IVKService
     {
         public Task<List<User>> GetUsersInRangeAsync(JsonElement locations);
+        public Task<List<User>> GetUsersInPolygonRangeAsync(JsonElement polygon);
+        public Task<List<Guid>> SendUsersNotificationAsync(JsonElement locations);
     }
 }

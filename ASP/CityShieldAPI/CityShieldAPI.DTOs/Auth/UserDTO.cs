@@ -11,8 +11,8 @@ namespace CityShieldAPI.DTOs
         public string? Email { get; set; }
         public string? PasswordHash { get; set; }
 
-        public required decimal Latitude { get; set; }
-        public required decimal Longitude { get; set; }
+        public required double Latitude { get; set; }
+        public required double Longitude { get; set; }
 
         public DateTime CreatedOnUTC { get; set; }
         public DateTime UpdatedOnUTC { get; set; }

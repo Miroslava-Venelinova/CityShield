@@ -2,20 +2,28 @@ using CityShieldAPI.Common;
 using CityShieldAPI.Core;
 using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.Data;
+using FcmDemo.Services;
+using FirebaseAdmin;
+using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using NetTopologySuite;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-
+FirebaseApp.Create(new AppOptions
+{
+    Credential = GoogleCredential.FromFile("fcm.json"),
+});
 //Call Auth
 AuthConfig();
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IVKService, VKService>();
+builder.Services.AddScoped<IFcmTokenService, FcmTokenService>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -24,8 +32,10 @@ builder.Services.AddSwaggerGen();
 
 //this makes the connetion to the postgre db
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
-                        o => o.UseNetTopologySuite()));
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        o => o.UseNetTopologySuite()
+    ));
 
 var app = builder.Build();
 
