@@ -8,8 +8,6 @@ individual modules.
 Usage:
     from config import cfg
     print(cfg.MONGO_URI)
-
-TODO: imo a lot of the stuff shouldnt be in the .env
 """
 
 import logging
@@ -65,7 +63,7 @@ class _Config:
     MONGO_DB:  str = _get("MONGO_DB",  "cityshield")
 
     # ------------------------------------------------------------------
-    # PostgreSQL  (PostGIS — polygon resolution)
+    # PostgreSQL
     # ------------------------------------------------------------------
     POSTGRES_DB:       str = _get("POSTGRES_DB",       "mydb")
     POSTGRES_USER:     str = _get("POSTGRES_USER",     "postgres")
@@ -81,37 +79,27 @@ class _Config:
     # ------------------------------------------------------------------
     # Ollama
     # ------------------------------------------------------------------
-    OLLAMA_MODEL: str = _get("OLLAMA_MODEL", "qwen3.5")
+    OLLAMA_MODEL: str = "qwen3.5"
+
 
     # ------------------------------------------------------------------
-    # Nominatim  (self-hosted OSM geocoder)
+    # Overpass
     # ------------------------------------------------------------------
-    NOMINATIM_HOST:       str = _get("NOMINATIM_HOST",       "localhost:8080")
-    NOMINATIM_SCHEME:     str = _get("NOMINATIM_SCHEME",     "http")
-    NOMINATIM_USER_AGENT: str = _get("NOMINATIM_USER_AGENT", "city_shield")
-
-    # ------------------------------------------------------------------
-    # Overpass  (OSM query API)
-    # ------------------------------------------------------------------
-    OVERPASS_URL: str = _get("OVERPASS_URL", "https://overpass.kumi.systems/api/interpreter")
+    OVERPASS_URL: str = "https://overpass.kumi.systems/api/interpreter"
 
     # ------------------------------------------------------------------
     # Scraping source URLs
     # ------------------------------------------------------------------
-    VIK_URL: str = _get(
-        "VIK_URL",
-        "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown",
-    )
-    VT_URL: str = _get("VT_URL", "https://www.varnatraffic.com/Info")
+    VIK_URL: str = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
+    VT_URL:  str = "https://www.varnatraffic.com/Info"
 
     # ------------------------------------------------------------------
-    # Polling intervals (seconds)
-    # None → service will fall back to DEFAULT_INTERVAL in run.py
+    # Polling intervals
     # ------------------------------------------------------------------
-    DEFAULT_INTERVAL: int        = _get_int("DEFAULT_INTERVAL", 600)
-    VIK_INTERVAL:     int | None = _optional_int("VIK_INTERVAL")
-    VT_INTERVAL:      int | None = _optional_int("VT_INTERVAL")
-    EPRO_INTERVAL:    int | None = _optional_int("EPRO_INTERVAL")
+    DEFAULT_INTERVAL: int        = 600
+    VIK_INTERVAL:     int | None = None
+    VT_INTERVAL:      int | None = None
+    EPRO_INTERVAL:    int | None = None
 
 
 cfg = _Config()

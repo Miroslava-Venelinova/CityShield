@@ -12,7 +12,7 @@ from shapely.ops import linemerge, polygonize, unary_union
 import folium
 
 # 1. ENABLE CACHING: Saves OSM data locally so you don't hit API limits on repeated runs
-ox.settings.use_cache = False
+ox.settings.use_cache = True
 
 # Suppress minor Shapely/GeoPandas warnings for a cleaner console output
 warnings.filterwarnings('ignore')
@@ -251,9 +251,9 @@ def resolve_street_names(input_names, conn, similarity_threshold=0.4, limit=1):
     with conn.cursor() as cur:
         for name in input_names:
             cur.execute("""
-                SELECT street_name, similarity(street_name, %s) AS sim
+                SELECT name, similarity(name, %s) AS sim
                 FROM streets
-                WHERE street_name %% %s
+                WHERE name %% %s
                 ORDER BY sim DESC
                 LIMIT %s;
             """, (name, name, limit))

@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 import os
+from pathlib import Path
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -16,11 +17,11 @@ from config import cfg
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
-# File paths for your seed data
-BUSES_FILE = "buses.json"
-REGIONS_FILE = "regions.json"
-STREETS_FILE = "streets.json"
-SEEDS_FOLDER_PATH = "data/postgres/seeding/seeds/"
+
+_SEEDS_DIR = Path(__file__).parent / "seeds"
+BUSES_FILE   = _SEEDS_DIR / "buses.json"
+REGIONS_FILE = _SEEDS_DIR / "regions.json"
+STREETS_FILE = _SEEDS_DIR / "streets.json"
 
 
 def seed_json_list(cur, filepath: str, table_name: str) -> None:
@@ -77,9 +78,9 @@ def main() -> None:
         with conn:
             with conn.cursor() as cur:
                 # Seed the flat JSON files
-                seed_json_list(cur, SEEDS_FOLDER_PATH + BUSES_FILE, "buses")
-                seed_json_list(cur, SEEDS_FOLDER_PATH + REGIONS_FILE, "regions")
-                seed_json_list(cur, SEEDS_FOLDER_PATH + STREETS_FILE, "streets") 
+                seed_json_list(cur, BUSES_FILE, "buses")
+                seed_json_list(cur, REGIONS_FILE, "regions")
+                seed_json_list(cur, STREETS_FILE, "streets") 
 
     except (psycopg2.Error, OSError) as exc:
         log.error("Seeding failed: %s", exc)

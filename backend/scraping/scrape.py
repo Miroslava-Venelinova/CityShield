@@ -2,62 +2,64 @@
 Module for scraping.
 """
 
+import logging
 import requests
-#will have to install lxml for bs
 from bs4 import BeautifulSoup
 
+log = logging.getLogger(__name__)
+
+
 def fetch_page(url, headers=None, timeout=10):
-    """
-    Fetch HTML content from a URL using requests.
-    """
+    """Fetch HTML content from a URL. Raises on non-2xx status."""
     response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
+
 def vik_parse_message(html):
     """
-    Parse message HTML from vikvarna using BeautifulSoup.
-    Returns a dictionary containing the message info, or None if parsing fails.
+    Parse a single VIK message page.
+    Returns a dict with title/date/content, or None if parsing fails.
     """
     soup = BeautifulSoup(html, "lxml")
 
     container = soup.select_one("#main_content")
     if container is None:
-        print("[scrape] vik_parse_message: #main_content not found in HTML.")
+        log.error("[scrape] vik_parse_message: #main_content not found.")
         return None
 
     content = container.select_one(".view p")
     if not content:
+        log.warning("[scrape] vik_parse_message: .view p not found.")
         return None
 
     title = container.select_one("h1")
-    date = container.select_one(".list-item-date")
+    date  = container.select_one(".list-item-date")
 
     return {
-        "title": title.get_text(strip=True) if title else "",
-        "date": date.get_text(strip=True) if date else None,
-        "content": content.get_text(strip=True)
+        "title":   title.get_text(strip=True) if title else "",
+        "date":    date.get_text(strip=True)  if date  else None,
+        "content": content.get_text(strip=True),
     }
+
 
 def vik_parse_page(html):
     """
-    Parse page HTML from vikvarna using BeautifulSoup.
-    Returns a list of all message urls, or None if parsing fails.
+    Parse the VIK listing page.
+    Returns a list of message URLs, or None if the container is missing.
     """
     soup = BeautifulSoup(html, "lxml")
 
     container = soup.select_one("#main_content")
     if container is None:
-        print("[scrape] vik_parse_page: #main_content not found in HTML.")
+        log.error("[scrape] vik_parse_page: #main_content not found.")
         return None
 
-    messages = container.find_all("div", class_="list-item")
-
     urls = []
-    for msg in messages:
+    for msg in container.find_all("div", class_="list-item"):
         a_tag = msg.find("a")
         if a_tag is None:
-            print("[scrape] vik_parse_page: list-item has no <a> tag. Skipping...")
+            log.warning("[scrape] vik_parse_page: list-item has no <a> tag. Skipping.")
             continue
         url = a_tag.get("href")
         if url:
@@ -65,39 +67,31 @@ def vik_parse_page(html):
 
     return urls
 
+
 def vt_parse(html):
     """
-    Parse HTML from varnatraffic using BeautifulSoup.
-    Returns a list of message dicts, or None if parsing fails.
+    Parse the VarnaTraffic accordion page.
+    Returns a list of message dicts, or None if the container is missing.
     """
     soup = BeautifulSoup(html, "lxml")
 
     container = soup.select_one("#infoAccordion")
     if container is None:
-        print("[scrape] vt_parse: #infoAccordion not found in HTML.")
+        log.error("[scrape] vt_parse: #infoAccordion not found.")
         return None
 
-    accordion_groups = container.find_all("div", class_="accordion-group")
-
     results = []
-
-    for accordion in accordion_groups:
-        data_id = accordion.get("data-id", "No ID")
-
-        header_tag = accordion.find("a", class_="accordion-toggle")
-        header_text = header_tag.get_text(strip=True) if header_tag else "No header"
-
-        body_tag = accordion.find("div", class_="accordion-inner")
-        body_text = body_tag.get_text(" ", strip=True) if body_tag else "No body"
-
-        time_tag = accordion.find("div", class_="info-time")
-        info_time = time_tag.get_text(strip=True) if time_tag else "No time"
+    for accordion in container.find_all("div", class_="accordion-group"):
+        data_id     = accordion.get("data-id", "No ID")
+        header_tag  = accordion.find("a",   class_="accordion-toggle")
+        body_tag    = accordion.find("div", class_="accordion-inner")
+        time_tag    = accordion.find("div", class_="info-time")
 
         results.append({
-            "data_id": data_id,
-            "header": header_text,
-            "body": body_text,
-            "info_time": info_time
+            "data_id":   data_id,
+            "header":    header_tag.get_text(strip=True)       if header_tag else "No header",
+            "body":      body_tag.get_text(" ", strip=True)    if body_tag   else "No body",
+            "info_time": time_tag.get_text(strip=True)         if time_tag   else "No time",
         })
 
     return results
