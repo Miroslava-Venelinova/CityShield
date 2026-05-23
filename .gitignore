@@ -1,8 +1,15 @@
 /frontend
+
+# python
 .env
 *.log
 *.vsidx
 *.pyc
 /backend/cache
 backend/map.html
+
+# asp
 fcm.json
+bin/
+obj/
+.vs/
