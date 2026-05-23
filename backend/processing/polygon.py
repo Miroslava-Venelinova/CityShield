@@ -17,6 +17,8 @@ ox.settings.use_cache = True
 # Suppress minor Shapely/GeoPandas warnings for a cleaner console output
 warnings.filterwarnings('ignore')
 
+HTML_FILE: str | None = "map.html"
+
 def extend_line(line, distance=200):
     """Extends a LineString at both ends by a given distance (in meters)."""
     if line is None or line.is_empty:
@@ -63,7 +65,7 @@ def batch_reproject_dict(geom_dict, src_crs, dst_crs="EPSG:4326"):
     gdf = gpd.GeoDataFrame({'name': names, 'geometry': geoms}, crs=src_crs).to_crs(dst_crs)
     return dict(zip(gdf['name'], gdf.geometry))
 
-def extract_city_block(place_name, street_names, extension_dist=200, output_html=None):
+def extract_city_block(place_name, street_names, extension_dist=200, output_html=HTML_FILE):
     """Constructs a block polygon and saves an interactive Folium map."""
     
     print(f"Fetching data for {place_name} (Using cache if available)...")
@@ -102,21 +104,44 @@ def extract_city_block(place_name, street_names, extension_dist=200, output_html
                       for name, geom in street_geoms.items()}
 
     # 4. Construct the Polygon using Shapely's built-in `polygonize`
-    # This automatically finds closed loops created by intersecting lines!
     union_lines = unary_union(list(extended_geoms.values()))
-    polygons = list(polygonize(union_lines))
+    raw_polygons = list(polygonize(union_lines))
     
     block_poly = None
     block_edges = []
     
-    if polygons:
-        # If multiple polygons form (from extensions crossing), the main block is almost always the largest one
-        polygons.sort(key=lambda p: p.area, reverse=True)
-        block_poly = polygons[0]
-        
-        # Extract the perimeter edges of our chosen block for mapping
-        coords = list(block_poly.exterior.coords)
-        block_edges = [LineString([coords[i], coords[i+1]]) for i in range(len(coords)-1)]
+    if raw_polygons:
+        valid_polygons = []
+        for poly in raw_polygons:
+            poly_bound = poly.exterior
+            touched_streets = 0
+            
+            # Count how many distinct requested streets form the edges of this polygon
+            for name, geom in extended_geoms.items():
+                # Buffer the geometry by 1 meter to avoid floating-point precision
+                # issues that sometimes occur after unary_union and polygonize.
+                overlap = poly_bound.intersection(geom.buffer(1.0))
+                
+                # If the shared boundary length is > 5 meters, count it as a valid edge
+                if overlap.length > 5.0:
+                    touched_streets += 1
+            
+            # A valid city block must be bounded by at least 2 distinct streets.
+            # This completely filters out polygons formed internally by a single multi-lane boulevard.
+            if touched_streets >= 2:
+                valid_polygons.append((poly, touched_streets))
+                
+        if valid_polygons:
+            # Sort by the number of touching streets first, then by area
+            # This ensures we get the most "complete" block if multiple valid ones form
+            valid_polygons.sort(key=lambda x: (x[1], x[0].area), reverse=True)
+            block_poly = valid_polygons[0][0]
+            
+            # Extract the perimeter edges of our chosen block for mapping
+            coords = list(block_poly.exterior.coords)
+            block_edges = [LineString([coords[i], coords[i+1]]) for i in range(len(coords)-1)]
+        else:
+            print("Warning: The extended streets do not enclose a valid block spanning multiple distinct streets.")
     else:
         print("Warning: The extended streets do not enclose a fully closed polygon.")
 
@@ -213,7 +238,6 @@ def streets_to_geojson(
         place_name=place_name,
         street_names=resolved_names,
         extension_dist=extension_dist,
-        output_html=None
     )
 
     if polygon is None:

@@ -63,7 +63,8 @@ AI_PROMPT = """
     The "location_name" field must contain the name of the city/village/locality/district/residential complex.
     The "sublocations" array includes streets/boulevards, each as a separate entry.
     If you have multiple streets listed and stuff along the lines of: "затворени", "в карето", "между"; it means that the streets form a polygon and the "is_polygon" field must be set to true. In every other case leave it false.
-    
+    In case there is a polygon assume all the things listed are streets.
+
     === Constraints ===:
     - Do not add extra fields.
     - If data is unknown, use null.
