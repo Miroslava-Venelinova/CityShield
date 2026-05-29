@@ -13,3 +13,4 @@ fcm.json
 bin/
 obj/
 .vs/
+backend/processing/.ai_parser_cache.json

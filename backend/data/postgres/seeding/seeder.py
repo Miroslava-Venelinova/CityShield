@@ -24,7 +24,7 @@ REGIONS_FILE = _SEEDS_DIR / "regions.json"
 STREETS_FILE = _SEEDS_DIR / "streets.json"
 
 
-def seed_json_list(cur, filepath: str, table_name: str) -> None:
+def seed_json_list(cur, filepath: str, table_name: str, column_name: str) -> None:
     """Helper function to create a table and seed it with a flat JSON list of strings."""
     if not os.path.exists(filepath):
         log.warning("File '%s' not found. Skipping seeding for table '%s'.", filepath, table_name)
@@ -39,11 +39,11 @@ def seed_json_list(cur, filepath: str, table_name: str) -> None:
         log.error("Expected a JSON array in %s", filepath)
         return
 
-    # Create the table dynamically
+    # Create the table dynamically using the passed column_name
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             id   SERIAL PRIMARY KEY,
-            name TEXT UNIQUE
+            {column_name} TEXT UNIQUE
         );
     """)
     
@@ -53,7 +53,7 @@ def seed_json_list(cur, filepath: str, table_name: str) -> None:
     # Insert data, ignoring duplicates if the script is run multiple times
     execute_values(
         cur,
-        f"INSERT INTO {table_name} (name) VALUES %s ON CONFLICT (name) DO NOTHING",
+        f"INSERT INTO {table_name} ({column_name}) VALUES %s",
         rows,
         template="(%s)"
     )
@@ -77,10 +77,10 @@ def main() -> None:
     try:
         with conn:
             with conn.cursor() as cur:
-                # Seed the flat JSON files
-                seed_json_list(cur, BUSES_FILE, "buses")
-                seed_json_list(cur, REGIONS_FILE, "regions")
-                seed_json_list(cur, STREETS_FILE, "streets") 
+                # Pass the custom column names to the helper function
+                seed_json_list(cur, BUSES_FILE, "buses", "number")
+                seed_json_list(cur, REGIONS_FILE, "regions", "region_name")
+                seed_json_list(cur, STREETS_FILE, "streets", "street_name") 
 
     except (psycopg2.Error, OSError) as exc:
         log.error("Seeding failed: %s", exc)

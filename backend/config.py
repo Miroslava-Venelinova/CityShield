@@ -65,7 +65,7 @@ class _Config:
     # ------------------------------------------------------------------
     # PostgreSQL
     # ------------------------------------------------------------------
-    POSTGRES_DB:       str = _get("POSTGRES_DB",       "mydb")
+    POSTGRES_DB:       str = _get("POSTGRES_DB",       "CityShieldDB")
     POSTGRES_USER:     str = _get("POSTGRES_USER",     "postgres")
     POSTGRES_PASSWORD: str = _get("POSTGRES_PASSWORD", "postgres")
     POSTGRES_HOST:     str = _get("POSTGRES_HOST",     "localhost")
@@ -74,7 +74,7 @@ class _Config:
     # ------------------------------------------------------------------
     # ASP.NET API
     # ------------------------------------------------------------------
-    ASP_API_URL: str = _get("ASP_API_URL", "https://localhost:7180/api/VK/submit-data")
+    ASP_API_URL: str = _get("ASP_API_URL", "http://localhost:5276/api/VK/submit-data")
 
     # ------------------------------------------------------------------
     # Ollama

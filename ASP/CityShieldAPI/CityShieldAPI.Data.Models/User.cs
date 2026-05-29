@@ -23,7 +23,12 @@ namespace CityShieldAPI.Data.Models
         public Point Location { get; set; } = null!;
 
         public required int RegionId { get; set; }
+
+        public Region Region { get; set; } = null!;
+        
         public int? StreetId { get; set; }
+
+        public Street? Street { get; set; }
 
         public DateTime CreatedOnUTC { get; set; }
         public DateTime UpdatedOnUTC { get; set; }

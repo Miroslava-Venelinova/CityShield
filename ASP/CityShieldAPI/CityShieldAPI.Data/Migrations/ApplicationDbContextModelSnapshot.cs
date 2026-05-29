@@ -24,29 +24,6 @@ namespace CityShieldAPI.Data.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "postgis");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("CityShieldAPI.Data.Models.FirebaseToken", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedOn")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("FirebaseTokens");
-                });
-
             modelBuilder.Entity("CityShieldAPI.Data.Models.Region", b =>
                 {
                     b.Property<int>("Id")
@@ -123,6 +100,10 @@ namespace CityShieldAPI.Data.Migrations
 
                     b.HasKey("UserId");
 
+                    b.HasIndex("RegionId");
+
+                    b.HasIndex("StreetId");
+
                     b.ToTable("Users");
                 });
 
@@ -167,15 +148,21 @@ namespace CityShieldAPI.Data.Migrations
                     b.ToTable("DeviceTokens");
                 });
 
-            modelBuilder.Entity("CityShieldAPI.Data.Models.FirebaseToken", b =>
+            modelBuilder.Entity("CityShieldAPI.Data.Models.User", b =>
                 {
-                    b.HasOne("CityShieldAPI.Data.Models.User", "User")
+                    b.HasOne("CityShieldAPI.Data.Models.Region", "Region")
                         .WithMany()
-                        .HasForeignKey("UserId")
+                        .HasForeignKey("RegionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("User");
+                    b.HasOne("CityShieldAPI.Data.Models.Street", "Street")
+                        .WithMany()
+                        .HasForeignKey("StreetId");
+
+                    b.Navigation("Region");
+
+                    b.Navigation("Street");
                 });
 #pragma warning restore 612, 618
         }

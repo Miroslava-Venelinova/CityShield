@@ -275,9 +275,9 @@ def resolve_street_names(input_names, conn, similarity_threshold=0.4, limit=1):
     with conn.cursor() as cur:
         for name in input_names:
             cur.execute("""
-                SELECT name, similarity(name, %s) AS sim
+                SELECT street_name, similarity(street_name, %s) AS sim
                 FROM streets
-                WHERE name %% %s
+                WHERE street_name %% %s
                 ORDER BY sim DESC
                 LIMIT %s;
             """, (name, name, limit))

@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 # When True, the cache is read from / written to PERSISTENT_CACHE_PATH on disk.
 # The file is plain JSON so you can open it and inspect cached responses.
 # When False (default), only the in-process memory cache is used.
-PERSISTENT_CACHE_ENABLED: bool = False
+PERSISTENT_CACHE_ENABLED: bool = True
 PERSISTENT_CACHE_PATH: str = os.path.join(
     os.path.dirname(__file__), ".ai_parser_cache.json"
 )

@@ -26,4 +26,8 @@
     <ProjectReference Include="..\CityShieldAPI.Data.Models\CityShieldAPI.Data.Models.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Migrations\" />
+  </ItemGroup>
+
 </Project>
