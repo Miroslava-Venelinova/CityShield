@@ -12,6 +12,7 @@ CityShield is a mobile application that keeps residents informed about power, wa
 - **Location-aware notifications** — users set their location once; the system geocodes each incident and notifies only those inside the affected area.
 - **Interactive map** — every active incident is drawn on an OpenStreetMap-based map as a precise polygon of the affected zone.
 - **Category preferences** — users choose which alert categories they care about (power, water, heating, traffic, roads).
+- **Bus-line subscriptions** — public-transport users can follow specific bus lines and get notified only about disruptions affecting those lines.
 - **Trusted data only** — information comes exclusively from official sources, ensuring accuracy and transparency.
 
 ## Data sources
@@ -63,14 +64,20 @@ CityShield/
 │   ├── services/             One module per data source
 │   ├── scraping/             HTTP scraping utilities
 │   ├── processing/           LLM parsing, geocoding, polygon building
-│   └── data/                 MongoDB / PostgreSQL / Overpass access layers
+│   ├── data/                 MongoDB / PostgreSQL / Overpass access layers
+│   └── tests/                Pytest suite (unit + integration)
 ├── ASP/
 │   └── CityShieldAPI/        ASP.NET Core solution
-│       ├── CityShieldAPI/        Web API (controllers: Auth, Alerts, Tokens, NotificationPreferences)
-│       ├── CityShieldAPI.Core/   Business logic and service contracts
-│       ├── CityShieldAPI.Data/   EF Core DbContext and migrations
-│       └── CityShieldAPI.DTOs/   Request/response models
+│       ├── CityShieldAPI/              Web API (controllers: Auth, Alerts, Tokens, NotificationPreferences)
+│       ├── CityShieldAPI.Core/         Business logic and service contracts
+│       ├── CityShieldAPI.Data/         EF Core DbContext and migrations
+│       ├── CityShieldAPI.Data.Models/  Entity classes
+│       ├── CityShieldAPI.DTOs/         Request/response models
+│       ├── CityShieldAPI.Common/       Shared configuration types
+│       └── CityShieldAPI.Tests/        xUnit test suite
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
+├── docker-compose.prod.yml   Production stack (PostgreSQL, MongoDB, Ollama, API, ingestion)
+├── .env.example              Secrets template for the production stack
 └── InstallDependencies.bat   One-click dependency install for all components
 ```
 
@@ -129,6 +136,14 @@ Configuration is read from `backend/.env` — MongoDB connection, API endpoint, 
 
 Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a complete step-by-step guide covering the Android emulator, the Docker-based build workflow, Firebase configuration, and exactly what to run after each kind of code change.
 
+## Running the tests
+
+- **Ingestion service** — from `backend/`: `.venv\Scripts\python -m pytest`. Tests marked `integration` need a live MongoDB; skip them with `-m "not integration"`.
+- **API** — `dotnet test ASP\CityShieldAPI\CityShieldAPI.sln`. The integration tests start a disposable PostGIS container via Testcontainers, so Docker must be running.
+- **Mobile app** — from `frontend/`: `npm run lint` and `npm run typecheck`.
+
+The same checks run in GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) on every push and pull request.
+
 ## API overview
 
 | Controller | Responsibility |
@@ -136,15 +151,23 @@ Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a complete step-by-step gu
 | `AuthController` | Registration, login, JWT issuance, user location |
 | `AlertsController` | Alert ingestion (`POST /api/alerts/submit-data`, API-key protected) and retrieval for the app's map/feed (`GET /api/alerts/recent`, with geocoded coordinates and polygons) |
 | `TokensController` | FCM device token registration |
-| `NotificationPreferencesController` | Per-category notification settings |
+| `NotificationPreferencesController` | Per-category notification settings and bus-line subscriptions |
 
 Interactive documentation is available via Swagger UI when the API runs in the development environment.
+
+## Production deployment
+
+[docker-compose.prod.yml](docker-compose.prod.yml) runs the entire server-side stack — PostgreSQL/PostGIS, MongoDB, Ollama, the API, and the ingestion service:
+
+```cmd
+copy .env.example .env        &rem then fill in the secrets
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Place the Firebase service-account key at `./fcm.json` before starting, and follow the first-run steps (pulling the Ollama model, seeding the street database) in the compose file's header comments. TLS is not handled by the stack — run a reverse proxy (Caddy, nginx, Traefik) in front of the API.
 
 ## Further documentation
 
 | Document | Contents |
 |---|---|
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Production deployment: Docker Compose stack, secrets, TLS, first-run seeding, mobile release build |
-| [SCRAPING.md](SCRAPING.md) | How each of the five sources is scraped, parsed, deduplicated, and geo-located |
-| [DEPENDENCIES.md](DEPENDENCIES.md) | Every library and external API the project depends on, with a full license audit |
 | [frontend/SETUP.md](frontend/SETUP.md) | Mobile app development environment |
