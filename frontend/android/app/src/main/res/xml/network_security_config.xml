@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allows plain HTTP to the local dev API server (10.0.2.2 = emulator localhost).
+  OSM tile servers use HTTPS and are listed explicitly for clarity.
+  Remove the 10.0.2.2 entry before releasing to production.
+-->
+<network-security-config>
+  <!-- Local dev API (HTTP allowed) -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">10.0.2.2</domain>
+  </domain-config>
+  <!-- OpenStreetMap tile servers (HTTPS only) -->
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">openstreetmap.org</domain>
+    <domain includeSubdomains="true">tile.openstreetmap.org</domain>
+  </domain-config>
+</network-security-config>

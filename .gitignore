@@ -1,16 +1,37 @@
-/frontend
-
-# python
+# ── Secrets — never commit ────────────────────────────────
 .env
+fcm.json
+frontend/android/app/google-services.json
+
+# ── Python (backend/) ─────────────────────────────────────
 *.log
-*.vsidx
 *.pyc
+__pycache__/
+.venv/
 /backend/cache
 backend/map.html
+backend/processing/.ai_parser_cache.json
 
-# asp
-fcm.json
+# ── .NET (ASP/) ───────────────────────────────────────────
 bin/
 obj/
 .vs/
-backend/processing/.ai_parser_cache.json
+*.vsidx
+
+# ── Editors ───────────────────────────────────────────────
+.vscode/
+
+# ── React Native (frontend/) ──────────────────────────────
+frontend/node_modules/
+frontend/android/.gradle/
+frontend/android/build/
+frontend/android/app/build/
+frontend/android/app/.cxx/
+frontend/android/local.properties
+frontend/android/app/src/main/assets/index.android.bundle
+frontend/*.keystore
+!frontend/android/app/debug.keystore
+frontend/.metro-cache/
+
+# ── Docker ────────────────────────────────────────────────
+docker-data/

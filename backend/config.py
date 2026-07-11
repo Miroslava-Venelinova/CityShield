@@ -43,6 +43,13 @@ def _get_int(key: str, default: int) -> int:
         return default
 
 
+def _get_bool(key: str, default: bool) -> bool:
+    val = os.getenv(key, "").strip().lower()
+    if not val:
+        return default
+    return val in ("1", "true", "yes", "on")
+
+
 def _optional_int(key: str) -> int | None:
     """Return int if the env var is set and valid, otherwise None."""
     val = os.getenv(key, "").strip()
@@ -74,12 +81,25 @@ class _Config:
     # ------------------------------------------------------------------
     # ASP.NET API
     # ------------------------------------------------------------------
-    ASP_API_URL: str = _get("ASP_API_URL", "http://localhost:5276/api/VK/submit-data")
+    ASP_API_URL: str = _get("ASP_API_URL", "http://localhost:5276/api/alerts/submit-data")
+    # Shared secret sent as X-Api-Key; must match the API's Ingest__ApiKey.
+    # Empty = no header sent (local dev with an open ingest endpoint).
+    ASP_API_KEY: str = _get("ASP_API_KEY", "")
+    # Only disable for self-signed certs in local development.
+    ASP_API_VERIFY_SSL: bool = _get_bool("ASP_API_VERIFY_SSL", True)
 
     # ------------------------------------------------------------------
     # Ollama
     # ------------------------------------------------------------------
-    OLLAMA_MODEL: str = "qwen3.5"
+    OLLAMA_MODEL: str = _get("OLLAMA_MODEL", "qwen3.5")
+    # Persist LLM responses to disk (debugging aid; keep off in production).
+    AI_PERSISTENT_CACHE: bool = _get_bool("AI_PERSISTENT_CACHE", False)
+
+    # ------------------------------------------------------------------
+    # Debugging
+    # ------------------------------------------------------------------
+    # Write a Folium debug map (map.html) for every polygon built.
+    POLYGON_DEBUG_MAP: bool = _get_bool("POLYGON_DEBUG_MAP", False)
 
 
     # ------------------------------------------------------------------
@@ -93,13 +113,30 @@ class _Config:
     VIK_URL: str = "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown"
     VT_URL:  str = "https://www.varnatraffic.com/Info"
 
+    # ERP Sever (Energo-Pro grid) planned-interruptions JSON endpoint
+    EPRO_URL:       str = "https://www.erpsever.bg/bg/profil/xhr/?method=get_interruptions"
+    EPRO_AREA_NAME: str = "Варна"
+
+    # Veolia Energy Varna (district heating) — "Ремонти и аварии" listing
+    HEATING_BASE_URL: str = "https://energy-varna.bg"
+    HEATING_URL:      str = (
+        "https://energy-varna.bg/bg/"
+        "%D1%81%D1%8A%D0%BE%D0%B1%D1%89%D0%B5%D0%BD%D0%B8%D1%8F"
+        "-%D0%B7%D0%B0-%D0%B0%D0%B2%D0%B0%D1%80%D0%B8%D0%B8-0"
+    )
+
+    # Road Infrastructure Agency (АПИ) news listing
+    ROADS_URL: str = "https://www.api.bg/bg/novini"
+
     # ------------------------------------------------------------------
     # Polling intervals
     # ------------------------------------------------------------------
-    DEFAULT_INTERVAL: int        = 600
-    VIK_INTERVAL:     int | None = None
-    VT_INTERVAL:      int | None = None
-    EPRO_INTERVAL:    int | None = None
+    DEFAULT_INTERVAL:  int        = _get_int("DEFAULT_INTERVAL", 600)
+    VIK_INTERVAL:      int | None = _optional_int("VIK_INTERVAL")
+    VT_INTERVAL:       int | None = _optional_int("VT_INTERVAL")
+    EPRO_INTERVAL:     int | None = _optional_int("EPRO_INTERVAL")
+    HEATING_INTERVAL:  int | None = _optional_int("HEATING_INTERVAL")
+    ROADS_INTERVAL:    int | None = _optional_int("ROADS_INTERVAL")
 
 
 cfg = _Config()

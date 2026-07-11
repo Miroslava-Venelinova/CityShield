@@ -12,6 +12,8 @@ import hashlib
 import json
 import logging
 import os
+import time
+
 import ollama
 
 from config import cfg
@@ -23,8 +25,9 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # When True, the cache is read from / written to PERSISTENT_CACHE_PATH on disk.
 # The file is plain JSON so you can open it and inspect cached responses.
-# When False (default), only the in-process memory cache is used.
-PERSISTENT_CACHE_ENABLED: bool = True
+# Controlled by the AI_PERSISTENT_CACHE env var (default: off — production
+# should always call the model so prompt/model changes take effect).
+PERSISTENT_CACHE_ENABLED: bool = cfg.AI_PERSISTENT_CACHE
 PERSISTENT_CACHE_PATH: str = os.path.join(
     os.path.dirname(__file__), ".ai_parser_cache.json"
 )
@@ -77,18 +80,29 @@ def ai_parse(system_prompt: str, user_prompt: str) -> str | None:
             log.debug("[ai_parser] Cache hit.")
             return cache[key]
 
-    try:
-        response = ollama.chat(
-            model=cfg.OLLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            format="json",
-        )
-    except Exception as exc:
-        log.error("[ai_parser] Ollama call failed: %s", exc)
-        return None
+    # Retry transient Ollama failures (server restarting, model still
+    # loading) so one blip doesn't drop the message until the next crawl.
+    attempts = 3
+    response = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = ollama.chat(
+                model=cfg.OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                format="json",
+            )
+            break
+        except Exception as exc:
+            if attempt == attempts:
+                log.error("[ai_parser] Ollama call failed after %d attempts: %s",
+                          attempts, exc)
+                return None
+            log.warning("[ai_parser] Ollama call failed (attempt %d/%d): %s. Retrying.",
+                        attempt, attempts, exc)
+            time.sleep(2 * attempt)
 
     try:
         log.debug(

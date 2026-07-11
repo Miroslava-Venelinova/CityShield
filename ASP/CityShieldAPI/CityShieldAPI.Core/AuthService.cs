@@ -1,21 +1,17 @@
-﻿using CityShieldAPI.Common;
+using CityShieldAPI.Common;
 using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.Data;
 using CityShieldAPI.Data.Models;
 using CityShieldAPI.DTOs;
+using CityShieldAPI.DTOs.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using NetTopologySuite;
 using NetTopologySuite.Geometries;
-using System;
-using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
 using System.Security.Claims;
-using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace CityShieldAPI.Core
 {
@@ -23,29 +19,39 @@ namespace CityShieldAPI.Core
     {
         private readonly ApplicationDbContext _context;
         private readonly JwtSettings _jwtSettings;
-        public AuthService(ApplicationDbContext context,
-            IOptions<JwtSettings> jwtOptions)
+        private readonly IGeocodingService _geocoder;
+
+        public AuthService(
+            ApplicationDbContext context,
+            IOptions<JwtSettings> jwtOptions,
+            IGeocodingService geocoder)
         {
             _context = context;
             _jwtSettings = jwtOptions.Value;
+            _geocoder = geocoder;
         }
 
         public async Task<UserDTO> GetUserDataAsync(string userId)
         {
-            var user = await _context.Users.Where(x => x.UserId.ToString() == userId)
-                .FirstOrDefaultAsync();
+            var id = ParseUserId(userId);
+            var user = await _context.Users
+                .Include(u => u.Region)
+                .Include(u => u.Street)
+                .FirstOrDefaultAsync(x => x.UserId == id);
 
             if (user == null)
                 throw new ArgumentException("User does not exist");
 
-            return new UserDTO()
+            return new UserDTO
             {
                 Email = user.Email,
-                PasswordHash = user.PasswordHash,
                 Latitude = user.Latitude,
                 Longitude = user.Longitude,
+                HasLocation = user.RegionId.HasValue,
+                RegionName = user.Region?.RegionName,
+                StreetName = user.Street?.StreetName,
                 CreatedOnUTC = user.CreatedOnUTC,
-                UpdatedOnUTC = user.UpdatedOnUTC
+                UpdatedOnUTC = user.UpdatedOnUTC,
             };
         }
 
@@ -54,45 +60,86 @@ namespace CityShieldAPI.Core
             var user = await _context.Users
                 .FirstOrDefaultAsync(u => u.Email == request.Email);
 
-            if (user == null)
-                return null;
-
-            if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
-                return null;
+            if (user == null) return null;
+            if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return null;
 
             return GenerateJwtToken(user);
         }
 
         public async Task RegisterAsync(RegisterRequest request)
         {
-            if (await _context.Users.Where(x => x.Email == request.Email).AnyAsync())
-                throw new Exception("An account with this email already exists");
+            if (await _context.Users.AnyAsync(x => x.Email == request.Email))
+                throw new InvalidOperationException("An account with this email already exists");
 
-            User user = new User()
+            var user = new User
             {
                 Email = request.Email,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-                Latitude = 43.20669594168909d,
-                Longitude = 27.923077151187115d,
+                // Location is null until the user explicitly sets it
+                Latitude = null,
+                Longitude = null,
+                Location = null,
+                RegionId = null,
+                StreetId = null,
                 CreatedOnUTC = DateTime.UtcNow,
                 UpdatedOnUTC = DateTime.UtcNow,
-                RegionId = request.RegionId,
-                StreetId = request.StreetId
             };
-
-            var geometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
-            user.Location = geometryFactory.CreatePoint(
-                new Coordinate(user.Longitude, user.Latitude));
 
             await _context.Users.AddAsync(user);
             await _context.SaveChangesAsync();
         }
 
+        /// <summary>
+        /// Reverse-geocodes the supplied coordinates via the geocoding service,
+        /// then fuzzy-matches the returned suburb/neighbourhood against the
+        /// regions table and the road against the streets table, and updates
+        /// the user record.
+        /// </summary>
+        public async Task UpdateLocationAsync(string userId, UpdateLocationRequest request)
+        {
+            var id = ParseUserId(userId);
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.UserId == id)
+                ?? throw new ArgumentException("User does not exist");
+
+            // ── 1. Reverse-geocode ─────────────────────────────────────────────
+            var address = await _geocoder.ReverseGeocodeAsync(
+                request.Latitude, request.Longitude);
+
+            // ── 2. Fuzzy-match region (required) and street (optional) ─────────
+            Region? region = null;
+            if (!string.IsNullOrWhiteSpace(address.RegionName))
+                region = await _context.FuzzyMatchRegionAsync(address.RegionName);
+
+            Street? street = null;
+            if (!string.IsNullOrWhiteSpace(address.StreetName))
+                street = await _context.FuzzyMatchStreetAsync(address.StreetName);
+
+            // ── 3. Persist ─────────────────────────────────────────────────────
+            var geometryFactory = NtsGeometryServices.Instance
+                .CreateGeometryFactory(srid: 4326);
+
+            user.Latitude = request.Latitude;
+            user.Longitude = request.Longitude;
+            user.Location = geometryFactory.CreatePoint(
+                new Coordinate(request.Longitude, request.Latitude));
+            user.RegionId = region?.Id;          // null if no match found
+            user.StreetId = street?.Id;
+            user.UpdatedOnUTC = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+        }
+
+        private static Guid ParseUserId(string userId) =>
+            Guid.TryParse(userId, out var id)
+                ? id
+                : throw new ArgumentException("User does not exist");
+
+        // ── JWT ────────────────────────────────────────────────────────────────
         private string GenerateJwtToken(User user)
         {
             var key = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(_jwtSettings.Key)
-            );
+                Encoding.UTF8.GetBytes(_jwtSettings.Key));
 
             var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
@@ -107,8 +154,7 @@ namespace CityShieldAPI.Core
                 audience: _jwtSettings.Audience,
                 claims: claims,
                 expires: DateTime.UtcNow.AddMinutes(_jwtSettings.ExpireMinutes),
-                signingCredentials: creds
-            );
+                signingCredentials: creds);
 
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
