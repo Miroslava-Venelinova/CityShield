@@ -1,4 +1,18 @@
-import psycopg2
+"""
+Manual sandbox: build a street polygon against the live PostGIS/OSM stack
+and inspect the resulting GeoJSON. Run from backend/:
+
+    python scripts/polygon_demo.py
+"""
+
+import sys
+from pathlib import Path
+
+import psycopg
+
+# Backend modules import each other as top-level packages, so backend/
+# (the parent of scripts/) must be on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from processing import polygon
 from config import cfg
@@ -10,7 +24,7 @@ city_context = "Варна България"
 #bounding_streets = [ 'ул. Д-р Басанович', 'ул. Подполковник Калитин', 'ул. Дубровник', 'ул. Студентска']
 bounding_streets = [ 'бул Цар Освободител', 'бул Република', 'бул Сливница', 'Вяра']
 
-pg_conn = psycopg2.connect(
+pg_conn = psycopg.connect(
     dbname=cfg.POSTGRES_DB,
     user=cfg.POSTGRES_USER,
     password=cfg.POSTGRES_PASSWORD,

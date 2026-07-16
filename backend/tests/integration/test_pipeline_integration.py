@@ -62,7 +62,7 @@ AI_RESULT = json.dumps({
 
 
 def test_process_and_submit_posts_exact_api_contract(stub_api, monkeypatch):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: AI_RESULT)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: AI_RESULT)
 
     ok = common.process_and_submit(
         "IT", "vik", common.OUTAGE_AI_PROMPT,
@@ -90,7 +90,7 @@ def test_process_and_submit_posts_exact_api_contract(stub_api, monkeypatch):
 
 
 def test_process_and_submit_handles_api_rejection(stub_api, monkeypatch):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: AI_RESULT)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: AI_RESULT)
     stub_api.status_code = 400
 
     ok = common.process_and_submit(

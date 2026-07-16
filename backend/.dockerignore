@@ -6,3 +6,5 @@ cache/
 map.html
 tests/
 processing/.ai_parser_cache.json
+scripts/
+requirements-dev.txt

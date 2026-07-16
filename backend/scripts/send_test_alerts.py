@@ -14,12 +14,12 @@ app account has a location + registered device token. Only the case matching
 your account's street (default: ул. Сирма войвода, кв. Бриз) actually
 delivers a push; the rest exercise storage, matching and broadcast paths.
 
-Usage:
-    python send_test_alerts.py                  # send every case
-    python send_test_alerts.py --list           # show cases without sending
-    python send_test_alerts.py --only vik-street --only vt
-    python send_test_alerts.py --neighborhood "кв. Аспарухово" --street "Дубровник"
-    python send_test_alerts.py --live-polygons  # build polygons via PostGIS/OSM
+Usage (from backend/):
+    python scripts/send_test_alerts.py          # send every case
+    python scripts/send_test_alerts.py --list   # show cases without sending
+    python scripts/send_test_alerts.py --only vik-street --only vt
+    python scripts/send_test_alerts.py --neighborhood "кв. Аспарухово" --street "Дубровник"
+    python scripts/send_test_alerts.py --live-polygons  # build polygons via PostGIS/OSM
 """
 
 import argparse
@@ -27,6 +27,11 @@ import logging
 import sys
 import time
 import uuid
+from pathlib import Path
+
+# Backend modules import each other as top-level packages, so backend/
+# (the parent of scripts/) must be on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import cfg
 from services import common
@@ -66,6 +71,35 @@ def build_cases(neighborhood: str, street: str) -> list[dict]:
     Varna / Енерго-Про / АПИ / Varna Traffic messages; processed_data is what
     the outage LLM prompt extracts from them.
     """
+
+    return [
+        {
+            "name": "vik-street",
+            "category": "vik",
+            "note": f"street-level outage on your street ({street}) — should deliver a push",
+            "title": "Авария на уличен водопровод",
+            "content": (
+                f"Поради отстраняване на авария на уличен водопровод на "
+                f"ул. {street} е нарушено водоподаването на абонатите в "
+                f"{neighborhood}. Очаквано възстановяване на водоподаването "
+                f"– 17:00 ч."
+            ),
+            "ai_output": AiOutput(
+                locations=[
+                    Sublocation(
+                        location_name=neighborhood,
+                        sublocations=[street],
+                        is_polygon=False,
+                    )
+                ],
+                start_time="09:00",
+                end_time="17:00",
+            ),
+        }
+        ]
+
+
+
     return [
         {
             "name": "vik-street",

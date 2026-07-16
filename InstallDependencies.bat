@@ -19,7 +19,7 @@ if errorlevel 1 (
     )
     echo   Installing packages from backend\requirements.txt ...
     "backend\.venv\Scripts\python.exe" -m pip install --upgrade pip
-    "backend\.venv\Scripts\python.exe" -m pip install -r "backend\requirements.txt"
+    "backend\.venv\Scripts\python.exe" -m pip install -r "backend\requirements.txt" -r "backend\requirements-dev.txt"
     if errorlevel 1 (
         echo   ERROR: pip install failed.
     ) else (

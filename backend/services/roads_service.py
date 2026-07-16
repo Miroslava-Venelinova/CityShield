@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel
 
 from config import cfg
-from data.mongo.state_repository import add_seen_ids, get_seen_ids
+from data.postgres.state_repository import add_seen_ids, get_seen_ids
 from scraping.scrape import fetch_page, roads_parse_article, roads_parse_page
 from services import common
 

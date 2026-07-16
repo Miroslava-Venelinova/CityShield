@@ -14,10 +14,11 @@ import json
 import logging
 import uuid
 
-import psycopg2
+import psycopg
 import requests
 import urllib3
 from pydantic import BaseModel
+from pydantic.json_schema import SkipJsonSchema
 
 from config import cfg
 from processing import ai_parser
@@ -111,7 +112,9 @@ class Sublocation(BaseModel):
     location_name: str | None = None
     sublocations: list[str] = []
     is_polygon: bool = False
-    polygon_geojson: dict | None = None
+    # Filled in by build_polygons, never by the LLM — SkipJsonSchema keeps it
+    # out of the JSON schema sent to Ollama so the model can't hallucinate it.
+    polygon_geojson: SkipJsonSchema[dict | None] = None
 
 
 class AiOutput(BaseModel):
@@ -124,8 +127,9 @@ class AiOutput(BaseModel):
     city_wide: bool = False
     # VT route changes only: the affected lines ("18", "31A"). The API narrows
     # the broadcast to users subscribed to one of them; None/empty/["0"]
-    # (line unknown) keeps the full city-wide audience.
-    bus_lines: list[str] | None = None
+    # (line unknown) keeps the full city-wide audience. Set programmatically
+    # by the VT service (SkipJsonSchema: hidden from the outage LLM schema).
+    bus_lines: SkipJsonSchema[list[str] | None] = None
 
 
 # ---------------------------------------------------------------------------
@@ -138,14 +142,15 @@ def open_pg_connection(tag: str):
     Returns None (and logs) on failure so callers can continue without polygons.
     """
     try:
-        return psycopg2.connect(
+        return psycopg.connect(
             dbname=cfg.POSTGRES_DB,
             user=cfg.POSTGRES_USER,
             password=cfg.POSTGRES_PASSWORD,
             host=cfg.POSTGRES_HOST,
             port=cfg.POSTGRES_PORT,
+            connect_timeout=5,
         )
-    except psycopg2.Error as exc:
+    except psycopg.Error as exc:
         log.error("[%s] Cannot connect to PostgreSQL: %s. Polygon resolution will be skipped.", tag, exc)
         return None
 
@@ -154,9 +159,13 @@ def parse_with_ai(tag: str, prompt: str, msg_content: str, msg_ref, model=AiOutp
     """
     Run the LLM over a message and validate the result against a Pydantic
     model (AiOutput by default; sources with their own schema pass theirs).
+    The model's JSON schema is passed to Ollama as a structured-output
+    constraint, so the response shape is enforced at generation time; the
+    Pydantic validation below stays as the backstop.
     Returns None (and logs) on any failure. msg_ref is only used in log lines.
     """
-    raw_ai_output = ai_parser.ai_parse(prompt, msg_content)
+    raw_ai_output = ai_parser.ai_parse(
+        prompt, msg_content, format_schema=model.model_json_schema())
     if raw_ai_output is None:
         log.error("[%s] AI parsing failed (%s).", tag, msg_ref)
         return None
@@ -186,14 +195,17 @@ def build_polygons(tag: str, ai_output: AiOutput, pg_conn, msg_ref) -> None:
             continue
 
         try:
-            with pg_conn:
+            # transaction() (not `with pg_conn:`, which in psycopg 3 would
+            # close the connection) rolls back a failed polygon lookup so the
+            # connection stays usable for the remaining locations.
+            with pg_conn.transaction():
                 location.polygon_geojson = streets_to_geojson(
                     POLYGON_AREA,
                     location.sublocations,
                     pg_conn,
                 )
         except Exception as exc:
-            # Not just psycopg2.Error: the OSM/geometry helpers can raise
+            # Not just psycopg.Error: the OSM/geometry helpers can raise
             # (e.g. ValueError on an empty GeoDataFrame), and a polygon
             # failure must never take down the whole message.
             log.error(

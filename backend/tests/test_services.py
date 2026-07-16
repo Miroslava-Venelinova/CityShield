@@ -275,7 +275,7 @@ class TestRoadsService:
         monkeypatch.setattr(roads_service, "roads_parse_page", lambda html: state.items)
         monkeypatch.setattr(roads_service, "roads_parse_article", lambda html: state.article)
         monkeypatch.setattr(ai_parser, "ai_parse",
-                            lambda prompt, text: state.ai_calls.append(text) or state.ai_json)
+                            lambda prompt, text, **kw: state.ai_calls.append(text) or state.ai_json)
         monkeypatch.setattr(roads_service, "get_seen_ids", lambda src: state.seen)
         monkeypatch.setattr(roads_service, "add_seen_ids",
                             lambda src, ids: state.added.append((src, ids)))
@@ -330,7 +330,7 @@ class TestRoadsService:
         assert env.added == [("roads", [])]
 
     def test_ai_failure_not_marked_processed(self, env, monkeypatch):
-        monkeypatch.setattr(ai_parser, "ai_parse", lambda p, t: None)
+        monkeypatch.setattr(ai_parser, "ai_parse", lambda p, t, **kw: None)
         roads_service.main()
         assert env.submitted == []
         assert env.added == [("roads", [])]
@@ -363,7 +363,7 @@ class TestVarnaTrafficService:
                             lambda url, *a, **k: _response())
         monkeypatch.setattr(varnatraffic_service, "vt_parse", lambda html: state.messages)
         monkeypatch.setattr(ai_parser, "ai_parse",
-                            lambda prompt, text: state.ai_calls.append(text) or state.ai_json)
+                            lambda prompt, text, **kw: state.ai_calls.append(text) or state.ai_json)
         monkeypatch.setattr(varnatraffic_service, "get_seen_ids", lambda src: state.seen)
         monkeypatch.setattr(varnatraffic_service, "add_seen_ids",
                             lambda src, ids: state.added.append((src, ids)))
@@ -406,7 +406,7 @@ class TestVarnaTrafficService:
         assert env.added == [("vt", ["778", "777"])]
 
     def test_ai_failure_skips_message_and_id_not_persisted(self, env, monkeypatch):
-        monkeypatch.setattr(ai_parser, "ai_parse", lambda p, t: None)
+        monkeypatch.setattr(ai_parser, "ai_parse", lambda p, t, **kw: None)
         varnatraffic_service.main()
         # Failed messages are retried next run
         assert env.submitted == []

@@ -18,9 +18,11 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - run: pip install -r requirements.txt
-      # Integration tests need a live MongoDB — unit scope only in CI.
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # Integration tests need a live PostgreSQL — unit scope only in CI.
       - run: pytest -m "not integration"
 
   api:

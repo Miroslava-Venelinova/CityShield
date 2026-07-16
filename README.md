@@ -41,7 +41,7 @@ The system consists of three components that form a pipeline from raw source dat
 └─────────────────────┘     └──────────────────────┘     └────────────────────┘
 ```
 
-1. **Ingestion service** (`backend/`) — a set of Python scrapers, one per source, each running on its own polling interval. New announcements are parsed into structured data by a locally hosted LLM (Ollama), geocoded via Nominatim/Overpass, converted into geographic polygons of the affected area, and submitted to the API. MongoDB tracks which announcements have already been processed.
+1. **Ingestion service** (`backend/`) — a set of Python scrapers, one per source, each running on its own polling interval. New announcements are parsed into structured data by a locally hosted LLM (Ollama), geocoded via Nominatim/Overpass, converted into geographic polygons of the affected area, and submitted to the API. Crawl state (which announcements have already been processed) lives in PostgreSQL alongside the reference data.
 2. **API** (`ASP/`) — an ASP.NET Core 8 service that stores alerts in PostgreSQL with PostGIS geometry, manages user accounts and JWT authentication, matches incoming alerts against user locations and notification preferences, and delivers push notifications through Firebase Cloud Messaging.
 3. **Mobile app** (`frontend/`) — a React Native Android application with an OpenStreetMap-based incident map, an alert feed, a persisted notification inbox, and per-category notification settings.
 
@@ -49,7 +49,7 @@ The system consists of three components that form a pipeline from raw source dat
 
 | Component | Technologies |
 |---|---|
-| Ingestion | Python 3, asyncio, BeautifulSoup, Ollama (local LLM), Nominatim & Overpass geocoding, MongoDB |
+| Ingestion | Python 3, asyncio, BeautifulSoup, Ollama (local LLM), Nominatim & Overpass geocoding, PostgreSQL |
 | API | ASP.NET Core 8, Entity Framework Core, PostgreSQL + PostGIS (NetTopologySuite), JWT authentication, BCrypt, Firebase Admin SDK, Swagger |
 | Mobile app | React Native 0.85, React 19, React Navigation, Leaflet in a WebView (OpenStreetMap tiles), Firebase Cloud Messaging |
 | Tooling | Docker-based Android build environment (Node 22, JDK 17, Android SDK 35) |
@@ -64,7 +64,8 @@ CityShield/
 │   ├── services/             One module per data source
 │   ├── scraping/             HTTP scraping utilities
 │   ├── processing/           LLM parsing, geocoding, polygon building
-│   ├── data/                 MongoDB / PostgreSQL / Overpass access layers
+│   ├── data/                 PostgreSQL / Overpass access layers
+│   ├── scripts/              Manual test & debugging scripts
 │   └── tests/                Pytest suite (unit + integration)
 ├── ASP/
 │   └── CityShieldAPI/        ASP.NET Core solution
@@ -76,7 +77,7 @@ CityShield/
 │       ├── CityShieldAPI.Common/       Shared configuration types
 │       └── CityShieldAPI.Tests/        xUnit test suite
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
-├── docker-compose.prod.yml   Production stack (PostgreSQL, MongoDB, Ollama, API, ingestion)
+├── docker-compose.prod.yml   Production stack (PostgreSQL, Ollama, API, ingestion)
 ├── .env.example              Secrets template for the production stack
 └── InstallDependencies.bat   One-click dependency install for all components
 ```
@@ -90,7 +91,6 @@ CityShield/
 | [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) | API |
 | [PostgreSQL](https://www.postgresql.org/) with [PostGIS](https://postgis.net/) | API |
 | [Python 3](https://www.python.org/downloads/) | Ingestion service |
-| [MongoDB](https://www.mongodb.com/try/download/community) | Ingestion service |
 | [Ollama](https://ollama.com/) | Ingestion service (LLM parsing) |
 | [Docker Desktop](https://www.docker.com/products/docker-desktop) + [Android Studio](https://developer.android.com/studio) | Mobile app |
 | A [Firebase](https://console.firebase.google.com) project | Push notifications |
@@ -130,7 +130,7 @@ cd backend
 .venv\Scripts\python run.py
 ```
 
-Configuration is read from `backend/.env` — MongoDB connection, API endpoint, and per-source polling intervals. See `backend/config.py` for every available option and its default. MongoDB and Ollama must be running locally.
+Configuration is read from `backend/.env` — PostgreSQL connection, API endpoint, log level, and per-source polling intervals. See `backend/config.py` for every available option and its default. PostgreSQL and Ollama must be running locally.
 
 ### 4. Run the mobile app
 
@@ -138,7 +138,7 @@ Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a complete step-by-step gu
 
 ## Running the tests
 
-- **Ingestion service** — from `backend/`: `.venv\Scripts\python -m pytest`. Tests marked `integration` need a live MongoDB; skip them with `-m "not integration"`.
+- **Ingestion service** — from `backend/`: `.venv\Scripts\python -m pytest`. Tests marked `integration` need a live PostgreSQL; skip them with `-m "not integration"`. Test dependencies: `.venv\Scripts\pip install -r requirements-dev.txt`.
 - **API** — `dotnet test ASP\CityShieldAPI\CityShieldAPI.sln`. The integration tests start a disposable PostGIS container via Testcontainers, so Docker must be running.
 - **Mobile app** — from `frontend/`: `npm run lint` and `npm run typecheck`.
 
@@ -157,7 +157,7 @@ Interactive documentation is available via Swagger UI when the API runs in the d
 
 ## Production deployment
 
-[docker-compose.prod.yml](docker-compose.prod.yml) runs the entire server-side stack — PostgreSQL/PostGIS, MongoDB, Ollama, the API, and the ingestion service:
+[docker-compose.prod.yml](docker-compose.prod.yml) runs the entire server-side stack — PostgreSQL/PostGIS, Ollama, the API, and the ingestion service:
 
 ```cmd
 copy .env.example .env        &rem then fill in the secrets

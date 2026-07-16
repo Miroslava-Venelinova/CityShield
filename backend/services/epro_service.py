@@ -12,7 +12,7 @@ import json
 import logging
 
 from config import cfg
-from data.mongo.state_repository import add_seen_ids, get_seen_ids
+from data.postgres.state_repository import add_seen_ids, get_seen_ids
 from scraping.scrape import DEFAULT_HEADERS, fetch_page, strip_html
 from services import common
 

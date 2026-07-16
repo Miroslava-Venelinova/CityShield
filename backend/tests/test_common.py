@@ -3,7 +3,7 @@
 import json
 from unittest.mock import MagicMock
 
-import psycopg2
+import psycopg
 import pytest
 
 from config import cfg
@@ -25,7 +25,7 @@ VALID_AI_JSON = json.dumps({
 # ---------------------------------------------------------------------------
 
 def test_parse_with_ai_valid_output(monkeypatch):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: VALID_AI_JSON)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: VALID_AI_JSON)
 
     result = common.parse_with_ai("T", "prompt", "msg", "id=1")
 
@@ -39,26 +39,46 @@ def test_parse_with_ai_valid_output(monkeypatch):
 
 
 def test_parse_with_ai_ai_failure_returns_none(monkeypatch):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: None)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: None)
     assert common.parse_with_ai("T", "prompt", "msg", "id=1") is None
 
 
 def test_parse_with_ai_invalid_json_returns_none(monkeypatch):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: "{not json")
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: "{not json")
     assert common.parse_with_ai("T", "prompt", "msg", "id=1") is None
 
 
 def test_parse_with_ai_schema_violation_returns_none(monkeypatch):
     # "locations" must be a list — a string must fail Pydantic validation
     bad = json.dumps({"locations": "не е списък"})
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: bad)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: bad)
     assert common.parse_with_ai("T", "prompt", "msg", "id=1") is None
 
 
 def test_parse_with_ai_missing_fields_use_defaults(monkeypatch):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: "{}")
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: "{}")
     result = common.parse_with_ai("T", "prompt", "msg", "id=1")
     assert result == AiOutput(locations=[], start_time=None, end_time=None)
+
+
+def test_parse_with_ai_sends_structured_output_schema(monkeypatch):
+    seen = {}
+
+    def fake_ai_parse(prompt, content, format_schema=None):
+        seen["format_schema"] = format_schema
+        return VALID_AI_JSON
+
+    monkeypatch.setattr(common.ai_parser, "ai_parse", fake_ai_parse)
+    common.parse_with_ai("T", "prompt", "msg", "id=1")
+
+    schema = seen["format_schema"]
+    assert schema == AiOutput.model_json_schema()
+    # Pipeline-internal fields must be hidden from the LLM's output schema
+    assert "polygon_geojson" not in schema["$defs"]["Sublocation"]["properties"]
+    assert "bus_lines" not in schema["properties"]
+    # ...but the LLM-facing fields must be there
+    assert "city_wide" in schema["properties"]
+    assert "sublocations" in schema["$defs"]["Sublocation"]["properties"]
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +138,7 @@ def test_build_polygons_success_sets_geojson(monkeypatch):
 
 def test_build_polygons_postgis_error_sets_none_and_continues(monkeypatch):
     def boom(*a, **k):
-        raise psycopg2.Error("postgis exploded")
+        raise psycopg.Error("postgis exploded")
 
     monkeypatch.setattr(common, "streets_to_geojson", boom)
     output = AiOutput(locations=[_polygon_location(), _polygon_location()])
@@ -169,7 +189,7 @@ def test_submit_to_api_connection_error_returns_false(requests_mock):
 # ---------------------------------------------------------------------------
 
 def test_process_and_submit_full_flow(monkeypatch, requests_mock):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: VALID_AI_JSON)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: VALID_AI_JSON)
     requests_mock.post(cfg.ASP_API_URL, status_code=200)
 
     ok = common.process_and_submit(
@@ -183,7 +203,7 @@ def test_process_and_submit_full_flow(monkeypatch, requests_mock):
 def test_process_and_submit_joins_title_and_content_for_ai(monkeypatch, requests_mock):
     seen = {}
 
-    def fake_ai_parse(prompt, content):
+    def fake_ai_parse(prompt, content, **kwargs):
         seen["content"] = content
         return VALID_AI_JSON
 
@@ -196,7 +216,7 @@ def test_process_and_submit_joins_title_and_content_for_ai(monkeypatch, requests
 
 
 def test_process_and_submit_ai_failure_skips_submission(monkeypatch, requests_mock):
-    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c: None)
+    monkeypatch.setattr(common.ai_parser, "ai_parse", lambda p, c, **kw: None)
     requests_mock.post(cfg.ASP_API_URL, status_code=200)
 
     ok = common.process_and_submit("T", "vik", "prompt", "t", "c", None, "id=1")

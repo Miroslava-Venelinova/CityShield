@@ -8,7 +8,7 @@ first), crawled incrementally by id via the shared crawler in common.
 import re
 
 from config import cfg
-from data.mongo.state_repository import get_last_id, write_last_id
+from data.postgres.state_repository import get_last_id, write_last_id
 from scraping.scrape import fetch_page, vik_parse_message, vik_parse_page
 from services import common
 

@@ -27,12 +27,6 @@ services:
       timeout: 5s
       retries: 12
 
-  mongo:
-    image: mongo:7
-    restart: unless-stopped
-    volumes:
-      - ./docker-data/mongo:/data/db
-
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -74,11 +68,8 @@ services:
     restart: unless-stopped
     depends_on:
       - api
-      - mongo
       - ollama
     environment:
-      MONGO_URI: mongodb://mongo:27017
-      MONGO_DB: cityshield
       POSTGRES_DB: ${POSTGRES_DB:-CityShieldDB}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -89,3 +80,4 @@ services:
       ASP_API_VERIFY_SSL: "true"
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}

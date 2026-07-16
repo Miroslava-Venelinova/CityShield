@@ -1,106 +1,67 @@
 """
 Central configuration module.
 
-Loads .env (via python-dotenv) and exposes every runtime constant as a
-typed attribute. Import this module instead of reading os.getenv() in
-individual modules.
+A pydantic-settings model: every runtime constant is a typed, validated
+field, overridable via environment variables or backend/.env. Import this
+module instead of reading os.getenv() in individual modules.
 
 Usage:
     from config import cfg
-    print(cfg.MONGO_URI)
+    print(cfg.POSTGRES_HOST)
+
+Invalid values (e.g. a non-numeric interval) fail fast at startup with a
+clear validation error instead of being silently ignored. Blank values
+("VAR=") fall back to the field's default, so optional entries can stay
+empty in .env / docker-compose.
 """
 
 import logging
-import os
 
-from dotenv import load_dotenv
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv()  # reads .env from the working directory (i.e. backend/)
-
-log = logging.getLogger(__name__)
+_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
 
 
-def _require(key: str) -> str:
-    """Return the value of a mandatory env var, raise if missing/empty."""
-    val = os.getenv(key, "").strip()
-    if not val:
-        raise EnvironmentError(f"Required environment variable '{key}' is not set.")
-    return val
-
-
-def _get(key: str, default: str) -> str:
-    return os.getenv(key, default).strip() or default
-
-
-def _get_int(key: str, default: int) -> int:
-    val = os.getenv(key, "").strip()
-    if not val:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        log.warning("[config] %s='%s' is not a valid integer — using default %d.", key, val, default)
-        return default
-
-
-def _get_bool(key: str, default: bool) -> bool:
-    val = os.getenv(key, "").strip().lower()
-    if not val:
-        return default
-    return val in ("1", "true", "yes", "on")
-
-
-def _optional_int(key: str) -> int | None:
-    """Return int if the env var is set and valid, otherwise None."""
-    val = os.getenv(key, "").strip()
-    if not val:
-        return None
-    try:
-        return int(val)
-    except ValueError:
-        log.warning("[config] %s='%s' is not a valid integer — ignoring.", key, val)
-        return None
-
-
-class _Config:
-    # ------------------------------------------------------------------
-    # MongoDB
-    # ------------------------------------------------------------------
-    MONGO_URI: str = _get("MONGO_URI", "mongodb://localhost:27017")
-    MONGO_DB:  str = _get("MONGO_DB",  "cityshield")
+class _Config(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",          # read from the working directory (backend/)
+        env_file_encoding="utf-8",
+        extra="ignore",           # unrelated env vars (PATH, ...) are not fields
+    )
 
     # ------------------------------------------------------------------
-    # PostgreSQL
+    # PostgreSQL (crawl state, street/region fuzzy matching, PostGIS)
     # ------------------------------------------------------------------
-    POSTGRES_DB:       str = _get("POSTGRES_DB",       "CityShieldDB")
-    POSTGRES_USER:     str = _get("POSTGRES_USER",     "postgres")
-    POSTGRES_PASSWORD: str = _get("POSTGRES_PASSWORD", "postgres")
-    POSTGRES_HOST:     str = _get("POSTGRES_HOST",     "localhost")
-    POSTGRES_PORT:     int = _get_int("POSTGRES_PORT", 5432)
+    POSTGRES_DB:       str = "CityShieldDB"
+    POSTGRES_USER:     str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_HOST:     str = "localhost"
+    POSTGRES_PORT:     int = 5432
 
     # ------------------------------------------------------------------
     # ASP.NET API
     # ------------------------------------------------------------------
-    ASP_API_URL: str = _get("ASP_API_URL", "http://localhost:5276/api/alerts/submit-data")
+    ASP_API_URL: str = "http://localhost:5276/api/alerts/submit-data"
     # Shared secret sent as X-Api-Key; must match the API's Ingest__ApiKey.
     # Empty = no header sent (local dev with an open ingest endpoint).
-    ASP_API_KEY: str = _get("ASP_API_KEY", "")
+    ASP_API_KEY: str = ""
     # Only disable for self-signed certs in local development.
-    ASP_API_VERIFY_SSL: bool = _get_bool("ASP_API_VERIFY_SSL", True)
+    ASP_API_VERIFY_SSL: bool = True
 
     # ------------------------------------------------------------------
     # Ollama
     # ------------------------------------------------------------------
-    OLLAMA_MODEL: str = _get("OLLAMA_MODEL", "qwen3.5")
+    OLLAMA_MODEL: str = "qwen3.5"
     # Persist LLM responses to disk (debugging aid; keep off in production).
-    AI_PERSISTENT_CACHE: bool = _get_bool("AI_PERSISTENT_CACHE", False)
+    AI_PERSISTENT_CACHE: bool = False
 
     # ------------------------------------------------------------------
-    # Debugging
+    # Logging / debugging
     # ------------------------------------------------------------------
+    LOG_LEVEL: str = "INFO"
     # Write a Folium debug map (map.html) for every polygon built.
-    POLYGON_DEBUG_MAP: bool = _get_bool("POLYGON_DEBUG_MAP", False)
-
+    POLYGON_DEBUG_MAP: bool = False
 
     # ------------------------------------------------------------------
     # Overpass
@@ -129,14 +90,35 @@ class _Config:
     ROADS_URL: str = "https://www.api.bg/bg/novini"
 
     # ------------------------------------------------------------------
-    # Polling intervals
+    # Polling intervals (seconds; None → DEFAULT_INTERVAL)
     # ------------------------------------------------------------------
-    DEFAULT_INTERVAL:  int        = _get_int("DEFAULT_INTERVAL", 600)
-    VIK_INTERVAL:      int | None = _optional_int("VIK_INTERVAL")
-    VT_INTERVAL:       int | None = _optional_int("VT_INTERVAL")
-    EPRO_INTERVAL:     int | None = _optional_int("EPRO_INTERVAL")
-    HEATING_INTERVAL:  int | None = _optional_int("HEATING_INTERVAL")
-    ROADS_INTERVAL:    int | None = _optional_int("ROADS_INTERVAL")
+    DEFAULT_INTERVAL:  int        = 600
+    VIK_INTERVAL:      int | None = None
+    VT_INTERVAL:       int | None = None
+    EPRO_INTERVAL:     int | None = None
+    HEATING_INTERVAL:  int | None = None
+    ROADS_INTERVAL:    int | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_falls_back_to_default(cls, value, info):
+        """Treat 'VAR=' (blank) as unset, mirroring the old os.getenv handling."""
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def _validate_log_level(cls, value: str) -> str:
+        level = value.strip().upper()
+        if level not in _LOG_LEVELS:
+            raise ValueError(f"LOG_LEVEL must be one of {_LOG_LEVELS}, got '{value}'")
+        return level
+
+    @property
+    def log_level(self) -> int:
+        """LOG_LEVEL as the numeric value logging.basicConfig expects."""
+        return getattr(logging, self.LOG_LEVEL)
 
 
 cfg = _Config()

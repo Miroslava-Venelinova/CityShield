@@ -10,7 +10,6 @@ import osmnx as ox
 import geopandas as gpd
 from shapely.geometry import Point, LineString
 from shapely.ops import linemerge, polygonize, unary_union
-import folium
 
 from config import cfg
 
@@ -156,6 +155,16 @@ def extract_city_block(place_name, street_names, extension_dist=200, output_html
         log.warning("[polygon] The extended streets do not enclose a fully closed polygon.")
 
     # 5. Folium Visualization (Optimized with Batch Reprojection)
+    # folium is a dev-only dependency (requirements-dev.txt) imported lazily:
+    # production never renders maps, so it doesn't ship in the Docker image.
+    if output_html:
+        try:
+            import folium
+        except ImportError:
+            log.warning("[polygon] folium is not installed — skipping debug map "
+                        "(pip install -r requirements-dev.txt).")
+            output_html = None
+
     if output_html:
         log.info("[polygon] Generating Folium map...")
     
@@ -270,7 +279,7 @@ def resolve_street_names(input_names, conn, similarity_threshold=0.4, limit=1):
 
     Args:
         input_names (list[str]): User-provided street names
-        conn: psycopg2 connection
+        conn: psycopg connection
         similarity_threshold (float): minimum similarity
         limit (int): number of candidates per input
 

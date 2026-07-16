@@ -43,6 +43,11 @@ def test_cache_key_differs_for_different_inputs():
     assert ai_parser._cache_key("ab", "c") != ai_parser._cache_key("a", "bc")
 
 
+def test_cache_key_differs_for_different_format_schemas():
+    assert ai_parser._cache_key("sys", "user") != ai_parser._cache_key("sys", "user", '{"a": 1}')
+    assert ai_parser._cache_key("sys", "user", '{"a": 1}') != ai_parser._cache_key("sys", "user", '{"a": 2}')
+
+
 # ---------------------------------------------------------------------------
 # ai_parse — model interaction (cache off)
 # ---------------------------------------------------------------------------
@@ -68,6 +73,20 @@ def test_ai_parse_passes_prompts_and_json_format(cache_disabled, monkeypatch):
         {"role": "system", "content": "SYSTEM"},
         {"role": "user", "content": "USER"},
     ]
+
+
+def test_ai_parse_passes_format_schema_as_structured_output(cache_disabled, monkeypatch):
+    seen = {}
+
+    def fake_chat(**kwargs):
+        seen.update(kwargs)
+        return _ollama_response("{}")
+
+    monkeypatch.setattr(ai_parser.ollama, "chat", fake_chat)
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+    ai_parser.ai_parse("SYSTEM", "USER", format_schema=schema)
+
+    assert seen["format"] == schema
 
 
 def test_ai_parse_ollama_exception_returns_none(cache_disabled, monkeypatch):

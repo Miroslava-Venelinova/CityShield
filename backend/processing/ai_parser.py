@@ -33,8 +33,8 @@ PERSISTENT_CACHE_PATH: str = os.path.join(
 )
 # ---------------------------------------------------------------------------
 
-def _cache_key(system_prompt: str, user_prompt: str) -> str:
-    raw = f"{system_prompt}\x00{user_prompt}"
+def _cache_key(system_prompt: str, user_prompt: str, format_repr: str = "") -> str:
+    raw = f"{system_prompt}\x00{user_prompt}\x00{format_repr}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -63,16 +63,23 @@ def _save_to_persistent_cache(cache: dict[str, str]) -> None:
         log.warning("[ai_parser] Could not write persistent cache: %s", exc)
 
 
-def ai_parse(system_prompt: str, user_prompt: str) -> str | None:
+def ai_parse(system_prompt: str, user_prompt: str,
+             format_schema: dict | None = None) -> str | None:
     """
     General function for AI parsing.
     Returns the raw JSON string from the model, or None if anything fails.
+
+    format_schema: a JSON schema (e.g. SomeModel.model_json_schema()) passed
+    to Ollama as a structured-output constraint, so the model is forced to
+    generate exactly that shape. When None, falls back to free-form JSON mode.
 
     When PERSISTENT_CACHE_ENABLED is True, checks the on-disk JSON cache
     before calling the model, and writes new results back to it.
     When False, every call goes directly to the model.
     """
-    key = _cache_key(system_prompt, user_prompt)
+    response_format = format_schema if format_schema is not None else "json"
+    key = _cache_key(system_prompt, user_prompt,
+                     json.dumps(format_schema, sort_keys=True) if format_schema else "")
 
     if PERSISTENT_CACHE_ENABLED:
         cache = _load_persistent_cache()
@@ -92,7 +99,7 @@ def ai_parse(system_prompt: str, user_prompt: str) -> str | None:
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": user_prompt},
                 ],
-                format="json",
+                format=response_format,
             )
             break
         except Exception as exc:
