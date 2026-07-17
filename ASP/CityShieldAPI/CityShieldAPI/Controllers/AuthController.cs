@@ -61,6 +61,28 @@ namespace CityShieldAPI.Controllers
         }
 
         /// <summary>
+        /// Permanently deletes the authenticated user's account and all data
+        /// keyed to it (device tokens, notification preferences, bus-line
+        /// subscriptions). Required by GDPR Art. 17 and Google Play's
+        /// account-deletion policy.
+        /// </summary>
+        [HttpDelete("me")]
+        [Authorize]
+        public async Task<IActionResult> DeleteMe()
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+            try
+            {
+                await _authService.DeleteAccountAsync(userId);
+                return NoContent();
+            }
+            catch (ArgumentException ex)
+            {
+                return NotFound(ex.Message);
+            }
+        }
+
+        /// <summary>
         /// Accepts GPS coordinates, reverse-geocodes via Nominatim, and updates
         /// the user's RegionId / StreetId / Location in the database.
         /// </summary>

@@ -1,15 +1,23 @@
-# ── CityShield production stack ───────────────────────────────────────────────
+# ── CityShield self-hosted stack ──────────────────────────────────────────────
 # Copy .env.example to .env, fill in the secrets, place the Firebase key at
 # ./fcm.json, then:
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
-# First-run only (see DEPLOYMENT.md):
-#   docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen3.5
+# AI provider: AI_PROVIDER=ollama (default, fully self-hosted — the ollama
+# service runs via COMPOSE_PROFILES=ollama, set in .env.example) or
+# AI_PROVIDER=gemini (hosted Gemini API — set GEMINI_API_KEY and
+# COMPOSE_PROFILES= empty so no Ollama container starts).
+#
+# First-run only:
+#   docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen3.5   # ollama profile only
 #   docker compose -f docker-compose.prod.yml exec ingestion python -m data.postgres.seeding.seeder
 #
 # TLS is NOT handled here — run a reverse proxy (Caddy / nginx / Traefik) in
 # front of the api service and point the mobile app at the HTTPS endpoint.
+# (Proxy__Enabled makes the API trust X-Forwarded-* from that proxy.)
+#
+# For the managed-cloud deployment (Cloud Run + Neon + Gemini) see PLAN.md.
 
 services:
   postgres:
@@ -30,6 +38,9 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    # Only started with COMPOSE_PROFILES=ollama (the default in .env.example);
+    # not needed when AI_PROVIDER=gemini.
+    profiles: ["ollama"]
     volumes:
       - ./docker-data/ollama:/root/.ollama
     # GPU access (optional, much faster parsing) — uncomment on a host with
@@ -60,15 +71,19 @@ services:
       Jwt__ExpireMinutes: "60"
       Ingest__ApiKey: ${INGEST_API_KEY:?set INGEST_API_KEY in .env}
       Database__AutoMigrate: "true"
+      # The documented setup runs a TLS-terminating reverse proxy in front of
+      # the API; this makes it honor X-Forwarded-Proto / X-Forwarded-For.
+      Proxy__Enabled: ${PROXY_ENABLED:-true}
     volumes:
       - ./fcm.json:/app/fcm.json:ro
 
   ingestion:
     build: ./backend
     restart: unless-stopped
+    # No depends_on for ollama: it's profile-gated (AI_PROVIDER=gemini runs
+    # without it), and the AI call path retries while the model loads anyway.
     depends_on:
       - api
-      - ollama
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-CityShieldDB}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -78,6 +93,9 @@ services:
       ASP_API_URL: http://api:5276/api/alerts/submit-data
       ASP_API_KEY: ${INGEST_API_KEY}
       ASP_API_VERIFY_SSL: "true"
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

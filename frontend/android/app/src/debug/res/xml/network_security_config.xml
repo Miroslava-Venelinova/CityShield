@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY override of the main network security config.
+  Allows plain HTTP to the local dev API server (10.0.2.2 = emulator
+  localhost). Release builds use src/main's config, which permits no
+  cleartext traffic at all.
+-->
+<network-security-config>
+  <!-- Local dev API (HTTP allowed) -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">10.0.2.2</domain>
+  </domain-config>
+  <!-- OpenStreetMap tile servers (HTTPS only) -->
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">openstreetmap.org</domain>
+    <domain includeSubdomains="true">tile.openstreetmap.org</domain>
+  </domain-config>
+</network-security-config>

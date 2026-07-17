@@ -99,6 +99,11 @@ export const authApi = {
   updateLocation: (body: UpdateLocationRequest, authToken: string): Promise<void> =>
     request<void>('/api/auth/location',
       {method: 'PUT', body: JSON.stringify(body)}, authToken),
+
+  // Permanently deletes the account and everything keyed to it (device
+  // tokens, preferences, bus-line subscriptions). GDPR Art. 17 / Play policy.
+  deleteAccount: (authToken: string): Promise<void> =>
+    request<void>('/api/auth/me', {method: 'DELETE'}, authToken),
 };
 
 // ── Device tokens ─────────────────────────────────────────────────────────────

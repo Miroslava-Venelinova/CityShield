@@ -1,6 +1,7 @@
-"""Unit tests for processing/ai_parser.py — Ollama is always mocked."""
+"""Unit tests for processing/ai_parser.py — model providers are always mocked."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -145,3 +146,99 @@ def test_ai_parse_cache_root_not_object_falls_back_to_model(cache_file, monkeypa
     monkeypatch.setattr(ai_parser.ollama, "chat",
                         lambda **kw: _ollama_response("from-model"))
     assert ai_parser.ai_parse("sys", "user") == "from-model"
+
+
+# ---------------------------------------------------------------------------
+# ai_parse — provider dispatch (Gemini)
+# ---------------------------------------------------------------------------
+
+def _gemini_response(text: str | None):
+    return SimpleNamespace(text=text, usage_metadata=None)
+
+
+@pytest.fixture
+def gemini_provider(monkeypatch):
+    monkeypatch.setattr(ai_parser.cfg, "AI_PROVIDER", "gemini")
+    monkeypatch.setattr(ai_parser.cfg, "GEMINI_API_KEY", "test-key")
+    # No real sleeping in retry tests.
+    monkeypatch.setattr(ai_parser.time, "sleep", lambda s: None)
+    yield
+    # The lazy client is process-global; never leak a fake between tests.
+    ai_parser._gemini_client = None
+
+
+def _fake_gemini_client(monkeypatch, generate_content):
+    client = SimpleNamespace(
+        models=SimpleNamespace(generate_content=generate_content))
+    monkeypatch.setattr(ai_parser, "_gemini_client", client)
+    return client
+
+
+def test_ai_parse_dispatches_to_gemini(cache_disabled, gemini_provider, monkeypatch):
+    seen = {}
+
+    def fake_generate(**kwargs):
+        seen.update(kwargs)
+        return _gemini_response('{"ok": true}')
+
+    _fake_gemini_client(monkeypatch, fake_generate)
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+    assert ai_parser.ai_parse("SYSTEM", "USER", format_schema=schema) == '{"ok": true}'
+    assert seen["contents"] == "USER"
+    assert seen["config"].system_instruction == "SYSTEM"
+    assert seen["config"].response_mime_type == "application/json"
+    assert seen["config"].response_json_schema == schema
+
+
+def test_ai_parse_gemini_never_touches_ollama(cache_disabled, gemini_provider, monkeypatch):
+    def fail(**kw):
+        pytest.fail("ollama must not be called when AI_PROVIDER=gemini")
+    monkeypatch.setattr(ai_parser.ollama, "chat", fail)
+    _fake_gemini_client(monkeypatch, lambda **kw: _gemini_response("{}"))
+    assert ai_parser.ai_parse("sys", "user") == "{}"
+
+
+def test_ai_parse_gemini_empty_response_returns_none(cache_disabled, gemini_provider, monkeypatch):
+    _fake_gemini_client(monkeypatch, lambda **kw: _gemini_response(None))
+    assert ai_parser.ai_parse("sys", "user") is None
+
+
+def test_ai_parse_gemini_retries_then_succeeds(cache_disabled, gemini_provider, monkeypatch):
+    calls = []
+
+    def flaky(**kw):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("transient")
+        return _gemini_response("recovered")
+
+    _fake_gemini_client(monkeypatch, flaky)
+    assert ai_parser.ai_parse("sys", "user") == "recovered"
+    assert len(calls) == 3
+
+
+def test_ai_parse_missing_gemini_key_returns_none(cache_disabled, gemini_provider, monkeypatch):
+    monkeypatch.setattr(ai_parser.cfg, "GEMINI_API_KEY", "")
+    assert ai_parser.ai_parse("sys", "user") is None
+
+
+# ---------------------------------------------------------------------------
+# _retry_delay_seconds
+# ---------------------------------------------------------------------------
+
+def test_retry_delay_is_exponential_by_default():
+    exc = RuntimeError("boom")
+    assert ai_parser._retry_delay_seconds(exc, 1) == 2.0
+    assert ai_parser._retry_delay_seconds(exc, 2) == 4.0
+
+
+def test_retry_delay_honors_gemini_retry_delay_on_429():
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED ... 'retryDelay': '37s'")
+    exc.code = 429
+    assert ai_parser._retry_delay_seconds(exc, 1) == 37.0
+
+
+def test_retry_delay_ignores_retry_delay_without_429():
+    exc = RuntimeError("something mentioning 'retryDelay': '37s' but not rate-limited")
+    assert ai_parser._retry_delay_seconds(exc, 1) == 2.0

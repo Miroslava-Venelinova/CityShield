@@ -24,3 +24,9 @@ if (!__DEV__ && !PROD_API_URL) {
 }
 
 export const API_BASE_URL = __DEV__ ? 'http://10.0.2.2:5276' : PROD_API_URL!;
+
+// Public privacy policy (required by Google Play and GDPR). Overridable at
+// bundle time so the hosted URL can change without a code edit.
+export const PRIVACY_POLICY_URL =
+  process.env.CITYSHIELD_PRIVACY_POLICY_URL ??
+  'https://stunnybg.github.io/CityShield/privacy-policy';

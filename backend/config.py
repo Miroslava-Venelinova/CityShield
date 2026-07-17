@@ -38,6 +38,9 @@ class _Config(BaseSettings):
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_HOST:     str = "localhost"
     POSTGRES_PORT:     int = 5432
+    # libpq sslmode: "prefer" keeps local docker-compose unaffected;
+    # managed providers that enforce TLS (e.g. Neon) need "require".
+    POSTGRES_SSLMODE:  str = "prefer"
 
     # ------------------------------------------------------------------
     # ASP.NET API
@@ -50,9 +53,14 @@ class _Config(BaseSettings):
     ASP_API_VERIFY_SSL: bool = True
 
     # ------------------------------------------------------------------
-    # Ollama
+    # AI parsing
     # ------------------------------------------------------------------
+    # "ollama" = local LLM (self-hosted / offline dev),
+    # "gemini" = hosted Gemini API (cloud deployment).
+    AI_PROVIDER: str = "ollama"
     OLLAMA_MODEL: str = "qwen3.5"
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
     # Persist LLM responses to disk (debugging aid; keep off in production).
     AI_PERSISTENT_CACHE: bool = False
 
@@ -60,6 +68,10 @@ class _Config(BaseSettings):
     # Logging / debugging
     # ------------------------------------------------------------------
     LOG_LEVEL: str = "INFO"
+    # Also write logs to backend.log next to stdout. Keep off in the cloud:
+    # Cloud Run's filesystem is tmpfs (the file eats RAM and vanishes on exit)
+    # and stdout is already captured by Cloud Logging.
+    LOG_TO_FILE: bool = True
     # Write a Folium debug map (map.html) for every polygon built.
     POLYGON_DEBUG_MAP: bool = False
 
@@ -106,6 +118,14 @@ class _Config(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return cls.model_fields[info.field_name].default
         return value
+
+    @field_validator("AI_PROVIDER")
+    @classmethod
+    def _validate_ai_provider(cls, value: str) -> str:
+        provider = value.strip().lower()
+        if provider not in ("ollama", "gemini"):
+            raise ValueError(f"AI_PROVIDER must be 'ollama' or 'gemini', got '{value}'")
+        return provider
 
     @field_validator("LOG_LEVEL")
     @classmethod

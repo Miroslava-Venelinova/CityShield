@@ -9,5 +9,6 @@ namespace CityShieldAPI.Core.Contracts
         Task<string?> LoginAsync(LoginRequest request);
         Task RegisterAsync(RegisterRequest request);
         Task UpdateLocationAsync(string userId, UpdateLocationRequest request);
+        Task DeleteAccountAsync(string userId);
     }
 }

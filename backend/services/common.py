@@ -148,6 +148,7 @@ def open_pg_connection(tag: str):
             password=cfg.POSTGRES_PASSWORD,
             host=cfg.POSTGRES_HOST,
             port=cfg.POSTGRES_PORT,
+            sslmode=cfg.POSTGRES_SSLMODE,
             connect_timeout=5,
         )
     except psycopg.Error as exc:

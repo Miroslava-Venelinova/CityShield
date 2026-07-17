@@ -11,8 +11,10 @@ pydantic-settings==2.12.0
 # Database (PostgreSQL: crawl state, fuzzy street matching)
 psycopg[binary]==3.3.2
 
-# AI parsing
+# AI parsing (AI_PROVIDER selects one at runtime; both stay installed so
+# either provider works out of the box)
 ollama==0.6.1
+google-genai==1.29.0
 
 # Geo / polygons
 geopy==2.4.1

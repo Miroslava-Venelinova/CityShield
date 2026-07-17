@@ -411,6 +411,88 @@ public class ApiIntegrationTests : IAsyncLifetime
         Assert.Equal(27.4, location.GetProperty("lng").GetDouble(), precision: 1);
     }
 
+    // ── account deletion ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DeleteMe_RemovesAccountAndEverythingKeyedToIt()
+    {
+        var token = await RegisterAndLoginAsync("erasure@example.com");
+        await _client.SendAsync(Authorized(
+            HttpMethod.Put, "/api/auth/location", token,
+            new { latitude = 43.18, longitude = 27.89 }));
+        await _client.SendAsync(Authorized(
+            HttpMethod.Post, "/api/tokens", token,
+            new { token = "erasure-device", platform = "android", deviceName = "P" }));
+        await _client.SendAsync(Authorized(
+            HttpMethod.Put, "/api/preferences/vik", token, new { isEnabled = false }));
+
+        var delete = await _client.SendAsync(
+            Authorized(HttpMethod.Delete, "/api/auth/me", token));
+        Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
+
+        // The account is gone (token still validates cryptographically, but
+        // the user row no longer exists) …
+        var me = await _client.SendAsync(
+            Authorized(HttpMethod.Get, "/api/auth/me", token));
+        Assert.Equal(HttpStatusCode.NotFound, me.StatusCode);
+
+        // … along with every row keyed to it (FK cascade + explicit deletes).
+        await using var db = _pg.CreateContext();
+        Assert.Empty(db.Users.Where(u => u.Email == "erasure@example.com"));
+        Assert.Empty(db.DeviceTokens.Where(t => t.Token == "erasure-device"));
+        Assert.Empty(db.UserNotificationPreferences);
+    }
+
+    [Fact]
+    public async Task DeleteMe_WithoutToken_Returns401()
+    {
+        var response = await _client.DeleteAsync("/api/auth/me");
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // ── maintenance & health ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Healthz_ReturnsOkWithoutAuth()
+    {
+        var response = await _client.GetAsync("/healthz");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ok", body.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task CleanupTokens_PurgesOnlyStaleTokens()
+    {
+        var token = await RegisterAndLoginAsync("cleanup@example.com");
+        await _client.SendAsync(Authorized(
+            HttpMethod.Post, "/api/tokens", token,
+            new { token = "fresh-device", platform = "android", deviceName = "P" }));
+
+        await using (var db = _pg.CreateContext())
+        {
+            var stale = await db.DeviceTokens.SingleAsync();
+            db.DeviceTokens.Add(new DeviceToken
+            {
+                UserId = stale.UserId,
+                Token = "stale-device",
+                LastSeenAt = DateTime.UtcNow.AddDays(-90),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // No ingest key is configured under Testing, so the endpoint is open
+        // (mirrors the local-dev behavior of the ingest endpoints).
+        var response = await _client.PostAsync("/api/maintenance/cleanup-tokens", null);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        await using (var check = _pg.CreateContext())
+        {
+            var remaining = await check.DeviceTokens.Select(t => t.Token).ToListAsync();
+            Assert.Equal(new[] { "fresh-device" }, remaining);
+        }
+    }
+
     // ── device tokens ────────────────────────────────────────────────────────
 
     [Fact]

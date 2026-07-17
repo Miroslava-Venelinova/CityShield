@@ -98,6 +98,7 @@ def main() -> None:
             password=cfg.POSTGRES_PASSWORD,
             host=cfg.POSTGRES_HOST,
             port=cfg.POSTGRES_PORT,
+            sslmode=cfg.POSTGRES_SSLMODE,
         )
     except psycopg.Error as exc:
         log.error("Could not connect to PostgreSQL: %s", exc)

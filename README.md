@@ -77,8 +77,8 @@ CityShield/
 │       ├── CityShieldAPI.Common/       Shared configuration types
 │       └── CityShieldAPI.Tests/        xUnit test suite
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
-├── docker-compose.prod.yml   Production stack (PostgreSQL, Ollama, API, ingestion)
-├── .env.example              Secrets template for the production stack
+├── docker-compose.prod.yml   Self-hosted stack (PostgreSQL, Ollama, API, ingestion)
+├── .env.example              Secrets template for the self-hosted stack
 └── InstallDependencies.bat   One-click dependency install for all components
 ```
 
@@ -155,16 +155,20 @@ The same checks run in GitHub Actions ([.github/workflows/ci.yml](.github/workfl
 
 Interactive documentation is available via Swagger UI when the API runs in the development environment.
 
-## Production deployment
+## Deployment
 
-[docker-compose.prod.yml](docker-compose.prod.yml) runs the entire server-side stack — PostgreSQL/PostGIS, Ollama, the API, and the ingestion service:
+The production deployment targets Google Cloud Run + Neon + the Gemini API — the full architecture, cost analysis, and rollout checklist live in [PLAN.md](PLAN.md).
+
+### Self-hosting
+
+[docker-compose.prod.yml](docker-compose.prod.yml) remains the fully self-hosted alternative (and the local integration environment) — PostgreSQL/PostGIS, Ollama, the API, and the ingestion service:
 
 ```cmd
 copy .env.example .env        &rem then fill in the secrets
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Place the Firebase service-account key at `./fcm.json` before starting, and follow the first-run steps (pulling the Ollama model, seeding the street database) in the compose file's header comments. TLS is not handled by the stack — run a reverse proxy (Caddy, nginx, Traefik) in front of the API.
+Place the Firebase service-account key at `./fcm.json` before starting, and follow the first-run steps (pulling the Ollama model, seeding the street database) in the compose file's header comments. Set `AI_PROVIDER=gemini` in `.env` to use the hosted Gemini API instead of local Ollama. TLS is not handled by the stack — run a reverse proxy (Caddy, nginx, Traefik) in front of the API.
 
 ## Further documentation
 

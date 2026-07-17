@@ -50,6 +50,7 @@ def _connect() -> psycopg.Connection:
         password=cfg.POSTGRES_PASSWORD,
         host=cfg.POSTGRES_HOST,
         port=cfg.POSTGRES_PORT,
+        sslmode=cfg.POSTGRES_SSLMODE,
         connect_timeout=5,
         autocommit=True,
     )

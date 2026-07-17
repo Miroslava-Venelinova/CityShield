@@ -1,13 +1,19 @@
 """
 Entry point for the backend.
-Runs all services concurrently using asyncio. Each service runs in an
-independent loop inside a dedicated thread (via asyncio.to_thread) so
-services never block each other.
 
-Per-service intervals are read from config (which reads from .env).
-Leave a service's interval blank in .env to use DEFAULT_INTERVAL.
+Default mode: runs all services concurrently using asyncio. Each service
+runs in an independent loop inside a dedicated thread (via asyncio.to_thread)
+so services never block each other. Per-service intervals are read from
+config (which reads from .env); leave an interval blank to use
+DEFAULT_INTERVAL.
+
+--once mode: runs every service exactly one time, then exits 0. This is the
+shape a scheduled batch runner (e.g. Cloud Run Jobs + Cloud Scheduler)
+expects: do the work, exit. Crawl state lives in Postgres, so repeated
+single-pass runs pick up exactly where the previous one left off.
 """
 
+import argparse
 import asyncio
 import logging
 import sys
@@ -25,14 +31,17 @@ from services import (
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
+_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+# LOG_TO_FILE=false in cloud deployments: the container filesystem is tmpfs
+# and stdout is captured by the platform's logging anyway.
+if cfg.LOG_TO_FILE:
+    _handlers.append(logging.FileHandler("backend.log", encoding="utf-8"))
+
 logging.basicConfig(
     level=cfg.log_level,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("backend.log", encoding="utf-8"),
-    ],
+    handlers=_handlers,
 )
 log = logging.getLogger(__name__)
 
@@ -82,6 +91,20 @@ async def service_loop(name: str, fn, interval: int) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+async def run_once() -> None:
+    """
+    One concurrent pass of every service, then return. run_service already
+    isolates failures (a broken source is logged, the others still run), so
+    the pass always completes — the error log is the failure signal.
+    """
+    start = datetime.now()
+    log.info("Single pass: running %d service(s) once.", len(SERVICES))
+    await asyncio.gather(
+        *(run_service(name, fn) for name, fn, _ in SERVICES))
+    log.info("Single pass finished in %.1fs.",
+             (datetime.now() - start).total_seconds())
+
+
 async def main() -> None:
     tasks = []
     for name, fn, interval in SERVICES:
@@ -92,8 +115,17 @@ async def main() -> None:
     await asyncio.gather(*tasks)
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="CityShield ingestion runner")
+    parser.add_argument(
+        "--once", action="store_true",
+        help="run every service exactly once and exit (for scheduled jobs)")
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(run_once() if args.once else main())
     except KeyboardInterrupt:
         log.info("Stopped by user.")

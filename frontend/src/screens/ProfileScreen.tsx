@@ -3,10 +3,11 @@ import React, {useState, useEffect} from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   StatusBar, Alert, Switch, Platform, PermissionsAndroid,
-  ActivityIndicator, Modal,
+  ActivityIndicator, Modal, Linking,
 } from 'react-native';
 import {useAuth} from '../context/AuthContext';
 import {tokensApi, authApi} from '../services/api';
+import {PRIVACY_POLICY_URL} from '../config';
 import {getFCMToken, registerTokenRefreshHandler} from '../services/fcm';
 import {colors, spacing, radius, font} from '../theme';
 import Icon, {IconName} from '../components/icons';
@@ -160,6 +161,37 @@ export default function ProfileScreen() {
       {text: 'Sign Out', style: 'destructive',
        onPress: () => logout(fcmToken ?? undefined)},
     ]);
+  };
+
+  const handleOpenPrivacyPolicy = () => {
+    Linking.openURL(PRIVACY_POLICY_URL).catch(() =>
+      Alert.alert('Could not open link', PRIVACY_POLICY_URL));
+  };
+
+  // GDPR Art. 17 / Google Play account deletion: permanently removes the
+  // account server-side (tokens, preferences, subscriptions cascade), then
+  // clears local state, which returns the app to the login screen.
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This permanently deletes your account, saved location, and ' +
+      'notification settings. This cannot be undone.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {text: 'Delete Forever', style: 'destructive', onPress: async () => {
+          try {
+            await authApi.deleteAccount(token!);
+            // Server data is gone; skip token unregistration and just clear
+            // local state — this navigates back to the login screen.
+            await logout();
+            Alert.alert('Account deleted',
+              'Your account and all associated data have been removed.');
+          } catch (err: any) {
+            Alert.alert('Deletion Failed', err.message);
+          }
+        }},
+      ],
+    );
   };
 
   // ── Open the map picker modal ─────────────────────────────────────────────
@@ -338,6 +370,20 @@ export default function ProfileScreen() {
           <Row icon="shield" label="CityShield" value="v1.0.0" />
           <Divider />
           <Row icon="map" label="Map data" value="© OpenStreetMap" />
+          <Divider />
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={handleOpenPrivacyPolicy}
+            activeOpacity={0.7}>
+            <RowIcon name="shield" />
+            <View style={styles.actionText}>
+              <Text style={styles.actionLabel}>Privacy Policy</Text>
+              <Text style={styles.actionSub}>
+                How your data is used, stored, and deleted
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={18} color={colors.textMuted} />
+          </TouchableOpacity>
         </Section>
 
         {/* ── Logout ── */}
@@ -347,6 +393,14 @@ export default function ProfileScreen() {
           activeOpacity={0.85}>
           <Icon name="log-out" size={18} color={colors.danger} />
           <Text style={styles.logoutText}>Sign Out</Text>
+        </TouchableOpacity>
+
+        {/* ── Delete account (GDPR / Play requirement) ── */}
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={handleDeleteAccount}
+          activeOpacity={0.85}>
+          <Text style={styles.deleteText}>Delete Account</Text>
         </TouchableOpacity>
 
         <Text style={styles.footer}>CityShield · Protecting Your Community</Text>
@@ -506,6 +560,8 @@ const styles = StyleSheet.create({
   infoValue:     {color: colors.textPrimary, fontSize: font.sizes.md, fontWeight: font.weights.medium},
   logoutBtn:     {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginHorizontal: spacing.lg, marginTop: spacing.xl, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1.5, borderColor: colors.danger, gap: spacing.sm, backgroundColor: `${colors.danger}11`},
   logoutText:    {color: colors.danger, fontSize: font.sizes.md, fontWeight: font.weights.semibold},
+  deleteBtn:     {alignItems: 'center', marginHorizontal: spacing.lg, marginTop: spacing.md, padding: spacing.sm},
+  deleteText:    {color: colors.textMuted, fontSize: font.sizes.sm, textDecorationLine: 'underline'},
   footer:        {textAlign: 'center', color: colors.textMuted, fontSize: font.sizes.xs, marginTop: spacing.xl},
 
   // ── Map pin-picker modal ──

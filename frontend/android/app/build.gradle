@@ -96,6 +96,9 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // Dev builds talk plain HTTP to the local API (10.0.2.2); the
+            // debug source set also carries its own network_security_config.
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
             // Caution! In production, you need to generate your own keystore file.
@@ -103,6 +106,8 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            // Release talks HTTPS only (CITYSHIELD_API_URL must be https://).
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
         }
     }
 }

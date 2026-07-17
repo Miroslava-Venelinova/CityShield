@@ -186,6 +186,47 @@ public class AuthServiceTests
             service.GetUserDataAsync(Guid.NewGuid().ToString()));
     }
 
+    // ── DeleteAccountAsync ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DeleteAccount_RemovesUserWithTokensAndPreferences()
+    {
+        using var db = TestHelpers.NewDbContext();
+        var user = TestHelpers.NewUser("gone@example.com");
+        user.SubscribedBusLines = new List<string> { "18" };
+        var other = TestHelpers.NewUser("stays@example.com");
+        db.Users.AddRange(user, other);
+        db.DeviceTokens.Add(new DeviceToken { UserId = user.UserId, Token = "tok-1" });
+        db.DeviceTokens.Add(new DeviceToken { UserId = user.UserId, Token = "tok-2" });
+        db.DeviceTokens.Add(new DeviceToken { UserId = other.UserId, Token = "tok-other" });
+        db.UserNotificationPreferences.Add(new UserNotificationPreference
+        {
+            UserId = user.UserId, User = user, Category = "vik", IsEnabled = false,
+        });
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        await service.DeleteAccountAsync(user.UserId.ToString());
+
+        // The user, their tokens, and their preferences are gone …
+        Assert.DoesNotContain(db.Users, u => u.UserId == user.UserId);
+        Assert.DoesNotContain(db.DeviceTokens, t => t.UserId == user.UserId);
+        Assert.DoesNotContain(db.UserNotificationPreferences, p => p.UserId == user.UserId);
+        // … and unrelated users are untouched.
+        Assert.Single(db.Users);
+        Assert.Single(db.DeviceTokens);
+    }
+
+    [Fact]
+    public async Task DeleteAccount_UnknownUser_ThrowsArgumentException()
+    {
+        using var db = TestHelpers.NewDbContext();
+        var service = CreateService(db);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.DeleteAccountAsync(Guid.NewGuid().ToString()));
+    }
+
     // ── UpdateLocationAsync ───────────────────────────────────────────────────
     // The Nominatim-success path runs raw pg_trgm SQL and is covered by the
     // PostgreSQL integration tests; here we cover the failure/fallback paths.

@@ -254,6 +254,48 @@ public class AuthControllerTests
 
         Assert.IsType<NotFoundObjectResult>(result);
     }
+
+    [Fact]
+    public async Task DeleteMe_Success_ReturnsNoContent()
+    {
+        var userId = Guid.NewGuid();
+        var controller = new AuthController(_auth.Object).WithUser(userId);
+
+        var result = await controller.DeleteMe();
+
+        Assert.IsType<NoContentResult>(result);
+        _auth.Verify(a => a.DeleteAccountAsync(userId.ToString()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteMe_UnknownUser_ReturnsNotFound()
+    {
+        var userId = Guid.NewGuid();
+        _auth.Setup(a => a.DeleteAccountAsync(It.IsAny<string>()))
+             .ThrowsAsync(new ArgumentException("User does not exist"));
+        var controller = new AuthController(_auth.Object).WithUser(userId);
+
+        var result = await controller.DeleteMe();
+
+        Assert.IsType<NotFoundObjectResult>(result);
+    }
+}
+
+// ── MaintenanceController ────────────────────────────────────────────────────
+
+public class MaintenanceControllerTests
+{
+    [Fact]
+    public async Task CleanupTokens_RunsCleanupAndReturnsNoContent()
+    {
+        var fcm = new Mock<IFcmTokenService>();
+        var controller = new MaintenanceController(fcm.Object);
+
+        var result = await controller.CleanupTokens();
+
+        Assert.IsType<NoContentResult>(result);
+        fcm.Verify(f => f.CleanupStaleTokensAsync(), Times.Once);
+    }
 }
 
 // ── TokensController ─────────────────────────────────────────────────────────

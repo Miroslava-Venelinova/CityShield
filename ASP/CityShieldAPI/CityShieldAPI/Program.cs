@@ -5,6 +5,7 @@ using CityShieldAPI.Data;
 using FirebaseAdmin;
 using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using NetTopologySuite;
 using Microsoft.IdentityModel.Tokens;
@@ -17,13 +18,19 @@ var builder = WebApplication.CreateBuilder(args);
 // Skipped under the "Testing" environment: integration tests replace
 // IFirebaseMessenger with a fake and have no fcm.json credentials file.
 // The credential path is configurable so deployments can mount it anywhere
-// (env: Firebase__CredentialsFile).
+// (env: Firebase__CredentialsFile). When no key file is configured or present,
+// Application Default Credentials are used — on Cloud Run that resolves to the
+// service account attached to the service, so no key file exists at all.
 if (!builder.Environment.IsEnvironment("Testing"))
 {
-    var fcmPath = builder.Configuration["Firebase:CredentialsFile"] ?? "fcm.json";
+    var fcmPath = builder.Configuration["Firebase:CredentialsFile"];
+    var credential =
+        fcmPath is not null      ? GoogleCredential.FromFile(fcmPath)
+        : File.Exists("fcm.json") ? GoogleCredential.FromFile("fcm.json")
+        : GoogleCredential.GetApplicationDefault();
     FirebaseApp.Create(new AppOptions
     {
-        Credential = GoogleCredential.FromFile(fcmPath),
+        Credential = credential,
     });
 }
 
@@ -38,8 +45,14 @@ builder.Services.AddScoped<IFcmTokenService, FcmTokenService>();
 builder.Services.AddScoped<INotificationPreferencesService, NotificationPreferencesService>();
 // Singleton: shares the geocode cache and the 1 req/s Nominatim throttle.
 builder.Services.AddSingleton<IGeocodingService, NominatimGeocodingService>();
-// Daily removal of device tokens unseen for 60+ days.
-builder.Services.AddHostedService<StaleTokenCleanupService>();
+// Daily removal of device tokens unseen for 60+ days. In-process timers don't
+// fire on scale-to-zero platforms (CPU is throttled between requests), so
+// cloud deploys set TokenCleanup__InProcess=false and trigger the same logic
+// via POST /api/maintenance/cleanup-tokens from an external scheduler instead.
+if (builder.Configuration.GetValue("TokenCleanup:InProcess", true))
+{
+    builder.Services.AddHostedService<StaleTokenCleanupService>();
+}
 
 // Named HttpClient for Nominatim — sets the required User-Agent header
 // (Nominatim ToS require a descriptive UA string).
@@ -102,7 +115,29 @@ else
     }));
 }
 
-app.UseHttpsRedirection();
+// ── Reverse proxy (Proxy__Enabled=true, e.g. Cloud Run) ───────────────────────
+// The platform terminates TLS, so the container only sees plain HTTP with the
+// original scheme/client IP in X-Forwarded-Proto / X-Forwarded-For. Rewrite
+// the request from those headers and skip the in-app HTTPS redirect (before
+// the rewrite it would loop; the edge already refuses plain HTTP). Off by
+// default: trusting forwarded headers without a proxy in front would let
+// clients spoof their scheme and IP.
+if (app.Configuration.GetValue<bool>("Proxy:Enabled"))
+{
+    var forwardedOptions = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    };
+    // The platform's proxy addresses aren't knowable in advance; the service
+    // is only reachable through the platform front end, so trust them all.
+    forwardedOptions.KnownNetworks.Clear();
+    forwardedOptions.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwardedOptions);
+}
+else
+{
+    app.UseHttpsRedirection();
+}
 
 // ── Ingest API key ────────────────────────────────────────────────────────────
 // Ingest endpoints are machine-to-machine (Python backend → API) and are
@@ -119,7 +154,26 @@ if (string.IsNullOrEmpty(app.Configuration["Ingest:ApiKey"]) && app.Environment.
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.Urls.Add("http://0.0.0.0:5276");
+
+// Liveness probe: unauthenticated, no data, one cheap DB round-trip so a
+// deploy that can't reach the database fails visibly instead of serving 500s.
+app.MapGet("/healthz", async (ApplicationDbContext db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        return Results.Ok(new { status = "ok" });
+    }
+    catch
+    {
+        return Results.Json(new { status = "unhealthy" },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
+// Cloud Run's container contract: listen on the PORT env var (default 8080).
+// Local development keeps the familiar 5276 when PORT is unset.
+app.Urls.Add($"http://0.0.0.0:{Environment.GetEnvironmentVariable("PORT") ?? "5276"}");
 app.Run();
 
 void AuthConfig()

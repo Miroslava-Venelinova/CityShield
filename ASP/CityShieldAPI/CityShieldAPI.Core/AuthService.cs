@@ -130,6 +130,25 @@ namespace CityShieldAPI.Core
             await _context.SaveChangesAsync();
         }
 
+        /// <summary>
+        /// Deletes the user's account and every row keyed to it (GDPR Art. 17 /
+        /// Google Play account deletion). Notification preferences cascade via
+        /// their FK and bus-line subscriptions live on the user row itself;
+        /// device tokens have no FK to Users, so they are removed explicitly.
+        /// </summary>
+        public async Task DeleteAccountAsync(string userId)
+        {
+            var id = ParseUserId(userId);
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.UserId == id)
+                ?? throw new ArgumentException("User does not exist");
+
+            _context.DeviceTokens.RemoveRange(
+                _context.DeviceTokens.Where(t => t.UserId == id));
+            _context.Users.Remove(user);
+            await _context.SaveChangesAsync();
+        }
+
         private static Guid ParseUserId(string userId) =>
             Guid.TryParse(userId, out var id)
                 ? id
