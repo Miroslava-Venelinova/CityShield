@@ -1,0 +1,155 @@
+// Contract tests for /api/auth/* against local D1 — the §1.4 parity table.
+
+import { env, fetchMock } from "cloudflare:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearRefCaches } from "../src/db/queries";
+import { api, jsonInit, registerAndLogin } from "./helpers";
+
+beforeAll(() => {
+  fetchMock.activate();
+  fetchMock.disableNetConnect();
+});
+
+afterEach(() => fetchMock.assertNoPendingInterceptors());
+
+describe("POST /api/auth/register", () => {
+  it("registers with 200 and the exact text body", async () => {
+    const res = await api("/api/auth/register",
+      jsonInit("POST", { email: "new@example.com", password: "longenough" }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("User successfully registered");
+  });
+
+  it("returns 409 on duplicate email (case-insensitive)", async () => {
+    await api("/api/auth/register",
+      jsonInit("POST", { email: "Dup@Example.com", password: "longenough" }));
+    const res = await api("/api/auth/register",
+      jsonInit("POST", { email: "dup@example.com", password: "longenough" }));
+    expect(res.status).toBe(409);
+    expect(await res.text()).toBe("An account with this email already exists");
+  });
+
+  it("rejects invalid email / short password with 400", async () => {
+    expect((await api("/api/auth/register",
+      jsonInit("POST", { email: "not-an-email", password: "longenough" }))).status).toBe(400);
+    expect((await api("/api/auth/register",
+      jsonInit("POST", { email: "ok@example.com", password: "short" }))).status).toBe(400);
+    expect((await api("/api/auth/register",
+      jsonInit("POST", { email: "ok@example.com" }))).status).toBe(400);
+  });
+});
+
+describe("POST /api/auth/login", () => {
+  it("returns a JWT for valid credentials", async () => {
+    const { token } = await registerAndLogin();
+    expect(token.split(".")).toHaveLength(3);
+  });
+
+  it("returns 401 with the exact text for bad credentials", async () => {
+    const { email } = await registerAndLogin();
+    const res = await api("/api/auth/login", jsonInit("POST", { email, password: "wrong-password" }));
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe("Invalid email or password");
+  });
+
+  it("returns 401 for an unknown user", async () => {
+    const res = await api("/api/auth/login",
+      jsonInit("POST", { email: "ghost@example.com", password: "whatever1" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("throttles after 10 attempts per email+ip per minute", async () => {
+    const email = `throttle-${Date.now()}@example.com`;
+    let last: Response | undefined;
+    for (let i = 0; i < 11; i++) {
+      last = await api("/api/auth/login", jsonInit("POST", { email, password: "wrong" }));
+    }
+    expect(last!.status).toBe(429);
+  });
+});
+
+describe("GET /api/auth/me", () => {
+  it("401s without or with a garbage token", async () => {
+    expect((await api("/api/auth/me")).status).toBe(401);
+    expect((await api("/api/auth/me",
+      { headers: { Authorization: "Bearer garbage" } })).status).toBe(401);
+  });
+
+  it("returns the camelCase profile DTO; hasLocation false before location is set", async () => {
+    const { token, email } = await registerAndLogin();
+    const res = await api("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    const dto = await res.json() as Record<string, unknown>;
+    expect(dto).toEqual({
+      email,
+      latitude: null,
+      longitude: null,
+      hasLocation: false,
+      regionName: null,
+      streetName: null,
+      createdOnUTC: dto.createdOnUTC,
+      updatedOnUTC: dto.updatedOnUTC,
+    });
+    expect(String(dto.createdOnUTC)).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+  });
+});
+
+describe("PUT /api/auth/location", () => {
+  beforeEach(async () => {
+    clearRefCaches(); // module-scope cache survives D1 isolation resets
+    await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Аспарухово'), ('Владислав Варненчик')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO streets (street_name) VALUES ('Народни будители'), ('Александър Дякович')").run();
+  });
+
+  it("reverse-geocodes, fuzzy-matches and persists — then /me reflects it", async () => {
+    const { token } = await registerAndLogin();
+
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({
+        address: { suburb: "кв. Аспарухово", road: "ул. Народни будители" },
+      }), { headers: { "Content-Type": "application/json" } });
+
+    const res = await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
+    expect(res.status).toBe(204);
+
+    const me = await api("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+    const dto = await me.json() as Record<string, unknown>;
+    expect(dto.latitude).toBeCloseTo(43.1864);
+    expect(dto.longitude).toBeCloseTo(27.9151);
+    expect(dto.hasLocation).toBe(true);
+    expect(dto.regionName).toBe("Аспарухово");
+    expect(dto.streetName).toBe("Народни будители");
+  });
+
+  it("still 204s (lat/lng saved, no region) when Nominatim fails", async () => {
+    const { token } = await registerAndLogin();
+
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(500, "boom");
+
+    const res = await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 43.2, longitude: 27.9 }, token));
+    expect(res.status).toBe(204);
+
+    const me = await api("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+    const dto = await me.json() as Record<string, unknown>;
+    expect(dto.latitude).toBeCloseTo(43.2);
+    expect(dto.hasLocation).toBe(false);
+    expect(dto.regionName).toBeNull();
+  });
+
+  it("rejects out-of-range coordinates with 400", async () => {
+    const { token } = await registerAndLogin();
+    const res = await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 91, longitude: 27.9 }, token));
+    expect(res.status).toBe(400);
+  });
+
+  it("401s without a token", async () => {
+    expect((await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 43.2, longitude: 27.9 }))).status).toBe(401);
+  });
+});

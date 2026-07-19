@@ -1,0 +1,39 @@
+// CityShield Worker — PLAN.MD §1.1.
+{
+  "name": "cityshield",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  // Ingest tick + daily cleanup (§1.7 / §1.10).
+  "triggers": { "crons": ["*/10 * * * *", "30 3 * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cityshield-db",
+      // Placeholder until `npx wrangler d1 create cityshield-db --location=weur` (§3.3);
+      // local dev and tests don't need the real id.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ai": { "binding": "AI" },
+  "vars": {
+    // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes
+    // JSON-schema mode on our nullable-union schemas, and the cheapest. Needs max_tokens: 8000.
+    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "VIK_URL": "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown",
+    "VT_URL": "https://www.varnatraffic.com/Info",
+    "EPRO_URL": "https://www.erpsever.bg/bg/profil/xhr/?method=get_interruptions",
+    "EPRO_AREA_NAME": "Варна",
+    "HEATING_BASE_URL": "https://energy-varna.bg",
+    "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
+    "ROADS_URL": "https://www.api.bg/bg/novini",
+    // Spike 1 verdict: kumi.systems was down; overpass-api.de works with a descriptive UA.
+    "OVERPASS_URL": "https://overpass-api.de/api/interpreter",
+    "NOMINATIM_URL": "https://nominatim.openstreetmap.org",
+    "JWT_ISSUER": "CityShield",
+    "JWT_AUDIENCE": "CityShield Users",
+    "JWT_EXPIRE_MINUTES": "60"
+  }
+  // Secrets (wrangler secret put / .dev.vars): JWT_KEY, INGEST_API_KEY, FCM_SERVICE_ACCOUNT
+}

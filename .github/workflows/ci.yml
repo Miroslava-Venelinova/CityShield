@@ -6,36 +6,24 @@ on:
   pull_request:
 
 jobs:
-  ingestion:
-    name: Python ingestion (pytest)
+  worker:
+    name: Cloudflare Worker (typecheck + vitest + dry-run deploy)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: worker
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
-      - run: pip install -r requirements.txt -r requirements-dev.txt
-      # Integration tests need a live PostgreSQL — unit scope only in CI.
-      - run: pytest -m "not integration"
-
-  api:
-    name: ASP.NET API (dotnet test)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      # Integration tests spin up their own PostGIS container via
-      # Testcontainers, which works on GitHub-hosted runners.
-      - run: dotnet test ASP/CityShieldAPI/CityShieldAPI.sln
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npx tsc -p tsconfig.json && npx tsc -p test/tsconfig.json
+      - run: npm test
+      # Build + bundle-size check (3 MB gzipped free-plan limit).
+      - run: npx wrangler deploy --dry-run
 
   app:
     name: React Native app (lint + typecheck)
@@ -53,3 +41,18 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+
+  deploy:
+    name: Deploy Worker
+    # Requires the CLOUDFLARE_API_TOKEN repo secret ("Edit Cloudflare Workers"
+    # template, PLAN.MD §3.5). Remote D1 + secrets must be provisioned first (§3.3).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [worker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: worker
+          command: deploy
