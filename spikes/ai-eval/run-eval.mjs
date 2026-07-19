@@ -1,0 +1,180 @@
+// Workers AI model eval (PLAN.MD §4 phase 0.2): replay the corpus through the
+// candidate models with the UNTOUCHED production prompts + JSON-schema mode,
+// grade against expected outputs, report per-model regressions.
+//
+// Two transports:
+//   1. Direct REST: set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN
+//   2. Proxy Worker (spikes/ai-eval/worker): set EVAL_WORKER_URL + EVAL_TOKEN
+//
+// Usage: node run-eval.mjs [modelId ...]   (default: all CANDIDATES)
+
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  OUTAGE_AI_PROMPT, ROADS_AI_PROMPT, VT_AI_PROMPT,
+  OUTAGE_SCHEMA, ROADS_SCHEMA, VT_SCHEMA,
+} from "./prompts.mjs";
+
+// Verified against the live catalog (list-models.mjs, July 2026):
+// llama-3.1-8b-instruct was deprecated 2026-05-30 → fp8 variant instead.
+const CANDIDATES = [
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/meta/llama-3.1-8b-instruct-fp8",
+  "@cf/qwen/qwen3-30b-a3b-fp8",
+];
+
+const KINDS = {
+  outage: { system: OUTAGE_AI_PROMPT, schema: OUTAGE_SCHEMA },
+  roads: { system: ROADS_AI_PROMPT, schema: ROADS_SCHEMA },
+  vt: { system: VT_AI_PROMPT, schema: VT_SCHEMA },
+};
+
+const corpus = JSON.parse(readFileSync(new URL("./corpus.json", import.meta.url), "utf-8"));
+const models = process.argv.slice(2).length ? process.argv.slice(2) : CANDIDATES;
+
+// --- transport --------------------------------------------------------------
+
+const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, EVAL_WORKER_URL, EVAL_TOKEN } = process.env;
+
+async function aiRun(model, messages, response_format) {
+  if (CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN) {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ messages, response_format }),
+        signal: AbortSignal.timeout(120_000),
+      },
+    );
+    const data = await res.json();
+    if (!data.success) throw new Error(`REST error: ${JSON.stringify(data.errors).slice(0, 300)}`);
+    return data.result;
+  }
+  if (EVAL_WORKER_URL && EVAL_TOKEN) {
+    const res = await fetch(EVAL_WORKER_URL, {
+      method: "POST",
+      headers: { "x-eval-token": EVAL_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages, response_format }),
+      signal: AbortSignal.timeout(120_000),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(`worker error: ${String(data.error).slice(0, 300)}`);
+    return data.res;
+  }
+  throw new Error("No transport configured: set CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKEN or EVAL_WORKER_URL+EVAL_TOKEN");
+}
+
+// --- grading ----------------------------------------------------------------
+
+// BusLineCatalog.Normalize parity: uppercase + Cyrillic look-alikes → Latin.
+const CYR = { А: "A", В: "B", Е: "E", К: "K", М: "M", Н: "H", О: "O", Р: "P", С: "C", Т: "T", Х: "X", Б: "B" };
+const normLine = (s) => String(s).trim().toUpperCase().replace(/[АВЕКМНОРСТХБ]/g, (c) => CYR[c]);
+const normText = (s) => (s === null || s === undefined ? null : String(s).replace(/\s+/g, " ").trim());
+
+function gradeOutage(expected, actual, lenient = {}) {
+  const diffs = [];
+  if (typeof actual !== "object" || actual === null) return ["output is not an object"];
+  const expLocs = expected.locations ?? [];
+  const actLocs = Array.isArray(actual.locations) ? actual.locations : [];
+  if (expLocs.length !== actLocs.length) {
+    diffs.push(`locations count: expected ${expLocs.length}, got ${actLocs.length}`);
+  } else {
+    const key = (l) => [normText(l.location_name), ...(l.sublocations ?? []).map(normText).sort()].join("|") + `|poly:${!!l.is_polygon}`;
+    const keyNoName = (l) => (l.sublocations ?? []).map(normText).sort().join("|") + `|poly:${!!l.is_polygon}`;
+    const useKey = lenient.location_name ? keyNoName : key;
+    const exp = expLocs.map(useKey).sort();
+    const act = actLocs.map(useKey).sort();
+    if (JSON.stringify(exp) !== JSON.stringify(act)) diffs.push(`locations: expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`);
+  }
+  for (const f of ["start_time", "end_time"]) {
+    if (normText(expected[f]) !== normText(actual[f])) diffs.push(`${f}: expected ${expected[f]}, got ${actual[f]}`);
+  }
+  if (Boolean(expected.city_wide) !== Boolean(actual.city_wide)) {
+    diffs.push(`city_wide: expected ${expected.city_wide}, got ${actual.city_wide}`);
+  }
+  return diffs;
+}
+
+function gradeRoads(expected, actual) {
+  const diffs = [];
+  if (typeof actual !== "object" || actual === null) return ["output is not an object"];
+  if (Boolean(expected.is_relevant) !== Boolean(actual.is_relevant)) {
+    diffs.push(`is_relevant: expected ${expected.is_relevant}, got ${actual.is_relevant}`);
+  }
+  if (expected.is_relevant && expected.summary_nonempty && !normText(actual.summary)) {
+    diffs.push("summary: expected non-empty Bulgarian summary, got empty/null");
+  }
+  return diffs;
+}
+
+function gradeVt(expected, actual) {
+  if (typeof actual !== "object" || actual === null) return ["output is not an object"];
+  const exp = expected.bus_lines;
+  const act = actual.bus_lines;
+  if (exp === null) return act === null || act === undefined ? [] : [`bus_lines: expected null, got ${JSON.stringify(act)}`];
+  if (!Array.isArray(act)) return [`bus_lines: expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`];
+  const a = exp.map(normLine).sort();
+  const b = act.map(normLine).sort();
+  return JSON.stringify(a) === JSON.stringify(b) ? [] : [`bus_lines: expected ${JSON.stringify(a)}, got ${JSON.stringify(b)}`];
+}
+
+const GRADERS = { outage: gradeOutage, roads: gradeRoads, vt: gradeVt };
+
+// --- run --------------------------------------------------------------------
+
+function extractJson(res) {
+  // Workers AI JSON mode may return the object directly in `response`, or a string.
+  const raw = res?.response ?? res;
+  if (typeof raw === "object" && raw !== null) return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+const report = { ranAt: new Date().toISOString(), models: {} };
+
+for (const model of models) {
+  console.log(`\n===== ${model} =====`);
+  const entry = { cases: {}, passed: 0, failed: 0, errors: 0 };
+  report.models[model] = entry;
+
+  for (const testCase of corpus.cases) {
+    const kind = KINDS[testCase.kind];
+    const messages = [
+      { role: "system", content: kind.system },
+      { role: "user", content: testCase.input },
+    ];
+    let outcome;
+    try {
+      const res = await aiRun(model, messages, { type: "json_schema", json_schema: kind.schema });
+      const parsed = extractJson(res);
+      if (parsed === null) {
+        outcome = { status: "error", detail: `unparseable output: ${JSON.stringify(res).slice(0, 200)}` };
+        entry.errors++;
+      } else {
+        const diffs = GRADERS[testCase.kind](testCase.expected, parsed, testCase.lenient ?? {});
+        if (diffs.length === 0) {
+          outcome = { status: "pass", output: parsed };
+          entry.passed++;
+        } else {
+          outcome = { status: "fail", diffs, output: parsed };
+          entry.failed++;
+        }
+      }
+    } catch (err) {
+      outcome = { status: "error", detail: String(err).slice(0, 300) };
+      entry.errors++;
+    }
+    entry.cases[testCase.id] = outcome;
+    const mark = outcome.status === "pass" ? "PASS" : outcome.status === "fail" ? "FAIL" : "ERR ";
+    console.log(`  [${mark}] ${testCase.id}${outcome.diffs ? " — " + outcome.diffs.join("; ") : ""}${outcome.detail ? " — " + outcome.detail : ""}`);
+  }
+  console.log(`  => ${entry.passed} pass / ${entry.failed} fail / ${entry.errors} error of ${corpus.cases.length}`);
+}
+
+mkdirSync(new URL("./out/", import.meta.url), { recursive: true });
+const outFile = new URL(`./out/eval-${Date.now()}.json`, import.meta.url);
+writeFileSync(outFile, JSON.stringify(report, null, 2));
+console.log(`\nFull report: ${outFile.pathname}`);

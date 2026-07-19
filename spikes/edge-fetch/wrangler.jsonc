@@ -1,0 +1,7 @@
+// Throwaway spike Worker — delete after Phase 0 (PLAN.MD §4).
+{
+  "name": "cityshield-spike-edge-fetch",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true }
+}

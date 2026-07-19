@@ -1,0 +1,8 @@
+// Throwaway eval-proxy Worker — exposes env.AI.run for the model eval spike.
+// Deployed with: npx wrangler deploy --temporary --var EVAL_TOKEN:<random>
+{
+  "name": "cityshield-spike-ai-eval",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "ai": { "binding": "AI" }
+}

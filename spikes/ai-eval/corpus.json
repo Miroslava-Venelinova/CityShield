@@ -1,0 +1,125 @@
+{
+  "comment": "Eval corpus for the Workers AI model selection spike (PLAN.MD §4 phase 0.2). Messages are realistic source texts in the exact shape each service feeds the LLM (title\\ncontent); expected outputs encode the semantics the pipeline and tests rely on. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin).",
+  "cases": [
+    {
+      "id": "vik-two-streets",
+      "kind": "outage",
+      "input": "Авария на водопровод\nПоради отстраняване на авария на уличен водопровод е нарушено водоподаването на ул. Дубровник и ул. Студентска в гр. Варна. Очаквано възстановяване на водоподаването до 17:00 часа.",
+      "expected": {
+        "locations": [
+          { "location_name": "гр. Варна", "sublocations": ["ул. Дубровник", "ул. Студентска"], "is_polygon": false }
+        ],
+        "start_time": null,
+        "end_time": "17:00",
+        "city_wide": false
+      }
+    },
+    {
+      "id": "vik-polygon-kare",
+      "kind": "outage",
+      "input": "Авария\nБез вода са клиентите в карето между ул. Русе, ул. Бачо Киро, ул. Козлодуй и ул. Ал. Дякович от 09:00 до 17:00 часа днес.",
+      "expected": {
+        "locations": [
+          { "location_name": null, "sublocations": ["ул. Русе", "ул. Бачо Киро", "ул. Козлодуй", "ул. Ал. Дякович"], "is_polygon": true }
+        ],
+        "start_time": "09:00",
+        "end_time": "17:00",
+        "city_wide": false
+      },
+      "lenient": { "location_name": true }
+    },
+    {
+      "id": "epro-single-street",
+      "kind": "outage",
+      "input": "Прекъсване на електрозахранването\n10.06 09:00-17:00\nгр. Варна ул. Дубровник",
+      "expected": {
+        "locations": [
+          { "location_name": "гр. Варна", "sublocations": ["ул. Дубровник"], "is_polygon": false }
+        ],
+        "start_time": "09:00",
+        "end_time": "17:00",
+        "city_wide": false
+      }
+    },
+    {
+      "id": "heating-district",
+      "kind": "outage",
+      "input": "Спиране на топлоподаването\nПоради отстраняване на авария на топлопровод се преустановява топлоподаването към абонатите в кв. Чайка от 08:30 часа до приключване на ремонтните дейности.",
+      "expected": {
+        "locations": [
+          { "location_name": "кв. Чайка", "sublocations": [], "is_polygon": false }
+        ],
+        "start_time": "08:30",
+        "end_time": null,
+        "city_wide": false
+      }
+    },
+    {
+      "id": "vik-city-wide",
+      "kind": "outage",
+      "input": "Планова профилактика\nПоради планова профилактика на пречиствателна станция е възможно временно нарушение на водоподаването за всички клиенти на територията на град Варна от 22:00 до 06:00 часа.",
+      "expected": {
+        "locations": [],
+        "start_time": "22:00",
+        "end_time": "06:00",
+        "city_wide": true
+      }
+    },
+    {
+      "id": "vik-complex-and-locality",
+      "kind": "outage",
+      "input": "Авария\nПоради авария е нарушено водоподаването в ж.к. Възраждане и с. Тополи. Възстановяване до 16:30 ч.",
+      "expected": {
+        "locations": [
+          { "location_name": "ж.к. Възраждане", "sublocations": [], "is_polygon": false },
+          { "location_name": "с. Тополи", "sublocations": [], "is_polygon": false }
+        ],
+        "start_time": null,
+        "end_time": "16:30",
+        "city_wide": false
+      }
+    },
+    {
+      "id": "roads-relevant",
+      "kind": "roads",
+      "input": "Ограничения по АМ „Хемус“\nПоради ремонтни дейности на 12 юли се ограничава движението в изпреварващата лента в посока Варна на АМ „Хемус“ в участъка между пътен възел „Белокопитово“ и област Варна. Шофьорите да карат внимателно.",
+      "expected": { "is_relevant": true, "summary_nonempty": true }
+    },
+    {
+      "id": "roads-irrelevant-passing-mention",
+      "kind": "roads",
+      "input": "Ремонт на път II-53 в област Сливен\nЗапочва ремонт на 14 км от път II-53 Елена - Сливен. Трасето е част от маршрута София - Ямбол, използван и от пътуващи в посока Варна. Движението се пренасочва по обходни маршрути в област Сливен.",
+      "expected": { "is_relevant": false }
+    },
+    {
+      "id": "vt-single-line-letter",
+      "kind": "vt",
+      "input": "Линия 31А\nПоради ремонт на ул. Девня автобусите по линия 31А се движат по обходен маршрут в двете посоки до второ нареждане.",
+      "expected": { "bus_lines": ["31A"] }
+    },
+    {
+      "id": "vt-multiple-lines",
+      "kind": "vt",
+      "input": "Промяна в маршрутите\nПоради строителни дейности на бул. Левски автобусите по линии 8, 9 и 109 няма да обслужват спирка Явор в посока центъра.",
+      "expected": { "bus_lines": ["8", "9", "109"] }
+    },
+    {
+      "id": "vt-209-barz",
+      "kind": "vt",
+      "input": "Линия 209 Бърз\nАвтобусите по линия 209 Бърз се движат по променен маршрут през кв. Владислав Варненчик.",
+      "expected": { "bus_lines": ["209B"] }
+    },
+    {
+      "id": "vt-no-lines-sentinel",
+      "kind": "vt",
+      "input": "Временна организация на движението\nВъв връзка с ремонт на пътното платно се въвежда временна промяна на маршрутите на градския транспорт в района на Централна гара.",
+      "expected": { "bus_lines": ["0"] }
+    },
+    {
+      "id": "vt-irrelevant",
+      "kind": "vt",
+      "input": "Нови цени на билетите\nОт 1 август единичният билет за градския транспорт става 2,00 лв. Абонаментните карти запазват цените си.",
+      "expected": { "bus_lines": null }
+    }
+  ]
+}
