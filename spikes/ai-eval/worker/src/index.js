@@ -20,13 +20,10 @@ export default {
         return Response.json({ ok: false, error: String(err) }, { status: 502 });
       }
     }
-    const { model, messages, response_format } = payload;
+    const { model, ...params } = payload;
     const started = Date.now();
     try {
-      const res = await env.AI.run(model, {
-        messages,
-        ...(response_format ? { response_format } : {}),
-      });
+      const res = await env.AI.run(model, params);
       return Response.json({ ok: true, ms: Date.now() - started, res });
     } catch (err) {
       return Response.json({ ok: false, ms: Date.now() - started, error: String(err) }, { status: 502 });

@@ -35,6 +35,10 @@ const models = process.argv.slice(2).length ? process.argv.slice(2) : CANDIDATES
 
 const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, EVAL_WORKER_URL, EVAL_TOKEN } = process.env;
 
+// Reasoning models (qwen3) burn most of the default 2000-token budget on thinking
+// before emitting JSON — production ai.ts must set the same headroom.
+const MAX_TOKENS = Number(process.env.EVAL_MAX_TOKENS ?? 8000);
+
 async function aiRun(model, messages, response_format) {
   if (CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN) {
     const res = await fetch(
@@ -42,7 +46,7 @@ async function aiRun(model, messages, response_format) {
       {
         method: "POST",
         headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages, response_format }),
+        body: JSON.stringify({ messages, response_format, max_tokens: MAX_TOKENS }),
         signal: AbortSignal.timeout(120_000),
       },
     );
@@ -54,7 +58,7 @@ async function aiRun(model, messages, response_format) {
     const res = await fetch(EVAL_WORKER_URL, {
       method: "POST",
       headers: { "x-eval-token": EVAL_TOKEN, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages, response_format }),
+      body: JSON.stringify({ model, messages, response_format, max_tokens: MAX_TOKENS }),
       signal: AbortSignal.timeout(120_000),
     });
     const data = await res.json();

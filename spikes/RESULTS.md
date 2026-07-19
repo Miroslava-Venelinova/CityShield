@@ -25,31 +25,45 @@ Actions for implementation:
   with a fallback instance list; Overpass calls must send a **descriptive User-Agent**, not the
   browser `DEFAULT_HEADERS` (which are still right for the 5 scraped sources).
 
-## Spike 2 — Workers AI model eval · **BLOCKED on Cloudflare login** ⏸
+## Spike 2 — Workers AI model eval · **DONE — pick `@cf/qwen/qwen3-30b-a3b-fp8`** ✅
 
-Harness is complete and smoke-tested end-to-end except the model call itself:
-
-- `ai-eval/corpus.json` — 13 graded cases (6 outage incl. polygon/"каре", city-wide guard,
-  ж.к./с. abbreviations; 2 roads relevance; 5 vt bus-line cases incl. "209 Бърз"→209B, ["0"]
-  sentinel, null-irrelevant), production prompts copied character-for-character.
-- `ai-eval/run-eval.mjs` — runs any model list over the corpus with JSON-schema mode, grades
-  per-field (bus lines normalized Cyrillic→Latin like `BusLineCatalog.Normalize`), writes a
-  JSON report to `ai-eval/out/`.
-- Transport A (REST): `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_API_TOKEN`. Transport B: deployed
-  proxy Worker (`ai-eval/worker/`) exposing `env.AI.run` — works, but **Workers AI rejects
-  temporary accounts** (`AiError 5034`) for every model, so a real login is required.
+Ran 2026-07-19 on the real account (login done; the throwaway-account 5034 block is history).
+Harness: `ai-eval/corpus.json` (13 graded cases, production prompts character-for-character),
+`ai-eval/run-eval.mjs` (JSON-schema mode, per-field grading), `ai-eval/worker/` proxy for
+`env.AI.run`. Reports in `ai-eval/out/`.
 
 Catalog facts verified live (via `env.AI.models()`, July 2026):
 - `@cf/meta/llama-3.1-8b-instruct` (plan's cheap candidate) **was deprecated 2026-05-30** →
-  candidate list is now: `@cf/meta/llama-3.3-70b-instruct-fp8-fast`,
+  candidates evaluated: `@cf/meta/llama-3.3-70b-instruct-fp8-fast`,
   `@cf/meta/llama-3.1-8b-instruct-fp8`, `@cf/qwen/qwen3-30b-a3b-fp8`.
 - Pricing (per M tokens in/out): 70b-fast $0.293/$2.253 · 8b-fp8 $0.152/$0.287 ·
-  qwen3-30b $0.051/$0.335 — Qwen3 is the cheapest serious candidate and likely strongest on
-  Bulgarian; the eval will decide.
+  qwen3-30b $0.051/$0.335.
 
-**To run:** `npx wrangler login`, then either set the REST env vars, or
-`cd spikes/ai-eval/worker && npx wrangler deploy --var EVAL_TOKEN:<random>` and set
-`EVAL_WORKER_URL`/`EVAL_TOKEN`, then `node run-eval.mjs`.
+| Model | Result |
+|---|---|
+| `@cf/qwen/qwen3-30b-a3b-fp8` | **10–11/13 pass, 0 errors** — only working candidate, also the cheapest |
+| `@cf/meta/llama-3.1-8b-instruct-fp8` | disqualified: `AiError 5025: This model doesn't support JSON Schema` on every call |
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | disqualified: `AiError 5024: JSON Model couldn't be met` on every corpus call. Isolated with minimal schemas: its constrained decoder handles plain and nested-object schemas fine but **fails on nullable type unions** (`"type": ["string","null"]`), which all three production schemas use. Fixing it would mean rewriting production schemas, for the most expensive model. |
+
+**Decision: `AI_MODEL = @cf/qwen/qwen3-30b-a3b-fp8`**, with two required call params
+(now in `run-eval.mjs`, must carry into production `ai.ts`):
+- `max_tokens: 8000` — qwen3 is a reasoning model; at the default 2000 it burned the whole
+  budget thinking on the hardest case (`vik-polygon-kare`, the "каре" polygon) and returned
+  `finish_reason: "length"` with no JSON. With headroom it solves that case exactly.
+- Budget/latency reality: 500–2100 completion tokens (mostly reasoning), 4–21 s per call —
+  fine for cron ingestion (wall-clock is generous; AI calls don't consume Worker CPU ms).
+
+Known deviations to handle in Phase 3 (deterministic post-processing, not prompt changes):
+1. **Drops location-type prefixes** from `location_name` — stable across runs: "Варна" not
+   "гр. Варна", "Тополи" not "с. Тополи", "Възраждане" not "ж.к. Възраждане" (2/13 cases).
+   Streets, sublocations, polygon flags, times, city-wide guard and all 5 bus-line cases
+   (incl. "209 Бърз"→209B and both sentinels) are exact. Check in Phase 3 whether Nominatim
+   resolves the unprefixed names (likely for Варна; verify "Тополи"); if not, restore
+   prefixes from a small locality gazetteer before geocoding.
+2. **City-wide guard flakes ~1/5 runs**: instead of `city_wide: true` + empty locations it
+   sometimes emits one location `"град Варна"` with no sublocations. Same shape every time →
+   add a guard: location normalizing to `(гр.|град )?Варна` with empty sublocations ⇒ treat
+   as city-wide.
 
 ## Spike 3 — JSTS polygon builder · **PASS with CPU caveat** ⚠️
 
@@ -96,6 +110,7 @@ backoff and cache responses (the spike does both).
 ## Phase 0 go/no-go
 
 **GO for Phase 1** (data & API core) — it has no dependency on the one open item.
-The open item is the model eval (spike 2), which gates the *Phase 3 cutover model choice*, not
-Phase 1/2 work. It needs `npx wrangler login` (§3.1: create the Cloudflare account, enable 2FA),
-after which the eval runs in ~5 minutes.
+~~The open item is the model eval (spike 2)~~ — done 2026-07-19, see above. **Phase 0 is fully
+closed**: all three spikes have verdicts and the model decision is recorded. Account facts:
+workers.dev subdomain `cityshield-varna.workers.dev` registered; the spike proxy Worker
+`cityshield-spike-ai-eval` was deleted after the eval.
