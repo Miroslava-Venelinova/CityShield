@@ -1,0 +1,83 @@
+# ── CityShield production stack ───────────────────────────────────────────────
+# Copy .env.example to .env, fill in the secrets, place the Firebase key at
+# ./fcm.json, then:
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# First-run only (see DEPLOYMENT.md):
+#   docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen3.5
+#   docker compose -f docker-compose.prod.yml exec ingestion python -m data.postgres.seeding.seeder
+#
+# TLS is NOT handled here — run a reverse proxy (Caddy / nginx / Traefik) in
+# front of the api service and point the mobile app at the HTTPS endpoint.
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-CityShieldDB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./docker-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-CityShieldDB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ./docker-data/ollama:/root/.ollama
+    # GPU access (optional, much faster parsing) — uncomment on a host with
+    # the NVIDIA container toolkit installed:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  api:
+    build: ./ASP/CityShieldAPI
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5276:5276"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: >-
+        Host=postgres;Port=5432;Database=${POSTGRES_DB:-CityShieldDB};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD}
+      Jwt__Key: ${JWT_KEY:?set JWT_KEY in .env (32+ random characters)}
+      Jwt__Issuer: CityShield
+      Jwt__Audience: CityShield Users
+      Jwt__ExpireMinutes: "60"
+      Ingest__ApiKey: ${INGEST_API_KEY:?set INGEST_API_KEY in .env}
+      Database__AutoMigrate: "true"
+    volumes:
+      - ./fcm.json:/app/fcm.json:ro
+
+  ingestion:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      - api
+      - ollama
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-CityShieldDB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      ASP_API_URL: http://api:5276/api/alerts/submit-data
+      ASP_API_KEY: ${INGEST_API_KEY}
+      ASP_API_VERIFY_SSL: "true"
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}

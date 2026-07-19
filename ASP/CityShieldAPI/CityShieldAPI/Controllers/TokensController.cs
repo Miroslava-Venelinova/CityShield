@@ -1,10 +1,10 @@
 using System.Security.Claims;
-using FcmDemo.Models;
-using FcmDemo.Services;
+using CityShieldAPI.Core.Contracts;
+using CityShieldAPI.Data.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace FcmDemo.Controllers;
+namespace CityShieldAPI.Controllers;
 
 [ApiController]
 [Route("api/tokens")]

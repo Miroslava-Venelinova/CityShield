@@ -1,19 +1,22 @@
+using CityShieldAPI.Core.Contracts;
 using CityShieldAPI.Data;
-using FcmDemo.Models;
-using FirebaseAdmin.Messaging;
+using CityShieldAPI.Data.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
-namespace FcmDemo.Services;
+namespace CityShieldAPI.Core;
 
 public class FcmTokenService : IFcmTokenService
 {
     private readonly ApplicationDbContext _db;
+    private readonly IFirebaseMessenger _messenger;
     private readonly ILogger<FcmTokenService> _logger;
 
-    public FcmTokenService(ApplicationDbContext db, ILogger<FcmTokenService> logger)
+    public FcmTokenService(ApplicationDbContext db, IFirebaseMessenger messenger,
+        ILogger<FcmTokenService> logger)
     {
         _db = db;
+        _messenger = messenger;
         _logger = logger;
     }
 
@@ -41,8 +44,6 @@ public class FcmTokenService : IFcmTokenService
                 DeviceName = deviceName
             });
         }
-
-        Console.WriteLine("hihihi");
 
         await _db.SaveChangesAsync();
     }
@@ -76,7 +77,8 @@ public class FcmTokenService : IFcmTokenService
 
     // ── Send to multiple users (e.g. broadcast) ───────────────────────────────
     public async Task SendToMultipleUsersAsync(IEnumerable<Guid> userIds,
-        string title, string body)
+        string title, string body,
+        Dictionary<string, string>? data = null)
     {
         var tokens = await _db.DeviceTokens
             .Where(t => userIds.Contains(t.UserId))
@@ -85,7 +87,7 @@ public class FcmTokenService : IFcmTokenService
 
         if (tokens.Count == 0) return;
 
-        await SendToTokensAsync(tokens, title, body);
+        await SendToTokensAsync(tokens, title, body, data);
     }
 
     // ── Core send — handles stale token cleanup ───────────────────────────────
@@ -97,26 +99,18 @@ public class FcmTokenService : IFcmTokenService
 
         foreach (var batch in tokens.Chunk(batchSize))
         {
-            var message = new MulticastMessage
-            {
-                Tokens = batch,
-                Notification = new Notification { Title = title, Body = body },
-                Data = data
-            };
+            var outcomes = await _messenger.SendMulticastAsync(batch, title, body, data);
 
-            var response = await FirebaseMessaging.DefaultInstance
-                .SendEachForMulticastAsync(message);
-
-            for (int i = 0; i < response.Responses.Count; i++)
+            for (int i = 0; i < outcomes.Count; i++)
             {
-                var r = response.Responses[i];
-                if (!r.IsSuccess && IsTokenInvalid(r.Exception))
+                var r = outcomes[i];
+                if (!r.IsSuccess && r.IsTokenInvalid)
                     staleTokens.Add(batch[i]);
             }
 
             _logger.LogInformation(
                 "FCM batch sent. Success: {Success}, Failure: {Failure}",
-                response.SuccessCount, response.FailureCount);
+                outcomes.Count(o => o.IsSuccess), outcomes.Count(o => !o.IsSuccess));
         }
 
         if (staleTokens.Count > 0)
@@ -128,24 +122,27 @@ public class FcmTokenService : IFcmTokenService
         }
     }
 
-    private static bool IsTokenInvalid(FirebaseMessagingException? ex) =>
-         ex?.MessagingErrorCode is
-             MessagingErrorCode.Unregistered or
-             MessagingErrorCode.InvalidArgument;
-
     // ── Periodic cleanup: remove tokens not seen in 60 days ──────────────────
     public async Task CleanupStaleTokensAsync()
     {
         var cutoff = DateTime.UtcNow.AddDays(-60);
-        var stale = await _db.DeviceTokens
+        // Delete by key only — no need to materialize full token rows.
+        // (ExecuteDeleteAsync would be ideal, but the unit suite runs on the
+        // InMemory provider, which doesn't support set-based deletes.)
+        var staleIds = await _db.DeviceTokens
             .Where(t => t.LastSeenAt < cutoff)
+            .Select(t => t.Id)
             .ToListAsync();
 
-        if (stale.Count > 0)
+        if (staleIds.Count > 0)
         {
-            _db.DeviceTokens.RemoveRange(stale);
+            // Reuse an already-tracked instance when one exists; attaching a
+            // key-only stub for a tracked entity throws.
+            _db.DeviceTokens.RemoveRange(staleIds.Select(id =>
+                _db.DeviceTokens.Local.FirstOrDefault(t => t.Id == id)
+                    ?? new DeviceToken { Id = id }));
             await _db.SaveChangesAsync();
-            _logger.LogInformation("Cleaned up {Count} expired FCM tokens.", stale.Count);
+            _logger.LogInformation("Cleaned up {Count} expired FCM tokens.", staleIds.Count);
         }
     }
 }

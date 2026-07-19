@@ -14,13 +14,19 @@ import sys
 from datetime import datetime
 
 from config import cfg
-from services import epro_service, varnatraffic_service, vik_service
+from services import (
+    epro_service,
+    heating_service,
+    roads_service,
+    varnatraffic_service,
+    vik_service,
+)
 
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=cfg.log_level,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
@@ -38,7 +44,9 @@ log = logging.getLogger(__name__)
 SERVICES: list[tuple[str, object, int | None]] = [
     ("VarnaTraffic", varnatraffic_service.main, cfg.VT_INTERVAL),
     ("VIK",          vik_service.main,          cfg.VIK_INTERVAL),
-    ("ePro",         epro_service.main,          cfg.EPRO_INTERVAL),
+    ("ePro",         epro_service.main,         cfg.EPRO_INTERVAL),
+    ("Heating",      heating_service.main,      cfg.HEATING_INTERVAL),
+    ("Roads",        roads_service.main,        cfg.ROADS_INTERVAL),
 ]
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-namespace FcmDemo.Models;
+namespace CityShieldAPI.Data.Models;
 
 public class DeviceToken
 {

@@ -1,10 +1,18 @@
-namespace FcmDemo.Services;
+namespace CityShieldAPI.Core.Contracts;
 
 public interface IFcmTokenService
 {
-    Task UpsertTokenAsync(Guid userId, string token, string? platform = null, string? deviceName = null);
+    Task UpsertTokenAsync(Guid userId, string token,
+        string? platform = null, string? deviceName = null);
+
     Task RemoveTokenAsync(Guid userId, string token);
-    Task SendNotificationAsync(Guid userId, string title, string body, Dictionary<string, string>? data = null);
-    Task SendToMultipleUsersAsync(IEnumerable<Guid> userIds, string title, string body);
+
+    Task SendNotificationAsync(Guid userId, string title, string body,
+        Dictionary<string, string>? data = null);
+
+    Task SendToMultipleUsersAsync(IEnumerable<Guid> userIds,
+        string title, string body,
+        Dictionary<string, string>? data = null);
+
     Task CleanupStaleTokensAsync();
 }

@@ -3,21 +3,30 @@ Module for forming a polygon from a list of streets.
 """
 
 import json
+import logging
 import math
 import warnings
 import osmnx as ox
 import geopandas as gpd
 from shapely.geometry import Point, LineString
 from shapely.ops import linemerge, polygonize, unary_union
-import folium
+
+from config import cfg
+
+log = logging.getLogger(__name__)
 
 # 1. ENABLE CACHING: Saves OSM data locally so you don't hit API limits on repeated runs
 ox.settings.use_cache = True
 
-# Suppress minor Shapely/GeoPandas warnings for a cleaner console output
-warnings.filterwarnings('ignore')
+# Silence only the known-noisy library warnings (deprecations and pandas
+# future-behavior notices) instead of blanket-ignoring everything — real
+# runtime warnings from Shapely/GeoPandas should still surface in logs.
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
 
-HTML_FILE: str | None = "map.html"
+# Debug visualization only — in production (POLYGON_DEBUG_MAP unset/false)
+# no HTML file is written.
+HTML_FILE: str | None = "map.html" if cfg.POLYGON_DEBUG_MAP else None
 
 def extend_line(line, distance=200):
     """Extends a LineString at both ends by a given distance (in meters)."""
@@ -68,13 +77,13 @@ def batch_reproject_dict(geom_dict, src_crs, dst_crs="EPSG:4326"):
 def extract_city_block(place_name, street_names, extension_dist=200, output_html=HTML_FILE):
     """Constructs a block polygon and saves an interactive Folium map."""
     
-    print(f"Fetching data for {place_name} (Using cache if available)...")
+    log.info("[polygon] Fetching data for %s (using cache if available)...", place_name)
     tags = {'name': street_names}
-    
+
     try:
         gdf = ox.features_from_place(place_name, tags=tags)
     except Exception as e:
-        print(f"Error fetching data from OSM: {e}")
+        log.error("[polygon] Error fetching data from OSM: %s", e)
         return None, None, None
 
     # Keep only line geometries
@@ -90,13 +99,13 @@ def extract_city_block(place_name, street_names, extension_dist=200, output_html
     for street in street_names:
         street_segments = gdf_proj[gdf_proj['name'] == street].geometry.tolist()
         if not street_segments:
-            print(f"Warning: Street '{street}' not found in OSM data.")
+            log.warning("[polygon] Street '%s' not found in OSM data.", street)
             continue
         street_geoms[street] = linemerge(street_segments)
 
     # 2. Safety Check: Need at least 3 streets to form a closed polygon
     if len(street_geoms) < 3:
-        print("Error: Found fewer than 3 streets in OSM. Cannot form a closed block.")
+        log.error("[polygon] Found fewer than 3 streets in OSM. Cannot form a closed block.")
         return None, None, None
 
     # 3. Extend Street Geometries
@@ -141,13 +150,23 @@ def extract_city_block(place_name, street_names, extension_dist=200, output_html
             coords = list(block_poly.exterior.coords)
             block_edges = [LineString([coords[i], coords[i+1]]) for i in range(len(coords)-1)]
         else:
-            print("Warning: The extended streets do not enclose a valid block spanning multiple distinct streets.")
+            log.warning("[polygon] The extended streets do not enclose a valid block spanning multiple distinct streets.")
     else:
-        print("Warning: The extended streets do not enclose a fully closed polygon.")
+        log.warning("[polygon] The extended streets do not enclose a fully closed polygon.")
 
     # 5. Folium Visualization (Optimized with Batch Reprojection)
+    # folium is a dev-only dependency (requirements-dev.txt) imported lazily:
+    # production never renders maps, so it doesn't ship in the Docker image.
     if output_html:
-        print("Generating Folium map...")
+        try:
+            import folium
+        except ImportError:
+            log.warning("[polygon] folium is not installed — skipping debug map "
+                        "(pip install -r requirements-dev.txt).")
+            output_html = None
+
+    if output_html:
+        log.info("[polygon] Generating Folium map...")
     
         # Calculate map center based on original geometries
         bounds = gdf.geometry.union_all().bounds # minx, miny, maxx, maxy
@@ -184,8 +203,8 @@ def extract_city_block(place_name, street_names, extension_dist=200, output_html
 
         folium.LayerControl().add_to(m)
         m.save(output_html)
-        print(f"Success! Interactive map saved to: {output_html}")    
-    
+        log.info("[polygon] Interactive map saved to: %s", output_html)
+
     return block_poly, original_crs, projected_crs
 
 # 6. Point-in-Polygon Test Function
@@ -222,16 +241,13 @@ def streets_to_geojson(
         if resolved:
             resolved_names.append(resolved)
         else:
-            print(f"Warning: Could not resolve '{original}'")
+            log.warning("[polygon] Could not resolve street name '%s'.", original)
 
     if len(resolved_names) < 3:
-        print("Error: Need at least 3 valid streets after normalization.")
+        log.error("[polygon] Need at least 3 valid streets after normalization.")
         return None
 
-    # Optional debug output
-    print("\nResolved street mapping:")
-    for k, v in resolved_map.items():
-        print(f"  {k} → {v}")
+    log.debug("[polygon] Resolved street mapping: %s", resolved_map)
 
     # --- Step 2: build polygon ---
     polygon, original_crs, projected_crs = extract_city_block(
@@ -241,7 +257,7 @@ def streets_to_geojson(
     )
 
     if polygon is None:
-        print("Error: Polygon construction failed.")
+        log.error("[polygon] Polygon construction failed.")
         return None
 
     # --- Step 3: convert to GeoJSON (WGS84) ---
@@ -263,7 +279,7 @@ def resolve_street_names(input_names, conn, similarity_threshold=0.4, limit=1):
 
     Args:
         input_names (list[str]): User-provided street names
-        conn: psycopg2 connection
+        conn: psycopg connection
         similarity_threshold (float): minimum similarity
         limit (int): number of candidates per input
 
@@ -291,13 +307,15 @@ def resolve_street_names(input_names, conn, similarity_threshold=0.4, limit=1):
 # EXECUTABLE SCRIPT / EXAMPLE USAGE
 # ==========================================
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(message)s")
+
     city_context = "Варна България"
-    #bounding_streets = [
-    #    "Йордан Йовков",
-    #    "Хан Кубрат",
-    #    "Ивац Войвода",
-    #    "Тихомир"
-    #]
+    bounding_streets = [
+        "Йордан Йовков",
+        "Хан Кубрат",
+        "Ивац Войвода",
+        "Тихомир"
+    ]
     #bounding_streets = [
     #    "Акад. Андрей Сахаров",
     #    "бул. Христо Смирненски",
@@ -310,7 +328,7 @@ if __name__ == "__main__":
     #    "Йордан Йовков",
     #    "Фантазия" 
     #]
-    bounding_streets = [ "Царевец", "Клокотница", "бул. Чаталджа"]
+    #bounding_streets = [ "ул.Русе", "ул.Бачо Киро", "ул.Козлодуй", "ул.Ал.Дякович"]
 
     html_file = "map.html"
 

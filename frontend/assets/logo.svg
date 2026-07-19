@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 164" width="120" height="164">
+  <path d="M 104.572 27.141 C 102.985 72.094 93.677 105.706 60.716 126.595 C 45.831 118.595 33.772 101.699 24.203 88.699 L 30.262 84.098 C 38.767 97.098 50.084 111.595 60.716 117.595 C 95.729 91.692 94.919 50.715 96.823 25.196 L 104.572 27.141 Z" fill="#1F3B4E" style=""/>
+  <path d="M 13 12.905 C 41.537 4.77 75.359 6.397 103.896 22.667 C 73.245 14.532 41.537 17.786 13 34.055 L 13 12.905 Z" fill="#3E9FD8" style=""/>
+  <path d="M 13 41.804 C 36 29.804 58 27.804 78 34.804 C 54 37.804 32 45.804 15 59.804 L 13 41.804 Z" fill="#3E9FD8"/>
+  <path d="M 16.35 66.951 C 32.35 56.951 47.35 53.951 62.35 55.951 C 45.35 61.951 30.35 68.951 21.35 82.951 L 16.35 66.951 Z" fill="#3E9FD8"/>
+  <text x="47.762" y="116.332" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" font-weight="800" letter-spacing="0.5" style="white-space: pre;">
+    <tspan fill="#1F3B4E" style="word-spacing: 0px;">City</tspan><tspan fill="#3E9FD8" style="word-spacing: 0px;">Shield</tspan>
+  </text>
+</svg>

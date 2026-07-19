@@ -12,6 +12,8 @@ import hashlib
 import json
 import logging
 import os
+import time
+
 import ollama
 
 from config import cfg
@@ -23,15 +25,16 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # When True, the cache is read from / written to PERSISTENT_CACHE_PATH on disk.
 # The file is plain JSON so you can open it and inspect cached responses.
-# When False (default), only the in-process memory cache is used.
-PERSISTENT_CACHE_ENABLED: bool = True
+# Controlled by the AI_PERSISTENT_CACHE env var (default: off — production
+# should always call the model so prompt/model changes take effect).
+PERSISTENT_CACHE_ENABLED: bool = cfg.AI_PERSISTENT_CACHE
 PERSISTENT_CACHE_PATH: str = os.path.join(
     os.path.dirname(__file__), ".ai_parser_cache.json"
 )
 # ---------------------------------------------------------------------------
 
-def _cache_key(system_prompt: str, user_prompt: str) -> str:
-    raw = f"{system_prompt}\x00{user_prompt}"
+def _cache_key(system_prompt: str, user_prompt: str, format_repr: str = "") -> str:
+    raw = f"{system_prompt}\x00{user_prompt}\x00{format_repr}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -60,16 +63,23 @@ def _save_to_persistent_cache(cache: dict[str, str]) -> None:
         log.warning("[ai_parser] Could not write persistent cache: %s", exc)
 
 
-def ai_parse(system_prompt: str, user_prompt: str) -> str | None:
+def ai_parse(system_prompt: str, user_prompt: str,
+             format_schema: dict | None = None) -> str | None:
     """
     General function for AI parsing.
     Returns the raw JSON string from the model, or None if anything fails.
+
+    format_schema: a JSON schema (e.g. SomeModel.model_json_schema()) passed
+    to Ollama as a structured-output constraint, so the model is forced to
+    generate exactly that shape. When None, falls back to free-form JSON mode.
 
     When PERSISTENT_CACHE_ENABLED is True, checks the on-disk JSON cache
     before calling the model, and writes new results back to it.
     When False, every call goes directly to the model.
     """
-    key = _cache_key(system_prompt, user_prompt)
+    response_format = format_schema if format_schema is not None else "json"
+    key = _cache_key(system_prompt, user_prompt,
+                     json.dumps(format_schema, sort_keys=True) if format_schema else "")
 
     if PERSISTENT_CACHE_ENABLED:
         cache = _load_persistent_cache()
@@ -77,18 +87,29 @@ def ai_parse(system_prompt: str, user_prompt: str) -> str | None:
             log.debug("[ai_parser] Cache hit.")
             return cache[key]
 
-    try:
-        response = ollama.chat(
-            model=cfg.OLLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            format="json",
-        )
-    except Exception as exc:
-        log.error("[ai_parser] Ollama call failed: %s", exc)
-        return None
+    # Retry transient Ollama failures (server restarting, model still
+    # loading) so one blip doesn't drop the message until the next crawl.
+    attempts = 3
+    response = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = ollama.chat(
+                model=cfg.OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                format=response_format,
+            )
+            break
+        except Exception as exc:
+            if attempt == attempts:
+                log.error("[ai_parser] Ollama call failed after %d attempts: %s",
+                          attempts, exc)
+                return None
+            log.warning("[ai_parser] Ollama call failed (attempt %d/%d): %s. Retrying.",
+                        attempt, attempts, exc)
+            time.sleep(2 * attempt)
 
     try:
         log.debug(
