@@ -3,25 +3,14 @@
 fcm.json
 frontend/android/app/google-services.json
 
-# ── Python (backend/) ─────────────────────────────────────
-*.log
-*.pyc
-__pycache__/
-.venv/
-/backend/cache
-backend/map.html
-backend/processing/.ai_parser_cache.json
-
-# ── .NET (ASP/) ───────────────────────────────────────────
-bin/
-obj/
-.vs/
-*.vsidx
+# ── Cloudflare Worker backend (backend/) ──────────────────
+# Build/dev artefacts (node_modules, dist, .wrangler, .dev.vars, seed.sql) are
+# ignored by backend/.gitignore; spike caches by backend/spikes/.gitignore.
 
 # ── Editors ───────────────────────────────────────────────
 .vscode/
 
-# ── React Native (frontend/) ──────────────────────────────
+# ── React Native app (frontend/) ──────────────────────────
 frontend/node_modules/
 frontend/android/.gradle/
 frontend/android/build/
@@ -33,5 +22,19 @@ frontend/*.keystore
 !frontend/android/app/debug.keystore
 frontend/.metro-cache/
 
-# ── Docker ────────────────────────────────────────────────
+# ── Deprecated pre-Cloudflare stack (backend_deprecated/) ─────────
+# Python ingestion
+*.log
+*.pyc
+__pycache__/
+.venv/
+backend_deprecated/backend/cache
+backend_deprecated/backend/map.html
+backend_deprecated/backend/processing/.ai_parser_cache.json
+# .NET API
+bin/
+obj/
+.vs/
+*.vsidx
+# Docker prod stack
 docker-data/

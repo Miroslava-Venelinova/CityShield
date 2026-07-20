@@ -2,18 +2,36 @@
 
 **Real-time utility outage alerts for Varna, Bulgaria.**
 
-CityShield is a mobile application that keeps residents informed about power, water, heating, and road disruptions across the city. It continuously monitors official sources — utility companies, local authorities, and infrastructure agencies — and delivers timely, location-aware push notifications together with an interactive map of all active incidents.
+CityShield keeps residents informed about power, water, heating, and road
+disruptions across the city. It continuously monitors official sources — utility
+companies, local authorities, and infrastructure agencies — parses each
+announcement, works out the affected area, and delivers location-aware push
+notifications together with an interactive map of every active incident.
+
+The entire server side runs as a **single TypeScript Cloudflare Worker** on
+Cloudflare's free plan. A React Native app is the client.
+
+> **History:** CityShield previously ran on a Python ingestion service + an
+> ASP.NET Core API + PostgreSQL/PostGIS + self-hosted Ollama. That stack has been
+> replaced and now lives, unmaintained, in [`backend_deprecated/`](backend_deprecated/) — see
+> [`backend_deprecated/DEPRECATED.md`](backend_deprecated/DEPRECATED.md). The migration is recorded
+> in [PLAN.MD](PLAN.MD) and [TODO.md](TODO.md).
 
 ---
 
 ## Features
 
-- **Real-time alerts** — outage reports are collected directly from official channels and pushed to affected users within minutes of publication.
-- **Location-aware notifications** — users set their location once; the system geocodes each incident and notifies only those inside the affected area.
-- **Interactive map** — every active incident is drawn on an OpenStreetMap-based map as a precise polygon of the affected zone.
-- **Category preferences** — users choose which alert categories they care about (power, water, heating, traffic, roads).
-- **Bus-line subscriptions** — public-transport users can follow specific bus lines and get notified only about disruptions affecting those lines.
-- **Trusted data only** — information comes exclusively from official sources, ensuring accuracy and transparency.
+- **Real-time alerts** — outage reports are collected directly from official
+  channels and pushed to affected users shortly after publication.
+- **Location-aware notifications** — users set their location once; each incident
+  is geocoded and only users inside the affected area are notified.
+- **Interactive map** — every active incident is drawn as a precise polygon of the
+  affected zone over OpenStreetMap tiles.
+- **Category preferences** — users choose which categories they care about (power,
+  water, heating, traffic, roads).
+- **Bus-line subscriptions** — public-transport users can follow specific bus lines
+  and be notified only about disruptions affecting them.
+- **Trusted data only** — information comes exclusively from official sources.
 
 ## Data sources
 
@@ -27,59 +45,70 @@ CityShield is a mobile application that keeps residents informed about power, wa
 
 ## Architecture
 
-The system consists of three components that form a pipeline from raw source data to a notification on the user's phone:
+The server side is one Worker with two entry points — an HTTP API (`fetch`) and a
+scheduled ingestion pipeline (Cron Triggers) — sharing one D1 database, one
+Workers-AI binding, and one FCM client.
 
 ```
-┌─────────────────────┐     ┌──────────────────────┐     ┌────────────────────┐
-│      backend/       │     │        ASP/          │     │     frontend/      │
-│  Python ingestion   │────►│   ASP.NET Core API   │────►│  React Native app  │
-│                     │     │                      │     │                    │
-│ • scrapes sources   │     │ • JWT auth           │     │ • interactive map  │
-│ • LLM parsing       │     │ • alert storage      │     │ • alert feed       │
-│ • geocoding         │     │ • geospatial match   │     │ • push inbox       │
-│ • polygon building  │     │ • FCM push delivery  │     │ • preferences      │
-└─────────────────────┘     └──────────────────────┘     └────────────────────┘
+                        ┌───────────────────────── backend/ (Cloudflare Worker) ─────────────────────────┐
+                        │                                                                                 │
+  official sources ───► │  scheduled() every 10 min                        fetch()  (Hono router)         │
+  (ViK, ePro, Veolia,   │   scrape (cheerio) → parse (Workers AI, JSON     ┌─────────────────────────┐    │
+   VarnaTraffic, API)   │   schema) → geocode (Nominatim) → build polygon  │ /api/auth  /api/alerts   │    │ ◄── React Native app
+                        │   (Overpass + JSTS) → store → match users →      │ /api/tokens /api/prefs   │    │      (frontend/)
+                        │   notify (FCM HTTP v1)                           │ /privacy   /internal     │    │
+                        │                        │                         └─────────────────────────┘    │
+                        │                        └──────────────► Cloudflare D1 (SQLite) ◄────────────────┘
+                        │                                          Workers AI · FCM HTTP v1               │
+                        └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Ingestion service** (`backend/`) — a set of Python scrapers, one per source, each running on its own polling interval. New announcements are parsed into structured data by a locally hosted LLM (Ollama), geocoded via Nominatim/Overpass, converted into geographic polygons of the affected area, and submitted to the API. Crawl state (which announcements have already been processed) lives in PostgreSQL alongside the reference data.
-2. **API** (`ASP/`) — an ASP.NET Core 8 service that stores alerts in PostgreSQL with PostGIS geometry, manages user accounts and JWT authentication, matches incoming alerts against user locations and notification preferences, and delivers push notifications through Firebase Cloud Messaging.
-3. **Mobile app** (`frontend/`) — a React Native Android application with an OpenStreetMap-based incident map, an alert feed, a persisted notification inbox, and per-category notification settings.
+- **Ingestion** (`backend/src/ingestion/`) — the `scheduled` handler runs every 10
+  minutes (plus a daily cleanup). One module per source scrapes new announcements,
+  Workers AI parses them into structured data in JSON-schema mode, Nominatim
+  geocodes them, and an Overpass + [JSTS](https://github.com/bjornharrtell/jsts)
+  pipeline turns the affected streets into a polygon. Crawl state lives in D1.
+- **API** (`backend/src/api/`) — a [Hono](https://hono.dev) router handling JWT
+  auth and user location, alert retrieval for the map/feed, FCM device tokens, and
+  per-category + bus-line notification preferences. It also serves a GDPR data
+  export / account-deletion flow and the privacy policy.
+- **Core** (`backend/src/core/`) — shared logic: alert store-and-notify, trigram
+  fuzzy street matching (a `pg_trgm` port), geometry helpers, the geocoding cache,
+  PBKDF2 passwords, HS256 JWTs, the FCM client (WebCrypto OAuth), and the bus-line
+  catalog.
+- **Mobile app** (`frontend/`) — a React Native Android app with an
+  OpenStreetMap-based incident map (Leaflet in a WebView), an alert feed, a
+  persisted notification inbox, per-category settings, Bulgarian/English UI, and
+  Firebase Cloud Messaging.
 
 ## Technology stack
 
 | Component | Technologies |
 |---|---|
-| Ingestion | Python 3, asyncio, BeautifulSoup, Ollama (local LLM), Nominatim & Overpass geocoding, PostgreSQL |
-| API | ASP.NET Core 8, Entity Framework Core, PostgreSQL + PostGIS (NetTopologySuite), JWT authentication, BCrypt, Firebase Admin SDK, Swagger |
+| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, cheerio, JSTS, Zod, Nominatim & Overpass geocoding, FCM HTTP v1 |
 | Mobile app | React Native 0.85, React 19, React Navigation, Leaflet in a WebView (OpenStreetMap tiles), Firebase Cloud Messaging |
-| Tooling | Docker-based Android build environment (Node 22, JDK 17, Android SDK 35) |
+| Tooling | Wrangler, Vitest (`@cloudflare/vitest-pool-workers`), GitHub Actions |
 
 ## Repository layout
 
 ```
 CityShield/
-├── backend/                  Python ingestion service
-│   ├── run.py                Entry point — runs all scrapers concurrently
-│   ├── config.py             Central configuration (reads backend/.env)
-│   ├── services/             One module per data source
-│   ├── scraping/             HTTP scraping utilities
-│   ├── processing/           LLM parsing, geocoding, polygon building
-│   ├── data/                 PostgreSQL / Overpass access layers
-│   ├── scripts/              Manual test & debugging scripts
-│   └── tests/                Pytest suite (unit + integration)
-├── ASP/
-│   └── CityShieldAPI/        ASP.NET Core solution
-│       ├── CityShieldAPI/              Web API (controllers: Auth, Alerts, Tokens, NotificationPreferences)
-│       ├── CityShieldAPI.Core/         Business logic and service contracts
-│       ├── CityShieldAPI.Data/         EF Core DbContext and migrations
-│       ├── CityShieldAPI.Data.Models/  Entity classes
-│       ├── CityShieldAPI.DTOs/         Request/response models
-│       ├── CityShieldAPI.Common/       Shared configuration types
-│       └── CityShieldAPI.Tests/        xUnit test suite
+├── backend/                  Cloudflare Worker — the entire server side
+│   ├── wrangler.jsonc        Bindings, cron triggers, vars
+│   ├── migrations/           D1 SQL migrations
+│   ├── seeds/                regions/streets seed data + generator
+│   ├── src/
+│   │   ├── index.ts          Exports { fetch, scheduled }
+│   │   ├── api/              Hono routes (auth, alerts, tokens, preferences, privacy)
+│   │   ├── core/             Alert service, fuzzy match, geo, geocoding, fcm, jwt, password
+│   │   └── ingestion/        Scheduled pipeline + one module per source
+│   ├── test/                 Vitest suite (runs against local D1)
+│   └── spikes/               Phase 0 de-risking spikes + RESULTS.md
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
-├── docker-compose.prod.yml   Production stack (PostgreSQL, Ollama, API, ingestion)
-├── .env.example              Secrets template for the production stack
-└── InstallDependencies.bat   One-click dependency install for all components
+├── backend_deprecated/       Old pre-Cloudflare stack — do not use (see DEPRECATED.md)
+├── PLAN.MD                   Cloudflare migration plan (design spec)
+├── TODO.md                   Migration checklist / status
+└── SETUP.md                  Operator setup checklist (accounts & secrets)
 ```
 
 ## Getting started
@@ -88,86 +117,78 @@ CityShield/
 
 | Requirement | Used by |
 |---|---|
-| [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) | API |
-| [PostgreSQL](https://www.postgresql.org/) with [PostGIS](https://postgis.net/) | API |
-| [Python 3](https://www.python.org/downloads/) | Ingestion service |
-| [Ollama](https://ollama.com/) | Ingestion service (LLM parsing) |
-| [Docker Desktop](https://www.docker.com/products/docker-desktop) + [Android Studio](https://developer.android.com/studio) | Mobile app |
+| [Node.js](https://nodejs.org/) 22+ | Backend & app tooling |
+| A [Cloudflare](https://dash.cloudflare.com) account (free plan) | Backend — D1, Workers AI, deploys |
+| [Android Studio](https://developer.android.com/studio) (or a device) | Mobile app |
 | A [Firebase](https://console.firebase.google.com) project | Push notifications |
 
-### 1. Install dependencies
+See [SETUP.md](SETUP.md) for the exact accounts, secrets, and one-time provisioning
+the operator needs to supply.
 
-Run from the repository root:
+### 1. Run the backend locally
 
-```cmd
-InstallDependencies.bat
-```
-
-This creates the Python virtual environment (`backend/.venv`), installs the frontend npm packages, and restores the .NET solution. Steps whose tools are missing from PATH are skipped with a notice.
-
-### 2. Run the API
-
-```cmd
-dotnet run --project ASP\CityShieldAPI\CityShieldAPI
-```
-
-Or open `ASP/CityShieldAPI/CityShieldAPI.sln` in Visual Studio and press **Run**. The API listens on port **5276** and exposes Swagger UI in development.
-
-Before the first run:
-- Set the PostgreSQL connection string in `appsettings.json` and apply the EF Core migrations (`dotnet ef database update`).
-- Place a Firebase service-account key file at the project root as `fcm.json`.
-
-> **Note (July 2026):** the initial migration was renamed from `20260526181336_Init`
-> to `20260628072606_InitialCreate`. A database created before that rename will fail
-> `database update` / `Database__AutoMigrate` with *"relation already exists"* —
-> drop and recreate that database (dev data only; no production deployments predate
-> the rename).
-
-### 3. Run the ingestion service
-
-```cmd
+```sh
 cd backend
-.venv\Scripts\python run.py
+npm install
+npm run db:local     # apply D1 migrations + generate & load the seed data
+npm run dev          # wrangler dev — serves the Worker on http://localhost:8787
 ```
 
-Configuration is read from `backend/.env` — PostgreSQL connection, API endpoint, log level, and per-source polling intervals. See `backend/config.py` for every available option and its default. PostgreSQL and Ollama must be running locally.
+Local secrets go in `backend/.dev.vars` (copy `backend/.dev.vars.example`); config
+and non-secret vars live in [backend/wrangler.jsonc](backend/wrangler.jsonc).
 
-### 4. Run the mobile app
+### 2. Run the mobile app
 
-Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a complete step-by-step guide covering the Android emulator, the Docker-based build workflow, Firebase configuration, and exactly what to run after each kind of code change.
+Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a step-by-step guide covering the
+Android emulator/device, Firebase configuration, and what to run after each kind of
+change. Point the app's `CITYSHIELD_API_URL` at your `wrangler dev` host (or the
+deployed Worker).
 
 ## Running the tests
 
-- **Ingestion service** — from `backend/`: `.venv\Scripts\python -m pytest`. Tests marked `integration` need a live PostgreSQL; skip them with `-m "not integration"`. Test dependencies: `.venv\Scripts\pip install -r requirements-dev.txt`.
-- **API** — `dotnet test ASP\CityShieldAPI\CityShieldAPI.sln`. The integration tests start a disposable PostGIS container via Testcontainers, so Docker must be running.
+- **Backend** — from `backend/`: `npm test` (Vitest against a local D1). Type-check
+  with `npx tsc -p tsconfig.json && npx tsc -p test/tsconfig.json`.
 - **Mobile app** — from `frontend/`: `npm run lint` and `npm run typecheck`.
 
-The same checks run in GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) on every push and pull request.
+The same checks run in GitHub Actions
+([.github/workflows/ci.yml](.github/workflows/ci.yml)) on every push and pull
+request, which also does a `wrangler deploy --dry-run` bundle-size check.
 
 ## API overview
 
-| Controller | Responsibility |
+All routes are registered in [backend/src/api/app.ts](backend/src/api/app.ts).
+
+| Route group | Responsibility |
 |---|---|
-| `AuthController` | Registration, login, JWT issuance, user location |
-| `AlertsController` | Alert ingestion (`POST /api/alerts/submit-data`, API-key protected) and retrieval for the app's map/feed (`GET /api/alerts/recent`, with geocoded coordinates and polygons) |
-| `TokensController` | FCM device token registration |
-| `NotificationPreferencesController` | Per-category notification settings and bus-line subscriptions |
+| `/api/auth` | Registration, login, JWT issuance, `me`, user location (reverse-geocoded + fuzzy region/street match), GDPR export & account deletion |
+| `/api/alerts` | Alert retrieval for the map/feed (`recent`, with coordinates and polygons) and API-key-protected ingestion |
+| `/api/tokens` | FCM device-token registration |
+| `/api/preferences` | Per-category notification settings and bus-line subscriptions |
+| `/privacy` | Published privacy policy (GDPR) |
 
-Interactive documentation is available via Swagger UI when the API runs in the development environment.
+## Deployment
 
-## Production deployment
+The Worker deploys with Wrangler; TLS and scaling are handled by Cloudflare. Remote
+D1 and secrets must be provisioned first — see [SETUP.md](SETUP.md) and
+[PLAN.MD](PLAN.MD) §3.
 
-[docker-compose.prod.yml](docker-compose.prod.yml) runs the entire server-side stack — PostgreSQL/PostGIS, Ollama, the API, and the ingestion service:
-
-```cmd
-copy .env.example .env        &rem then fill in the secrets
-docker compose -f docker-compose.prod.yml up -d --build
+```sh
+cd backend
+npm run db:remote                     # apply migrations + seed the remote D1
+npx wrangler secret put JWT_KEY       # + INGEST_API_KEY, FCM_SERVICE_ACCOUNT
+npx wrangler deploy
 ```
 
-Place the Firebase service-account key at `./fcm.json` before starting, and follow the first-run steps (pulling the Ollama model, seeding the street database) in the compose file's header comments. TLS is not handled by the stack — run a reverse proxy (Caddy, nginx, Traefik) in front of the API.
+Pushes to `main` deploy automatically via GitHub Actions once the
+`CLOUDFLARE_API_TOKEN` repo secret is set.
 
 ## Further documentation
 
 | Document | Contents |
 |---|---|
+| [PLAN.MD](PLAN.MD) | Full Cloudflare migration plan and backend design spec |
+| [TODO.md](TODO.md) | Migration checklist and current status |
+| [SETUP.md](SETUP.md) | Operator setup — accounts, secrets, provisioning |
 | [frontend/SETUP.md](frontend/SETUP.md) | Mobile app development environment |
+| [backend/spikes/RESULTS.md](backend/spikes/RESULTS.md) | Phase 0 de-risking spike findings |
+| [backend_deprecated/DEPRECATED.md](backend_deprecated/DEPRECATED.md) | The retired pre-Cloudflare stack |
