@@ -5,7 +5,7 @@
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
   // Ingest tick + daily cleanup (§1.7 / §1.10).
-  "triggers": { "crons": ["*/10 * * * *", "30 3 * * *"] },
+  "triggers": { "crons": ["*/5 * * * *", "30 3 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

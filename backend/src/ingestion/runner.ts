@@ -2,8 +2,12 @@
 // one cron tick. Sources run sequentially under a 25 s deadline guard, and
 // the start order rotates by tick number so a slow source can't starve the
 // others. Worst case is delayed — never lost — alerts (cursor semantics).
+//
+// Not every source runs on every tick — see schedule.ts for the per-source
+// polling intervals.
 
 import type { Env } from "../env";
+import { TICK_MINUTES, isDue } from "./schedule";
 import * as epro from "./sources/epro";
 import * as heating from "./sources/heating";
 import * as vik from "./sources/vik";
@@ -17,16 +21,25 @@ const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promis
 ];
 
 const DEADLINE_MS = 25_000;
-const TICK_INTERVAL_MS = 10 * 60 * 1000;
+const TICK_INTERVAL_MS = TICK_MINUTES * 60 * 1000;
 
 export async function runIngestion(env: Env): Promise<void> {
-  const deadline = Date.now() + DEADLINE_MS;
-  const tick = Math.floor(Date.now() / TICK_INTERVAL_MS);
-  const order = [...SOURCES.slice(tick % SOURCES.length), ...SOURCES.slice(0, tick % SOURCES.length)];
+  const now = Date.now();
+  const deadline = now + DEADLINE_MS;
+  const tick = Math.floor(now / TICK_INTERVAL_MS);
+  const rotated = [...SOURCES.slice(tick % SOURCES.length), ...SOURCES.slice(0, tick % SOURCES.length)];
+
+  // Index in SOURCES (not the rotated order) is the stagger phase, so a
+  // source's due ticks don't shift as the rotation moves.
+  const order = rotated.filter((s) => isDue(s.name, SOURCES.indexOf(s), now));
+  if (order.length === 0) {
+    console.log("[runner] No source due this tick.");
+    return;
+  }
 
   for (const source of order) {
     if (Date.now() >= deadline) {
-      console.warn(`[runner] Deadline reached before '${source.name}' — it runs next tick.`);
+      console.warn(`[runner] Deadline reached before '${source.name}' — it runs when next due.`);
       break;
     }
     try {
