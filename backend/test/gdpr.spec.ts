@@ -30,7 +30,7 @@ describe("GET /api/auth/me/export (portability)", () => {
     const { token, email } = await registerAndLogin();
     await api("/api/tokens",
       jsonInit("POST", { token: "export-tok-secret", platform: "android", deviceName: "Pixel" }, token));
-    await api("/api/preferences/roads", jsonInit("PUT", { isEnabled: false }, token));
+    await api("/api/preferences/heating", jsonInit("PUT", { isEnabled: false }, token));
 
     const res = await api("/api/auth/me/export", { headers: { Authorization: `Bearer ${token}` } });
     expect(res.status).toBe(200);
@@ -38,7 +38,7 @@ describe("GET /api/auth/me/export (portability)", () => {
 
     expect(body.profile.email).toBe(email);
     expect(body.profile.subscribedBusLines).toEqual([]);
-    expect(body.notificationPreferences).toEqual([{ category: "roads", isEnabled: false }]);
+    expect(body.notificationPreferences).toEqual([{ category: "heating", isEnabled: false }]);
     expect(body.devices).toEqual([{
       platform: "android",
       deviceName: "Pixel",

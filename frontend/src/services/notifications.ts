@@ -7,7 +7,7 @@ const STORAGE_KEY = 'cityshield_notifications';
 const MAX_ITEMS   = 10;
 
 export type NotificationCategory =
-  'vik' | 'vt' | 'epro' | 'heating' | 'roads' | 'general';
+  'vik' | 'vt' | 'epro' | 'heating' | 'general';
 
 export interface StoredNotification {
   id:         string;
@@ -89,7 +89,6 @@ export const CATEGORIES: {
   {key: 'vt',      label: 'Traffic',      icon: 'bus',       color: '#F59E0B'},
   {key: 'epro',    label: 'Power (еПро)', icon: 'zap',       color: '#EF4444'},
   {key: 'heating', label: 'Heating',      icon: 'flame',     color: '#F97316'},
-  {key: 'roads',   label: 'Roads (АПИ)',  icon: 'road',      color: '#8B5CF6'},
   {key: 'general', label: 'General',      icon: 'megaphone', color: '#6B7280'},
 ];
 

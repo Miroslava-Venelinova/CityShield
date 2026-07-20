@@ -18,7 +18,6 @@ const CATEGORY_SEVERITY: Record<string, string> = {
   vik: "warning",
   epro: "warning",
   heating: "warning",
-  roads: "info",
   vt: "info",
 };
 

@@ -65,21 +65,3 @@ export const vtAiSchema = z.object({
 });
 
 export type VtAiOutput = z.infer<typeof vtAiSchema>;
-
-// ── Roads (АПИ news relevance) ───────────────────────────────────────────────
-
-export const ROADS_JSON_SCHEMA = {
-  type: "object",
-  properties: {
-    is_relevant: { type: "boolean" },
-    summary: { type: ["string", "null"] },
-  },
-  required: ["is_relevant", "summary"],
-} as const;
-
-export const roadsAiSchema = z.object({
-  is_relevant: z.boolean().default(false),
-  summary: z.string().nullable().default(null),
-});
-
-export type RoadsAiOutput = z.infer<typeof roadsAiSchema>;

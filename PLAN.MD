@@ -70,7 +70,7 @@ worker/
 │   │   ├── scrape.ts           # port of scraping/scrape.py (cheerio parsers)
 │   │   └── sources/
 │   │       ├── vik.ts  ├── heating.ts   # shared id-listing crawler
-│   │       ├── epro.ts ├── roads.ts ├── vt.ts
+│   │       ├── epro.ts ├── vt.ts
 │   ├── db/
 │   │   └── queries.ts          # all prepared statements in one place
 │   └── shared/
@@ -112,7 +112,6 @@ No ORM: D1's prepared-statement API (`env.DB.prepare(...).bind(...)`) with all S
     "EPRO_AREA_NAME": "Варна",
     "HEATING_BASE_URL": "https://energy-varna.bg",
     "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
-    "ROADS_URL": "https://www.api.bg/bg/novini",
     "OVERPASS_URL": "https://overpass.kumi.systems/api/interpreter",
     "JWT_ISSUER": "CityShield",
     "JWT_AUDIENCE": "CityShield Users",
@@ -169,7 +168,7 @@ CREATE TABLE user_notification_preferences (
 
 CREATE TABLE alerts (
     id             TEXT PRIMARY KEY,      -- uuid v4
-    category       TEXT NOT NULL,         -- vik | epro | heating | roads | vt
+    category       TEXT NOT NULL,         -- vik | epro | heating | vt
     title          TEXT NOT NULL,
     content        TEXT NOT NULL,
     severity       TEXT NOT NULL DEFAULT 'info',
@@ -246,7 +245,7 @@ Also in `geo.ts`: `polygonCentroid` (average of outer-ring vertices — port of 
 | `DELETE /api/auth/me` | JWT | **New (GDPR, §1.10)** → 204 |
 | `GET /api/auth/me/export` | JWT | **New (GDPR, §1.10)** → JSON dump of the user's data |
 
-Port `KnownCategories` (vik/vt/epro/heating/roads with the same labels) and [BusLineCatalog.cs](ASP/CityShieldAPI/CityShieldAPI.Core/BusLineCatalog.cs) verbatim into `shared/constants.ts` / `core/bus-lines.ts` — including `Normalize`'s Cyrillic А→A / Б→B mapping and the `"0"` sentinel.
+Port `KnownCategories` (vik/vt/epro/heating with the same labels) and [BusLineCatalog.cs](ASP/CityShieldAPI/CityShieldAPI.Core/BusLineCatalog.cs) verbatim into `shared/constants.ts` / `core/bus-lines.ts` — including `Normalize`'s Cyrillic А→A / Б→B mapping and the `"0"` sentinel.
 
 **JWT (`core/jwt.ts` + `api/middleware.ts`):** HS256 via WebCrypto (Hono's `hono/jwt` helpers are sufficient). Claims: `sub` = user id, `email`, `iss`/`aud` from vars, `exp` = now + 60 min. The app treats the token as opaque, so switching claim names from the .NET URI-style claims to standard `sub` is safe. Middleware returns 401 with no body on missing/invalid/expired tokens (the app only checks `response.ok`).
 
@@ -260,7 +259,7 @@ Port `KnownCategories` (vik/vt/epro/heating/roads with the same labels) and [Bus
 
 Direct port of [AlertService.cs](ASP/CityShieldAPI/CityShieldAPI.Core/AlertService.cs), preserving every behavioral guard:
 
-- **`storeAlert`**: enrich locations (below), insert row, severity from the same category map (vik/epro/heating = warning, roads/vt = info, unknown = info). Store **before** notifying — same crash-safety reasoning as today.
+- **`storeAlert`**: enrich locations (below), insert row, severity from the same category map (vik/epro/heating = warning, vt = info, unknown = info). Store **before** notifying — same crash-safety reasoning as today.
 - **Location enrichment** (port of `EnrichLocationsAsync`): normalize `polygon_geojson` to a bare geometry (accept FeatureCollection or bare geometry — keep `ExtractPolygonGeometry`'s exact acceptance rules), centroid for polygons; otherwise fuzzy-canonicalize name → forward-geocode via Nominatim (first of up to 3 sublocations wins, then location_name; same `BuildQuery` Varna-anchoring and prefix-stripping rules).
 - **Targeting** (port of `SendUsersNotificationAsync`), same decision tree:
   1. locations present → per location: polygon → bbox+ray-cast user query (§1.3); else region fuzzy match (+ optional street fuzzy match) → users by `region_id`/`street_id`.
@@ -319,10 +318,9 @@ export default {
 | `vik.ts` | id-listing crawler, `(\d+)\.html` pattern, listing + message parsers from scrape.py → cheerio |
 | `heating.ts` | id-listing crawler, `/node/(\d+)` pattern, base-URL-relative links |
 | `epro.ts` | JSON XHR endpoint (`X-Requested-With` header), same two active buckets, sha-256 content hash ids (24 hex chars), `strip_html` port |
-| `roads.ts` | URL-path seen-ids, cheap "Варна" text pre-check, then the relevance-judgement prompt (`{is_relevant, summary}`); relevant → city-wide `roads` alert with the LLM summary |
 | `vt.ts` | accordion parse, data-id or sha1 fallback ids, bus-lines prompt (`{bus_lines}`, `["0"]` sentinel, `null` = irrelevant), submit as city-wide `vt` alert with `bus_lines`; "Засегнати линии: …" content suffix |
 
-**`pipeline.ts`** (port of `common.py`'s tail): `aiParse → zod-validate → buildPolygons → ingestAlert()`. The old HTTP POST to the ASP.NET API becomes a direct call into `alert-service.ts` (`storeAlert` + `dispatchNotifications` under the same never-fail-after-store rule). The three prompts (`OUTAGE_AI_PROMPT`, VT, ROADS) are copied **character-for-character** into `constants.ts` — they're tuned for Bulgarian abbreviation handling; don't "improve" them during the port.
+**`pipeline.ts`** (port of `common.py`'s tail): `aiParse → zod-validate → buildPolygons → ingestAlert()`. The old HTTP POST to the ASP.NET API becomes a direct call into `alert-service.ts` (`storeAlert` + `dispatchNotifications` under the same never-fail-after-store rule). The two prompts (`OUTAGE_AI_PROMPT`, VT) are copied **character-for-character** into `constants.ts` — they're tuned for Bulgarian abbreviation handling; don't "improve" them during the port.
 
 **Scrape client (`scrape.ts`):** port `fetch_page` (browser-like `DEFAULT_HEADERS`, timeouts via `AbortSignal.timeout(20_000)`, raise-for-status) and the five parse functions onto cheerio, asserting against the fixture HTML files ported from [backend/tests/](backend/tests/).
 
@@ -473,7 +471,7 @@ You don't need: a DPO (Art. 37 thresholds not met), a DPIA (no large-scale syste
 
 - **OSM attribution (ODbL):** the app's Leaflet map must show "© OpenStreetMap contributors" (verify it survives in the WebView), and the About screen should credit Nominatim/Overpass. Also mind the **OSM tile usage policy** — if the app gets popular, switch tiles to a provider with a free tier (e.g., Carto) rather than hammering osm.org tiles.
 - **Nominatim usage policy:** ≤1 req/s, descriptive User-Agent, caching — all satisfied by §1.5's design; keep it that way.
-- **Scraped sources:** factual public-safety announcements from official operator/agency pages — facts aren't copyrightable, volumes are trivial (a page every 10 min), and EU's DSM Art. 4 text-and-data-mining exception covers the automated extraction; we don't republish full articles (roads uses an LLM summary; outage notices are short operational texts). Keep per-source polling ≥10 min, honor robots.txt if any of the five sources adds one, and show the source name in the app (the category labels already do). Risk is low; if a source ever objects, that category gets switched off — no legal exposure worth pre-lawyering.
+- **Scraped sources:** factual public-safety announcements from official operator/agency pages — facts aren't copyrightable, volumes are trivial (a page every 10 min), and EU's DSM Art. 4 text-and-data-mining exception covers the automated extraction; we don't republish full articles (outage notices are short operational texts). Keep per-source polling ≥10 min, honor robots.txt if any of the four sources adds one, and show the source name in the app (the category labels already do). Risk is low; if a source ever objects, that category gets switched off — no legal exposure worth pre-lawyering.
 - **Firebase terms:** already accepted when the project was created; nothing new.
 
 ---

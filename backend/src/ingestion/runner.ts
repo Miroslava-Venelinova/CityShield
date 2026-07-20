@@ -1,4 +1,4 @@
-// Scheduled dispatcher (PLAN.MD §1.7): the five asyncio loops collapse into
+// Scheduled dispatcher (PLAN.MD §1.7): the asyncio loops collapse into
 // one cron tick. Sources run sequentially under a 25 s deadline guard, and
 // the start order rotates by tick number so a slow source can't starve the
 // others. Worst case is delayed — never lost — alerts (cursor semantics).
@@ -6,7 +6,6 @@
 import type { Env } from "../env";
 import * as epro from "./sources/epro";
 import * as heating from "./sources/heating";
-import * as roads from "./sources/roads";
 import * as vik from "./sources/vik";
 import * as vt from "./sources/vt";
 
@@ -14,7 +13,6 @@ const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promis
   { name: "vik", run: vik.run },
   { name: "heating", run: heating.run },
   { name: "epro", run: epro.run },
-  { name: "roads", run: roads.run },
   { name: "vt", run: vt.run },
 ];
 

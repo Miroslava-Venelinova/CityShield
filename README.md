@@ -28,7 +28,7 @@ Cloudflare's free plan. A React Native app is the client.
 - **Interactive map** — every active incident is drawn as a precise polygon of the
   affected zone over OpenStreetMap tiles.
 - **Category preferences** — users choose which categories they care about (power,
-  water, heating, traffic, roads).
+  water, heating, traffic).
 - **Bus-line subscriptions** — public-transport users can follow specific bus lines
   and be notified only about disruptions affecting them.
 - **Trusted data only** — information comes exclusively from official sources.
@@ -41,7 +41,6 @@ Cloudflare's free plan. A React Native app is the client.
 | Electricity | Energo-Pro / ERP Sever (erpsever.bg) |
 | District heating | Veolia Energy Varna (energy-varna.bg) |
 | Public transport & traffic | VarnaTraffic (varnatraffic.com) |
-| National roads | Road Infrastructure Agency (api.bg) |
 
 ## Architecture
 

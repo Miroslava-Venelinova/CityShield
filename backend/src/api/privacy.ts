@@ -27,7 +27,7 @@ const POLICY_HTML = `<!doctype html>
 <p><em>Последна редакция: 19 юли 2026 г.</em></p>
 
 <p>CityShield е мобилно приложение, което известява жителите на Варна за аварии
-и прекъсвания (вода, ток, парно, пътища, градски транспорт). Администратор на
+и прекъсвания (вода, ток, парно, градски транспорт). Администратор на
 личните данни е операторът на CityShield — свържете се с нас на
 <a href="mailto:cityshield.varna@gmail.com">cityshield.varna@gmail.com</a>.</p>
 
@@ -71,7 +71,7 @@ const POLICY_HTML = `<!doctype html>
 <p><em>Last revised: 19 July 2026</em></p>
 
 <p>CityShield is a mobile app that notifies residents of Varna, Bulgaria about
-utility outages (water, power, heating, roads, public transport). The data
+utility outages (water, power, heating, public transport). The data
 controller is the CityShield operator — contact
 <a href="mailto:cityshield.varna@gmail.com">cityshield.varna@gmail.com</a>.</p>
 

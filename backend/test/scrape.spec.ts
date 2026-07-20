@@ -5,7 +5,6 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
   heatingParseMessage, heatingParsePage,
-  roadsParseArticle, roadsParsePage,
   stripHtml,
   vikParseMessage, vikParsePage,
   vtParse,
@@ -18,8 +17,6 @@ const fixture = (name: string): string => {
 };
 const heatingListing = fixture("heating_listing.html");
 const heatingMessage = fixture("heating_message.html");
-const roadsArticle = fixture("roads_article.html");
-const roadsListing = fixture("roads_listing.html");
 const vikListing = fixture("vik_listing.html");
 const vikMessage = fixture("vik_message.html");
 const vtPage = fixture("vt_page.html");
@@ -105,37 +102,5 @@ describe("heating", () => {
 
   it("returns null when the body field is missing", () => {
     expect(heatingParseMessage("<html><h1>Заглавие</h1></html>")).toBeNull();
-  });
-});
-
-describe("roads", () => {
-  it("extracts news items, skipping broken panels", () => {
-    const items = roadsParsePage(roadsListing)!;
-    expect(items).toHaveLength(2);
-    expect(items[0]).toEqual({
-      url: "https://www.api.bg/bg/novini/remont-am-hemus",
-      title: 'Ограничава се движението по АМ "Хемус" в посока Варна',
-      date: "10.06.2026",
-    });
-    expect(items[1]!.title).toBe("Статистика");
-    expect(items[1]!.date).toBeNull();
-  });
-
-  it("returns null when no panels", () => {
-    expect(roadsParsePage("<html><body></body></html>")).toBeNull();
-  });
-
-  it("parses an article: empty <p> dropped, remaining joined with newlines", () => {
-    const article = roadsParseArticle(roadsArticle)!;
-    expect(article.title).toBe('Ограничава се движението по АМ "Хемус" в посока Варна');
-    expect(article.date).toBe("10.06.2026");
-    expect(article.content).toBe(
-      "Поради ремонтни дейности се ограничава движението в участъка от км 350 до км 355."
-      + "\nМолим шофьорите да карат внимателно.",
-    );
-  });
-
-  it("returns null when the section is missing", () => {
-    expect(roadsParseArticle("<html><body></body></html>")).toBeNull();
   });
 });

@@ -12,9 +12,9 @@ interface DomNode {
   children?: DomNode[];
 }
 
-// Some sources (e.g. api.bg) serve empty/blocked responses to non-browser
-// user agents, so every fetch identifies as a browser (verified edge-safe in
-// spike 1 — byte-identical responses from Cloudflare's ranges).
+// Some sources serve empty/blocked responses to non-browser user agents, so
+// every fetch identifies as a browser (verified edge-safe in spike 1 —
+// byte-identical responses from Cloudflare's ranges).
 export const DEFAULT_HEADERS: Record<string, string> = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -197,68 +197,5 @@ export function heatingParseMessage(html: string): { title: string; content: str
   return {
     title: title.length ? getText(title, " ") : "",
     content: getText(body, " "),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// API — Road Infrastructure Agency news (api.bg)
-// ---------------------------------------------------------------------------
-
-export interface RoadsNewsItem {
-  url: string;
-  title: string;
-  date: string | null;
-}
-
-/** Parse the api.bg news listing page (newest first), or null. */
-export function roadsParsePage(html: string): RoadsNewsItem[] | null {
-  const $ = cheerio.load(html);
-  const panels = $("div.news-panel");
-  if (panels.length === 0) {
-    console.error("[scrape] roadsParsePage: no div.news-panel found.");
-    return null;
-  }
-
-  const results: RoadsNewsItem[] = [];
-  panels.each((_, panel) => {
-    const $panel = $(panel);
-    const a = $panel.find("a[href]").first();
-    const href = a.attr("href");
-    if (!href) {
-      console.warn("[scrape] roadsParsePage: news-panel has no link. Skipping.");
-      return;
-    }
-    const date = $panel.find(".news-date").first();
-    const title = $panel.find(".news-panel-copy").first();
-    results.push({
-      url: href,
-      title: title.length ? getText(title, " ") : a.attr("title") ?? "",
-      date: date.length ? getText(date, "") : null,
-    });
-  });
-  return results;
-}
-
-/** Parse an api.bg news article page, or null. */
-export function roadsParseArticle(html: string): { title: string; date: string | null; content: string } | null {
-  const $ = cheerio.load(html);
-  const section = $("section#single-news");
-  if (section.length === 0) {
-    console.error("[scrape] roadsParseArticle: section#single-news not found.");
-    return null;
-  }
-
-  const title = section.find("h1").first();
-  const date = section.find(".date").first();
-  const paragraphs: string[] = [];
-  section.find("p").each((_, p) => {
-    const text = getText($(p), " ");
-    if (text) paragraphs.push(text);
-  });
-
-  return {
-    title: title.length ? getText(title, " ") : "",
-    date: date.length ? getText(date, "") : null,
-    content: paragraphs.join("\n"),
   };
 }

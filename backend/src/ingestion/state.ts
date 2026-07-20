@@ -1,6 +1,6 @@
 // crawl_state repository on D1 — port of data/postgres/state_repository.py.
-// Two shapes: a numeric cursor (vik, heating) and a seen-id set (vt, epro,
-// roads; JSON array capped at MAX_SEEN_IDS). All functions return safe
+// Two shapes: a numeric cursor (vik, heating) and a seen-id set (vt, epro;
+// JSON array capped at MAX_SEEN_IDS). All functions return safe
 // defaults on error so a database hiccup never crashes a source run.
 
 import type { Env } from "../env";

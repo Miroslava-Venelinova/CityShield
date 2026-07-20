@@ -123,7 +123,7 @@ export default function HomeScreen() {
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
   const [activeFilter, setActiveFilter] =
-    useState<'all' | 'vik' | 'vt' | 'epro' | 'heating' | 'roads'>('all');
+    useState<'all' | 'vik' | 'vt' | 'epro' | 'heating'>('all');
   const [feedTab, setFeedTab] = useState<'recent' | 'active'>('recent');
 
   const sheetAnim = useRef(new Animated.Value(0)).current;
@@ -358,7 +358,7 @@ export default function HomeScreen() {
 
         {/* ── Source filter chips ── */}
         <View style={styles.filterRow}>
-          {(['all', 'vik', 'vt', 'epro', 'heating', 'roads'] as const).map(f => (
+          {(['all', 'vik', 'vt', 'epro', 'heating'] as const).map(f => (
             <TouchableOpacity
               key={f}
               style={[styles.filterChip, activeFilter === f && styles.filterChipActive]}

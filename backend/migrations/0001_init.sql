@@ -42,7 +42,7 @@ CREATE TABLE user_notification_preferences (
 
 CREATE TABLE alerts (
     id             TEXT PRIMARY KEY,      -- uuid v4
-    category       TEXT NOT NULL,         -- vik | epro | heating | roads | vt
+    category       TEXT NOT NULL,         -- vik | epro | heating | vt
     title          TEXT NOT NULL,
     content        TEXT NOT NULL,
     severity       TEXT NOT NULL DEFAULT 'info',

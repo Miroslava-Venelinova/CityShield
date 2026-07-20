@@ -21,7 +21,6 @@ const en = {
   'category.vt': 'Traffic',
   'category.epro': 'Power (еПро)',
   'category.heating': 'Heating',
-  'category.roads': 'Roads (АПИ)',
   'category.general': 'General',
 
   // ── Severity ──
@@ -104,8 +103,8 @@ const en = {
   'home.tapCard': 'Tap a card to view details',
   'home.howItWorks': 'How it works',
   'home.howItWorksText':
-    'Alerts from ВиК (water), еПро (power), Веолия (heating) and АПИ ' +
-    '(roads) are scraped, AI-parsed, and geo-located on the map. ' +
+    'Alerts from ВиК (water), еПро (power) and Веолия (heating) ' +
+    'are scraped, AI-parsed, and geo-located on the map. ' +
     'VarnaTraffic route changes arrive as notifications and show up ' +
     'under Recent — pick your bus lines in Notifications → Categories.',
   'home.defaultAlertTitle': 'Alert',
@@ -233,7 +232,6 @@ const bg: Record<TranslationKey, string> = {
   'category.vt': 'Транспорт',
   'category.epro': 'Ток (еПро)',
   'category.heating': 'Парно',
-  'category.roads': 'Пътища (АПИ)',
   'category.general': 'Общи',
 
   // ── Сериозност ──
@@ -318,7 +316,7 @@ const bg: Record<TranslationKey, string> = {
   'home.tapCard': 'Докоснете карта, за да видите детайли',
   'home.howItWorks': 'Как работи',
   'home.howItWorksText':
-    'Сигналите от ВиК (вода), еПро (ток), Веолия (парно) и АПИ (пътища) се ' +
+    'Сигналите от ВиК (вода), еПро (ток) и Веолия (парно) се ' +
     'събират автоматично, обработват се с AI и се позиционират на картата. ' +
     'Промените в маршрутите от VarnaTraffic пристигат като известия и се ' +
     'показват в „Скорошни“ — изберете автобусните си линии от ' +

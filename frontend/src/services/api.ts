@@ -156,7 +156,7 @@ export interface ProcessedData {
   end_time:   string | null;
 }
 
-export type AlertSource = 'vik' | 'vt' | 'epro' | 'heating' | 'roads';
+export type AlertSource = 'vik' | 'vt' | 'epro' | 'heating';
 
 export interface Alert {
   id: string;

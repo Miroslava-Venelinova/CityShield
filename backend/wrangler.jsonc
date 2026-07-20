@@ -27,7 +27,6 @@
     "EPRO_AREA_NAME": "Варна",
     "HEATING_BASE_URL": "https://energy-varna.bg",
     "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
-    "ROADS_URL": "https://www.api.bg/bg/novini",
     // Spike 1 verdict: kumi.systems was down; overpass-api.de works with a descriptive UA.
     "OVERPASS_URL": "https://overpass-api.de/api/interpreter",
     "NOMINATIM_URL": "https://nominatim.openstreetmap.org",

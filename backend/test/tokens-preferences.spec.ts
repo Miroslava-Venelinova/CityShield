@@ -37,12 +37,12 @@ describe("/api/tokens", () => {
 });
 
 describe("/api/preferences", () => {
-  it("returns all 5 categories, enabled by default, in catalog order", async () => {
+  it("returns all 4 categories, enabled by default, in catalog order", async () => {
     const { token } = await registerAndLogin();
     const res = await api("/api/preferences", { headers: { Authorization: `Bearer ${token}` } });
     expect(res.status).toBe(200);
     const prefs = await res.json() as Array<{ category: string; label: string; isEnabled: boolean }>;
-    expect(prefs.map((p) => p.category)).toEqual(["vik", "vt", "epro", "heating", "roads"]);
+    expect(prefs.map((p) => p.category)).toEqual(["vik", "vt", "epro", "heating"]);
     expect(prefs.every((p) => p.isEnabled)).toBe(true);
     expect(prefs[0]).toEqual({ category: "vik", label: "Water (ВиК)", isEnabled: true });
   });

@@ -10,7 +10,6 @@ export interface Env {
   EPRO_AREA_NAME: string;
   HEATING_BASE_URL: string;
   HEATING_URL: string;
-  ROADS_URL: string;
   OVERPASS_URL: string;
   NOMINATIM_URL: string;
   JWT_ISSUER: string;
