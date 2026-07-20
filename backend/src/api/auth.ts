@@ -10,6 +10,7 @@ import { hashPassword, verifyPassword } from "../core/password";
 import * as q from "../db/queries";
 import type { AppEnv } from "./middleware";
 import { requireAuth } from "./middleware";
+import { clientIp, isOverLimit, perUserRateLimit, tooManyRequests } from "./rate-limit";
 
 // Mirrors RegisterRequest.cs data annotations.
 const registerSchema = z.object({
@@ -28,25 +29,14 @@ const locationSchema = z.object({
   longitude: z.number().min(-180).max(180),
 });
 
-// Best-effort in-isolate login throttle (PLAN.MD §1.4): PBKDF2@100k is weaker
-// than bcrypt, so cap attempts per (email, ip) at 10/minute.
-const WINDOW_MS = 60_000;
-const MAX_ATTEMPTS = 10;
-const loginAttempts = new Map<string, number[]>();
-
-function isThrottled(email: string, ip: string): boolean {
-  const key = `${email.toLowerCase()}|${ip}`;
-  const now = Date.now();
-  const recent = (loginAttempts.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  recent.push(now);
-  loginAttempts.set(key, recent);
-  if (loginAttempts.size > 10_000) loginAttempts.clear(); // unbounded-growth guard
-  return recent.length > MAX_ATTEMPTS;
-}
-
 export const authRoutes = new Hono<AppEnv>()
 
   .post("/register", async (c) => {
+    // Signup is the cheapest endpoint to abuse: it both writes rows and, via
+    // the 409 below, discloses whether an address is registered.
+    const ip = clientIp(c.req.raw.headers);
+    if (await isOverLimit(c.env.RL_REGISTER_IP, ip, "RL_REGISTER_IP")) return tooManyRequests(60);
+
     const parsed = registerSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.text("Invalid registration data", 400);
     const { email, password } = parsed.data;
@@ -63,8 +53,14 @@ export const authRoutes = new Hono<AppEnv>()
     if (!parsed.success) return c.text("Invalid login data", 400);
     const { email, password } = parsed.data;
 
-    const ip = c.req.header("CF-Connecting-IP") ?? "local";
-    if (isThrottled(email, ip)) return c.text("Too many login attempts", 429);
+    // Two independent limiters, because one key cannot catch both attack
+    // shapes. The previous (email, ip) composite key caught neither: password
+    // spraying varies the email, and a botnet varies the IP, so each attempt
+    // landed in a fresh bucket that never filled.
+    const ip = clientIp(c.req.raw.headers);
+    if (await isOverLimit(c.env.RL_LOGIN_IP, ip, "RL_LOGIN_IP")) return tooManyRequests(60);
+    if (await isOverLimit(c.env.RL_LOGIN_EMAIL, email.toLowerCase(), "RL_LOGIN_EMAIL"))
+      return tooManyRequests(60);
 
     const user = await q.getUserByEmail(c.env, email);
     if (!user || !(await verifyPassword(password, user.password_hash)))
@@ -137,7 +133,11 @@ export const authRoutes = new Hono<AppEnv>()
     return c.body(null, 204);
   })
 
-  .put("/location", requireAuth, async (c) => {
+  // Rate limited per user: each call makes an outbound Nominatim request, and
+  // OSMF's usage policy (≤1 req/s) is a commitment we make in the privacy
+  // policy (§2.2). Without this, one client in a retry loop can get the
+  // Worker's egress IPs blocked for every user.
+  .put("/location", requireAuth, perUserRateLimit((e) => e.RL_GEOCODE_USER, "RL_GEOCODE_USER", 60), async (c) => {
     const parsed = locationSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.text("Invalid location data", 400);
     const { latitude, longitude } = parsed.data;

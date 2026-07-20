@@ -17,6 +17,25 @@
     }
   ],
   "ai": { "binding": "AI" },
+  // Rate limiting (§2.4). NOTE: these counters are local to each Cloudflare
+  // location and are documented as "permissive, eventually consistent" — they
+  // blunt credential stuffing and scripted abuse, they are not an accounting
+  // system. `period` only accepts 10 or 60.
+  "ratelimits": [
+    // Credential stuffing: one IP grinding many accounts.
+    { "name": "RL_LOGIN_IP", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
+    // Brute force: many IPs grinding one account. Keyed on email only, so a
+    // botnet targeting a single user still hits this ceiling.
+    { "name": "RL_LOGIN_EMAIL", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } },
+    // Signup spam / enumeration at scale.
+    { "name": "RL_REGISTER_IP", "namespace_id": "1003", "simple": { "limit": 5, "period": 60 } },
+    // Every location write costs an outbound Nominatim call, whose usage policy
+    // we are contractually bound to (§2.2). Keyed per user.
+    { "name": "RL_GEOCODE_USER", "namespace_id": "1004", "simple": { "limit": 5, "period": 60 } },
+    // Blanket backstop so no authenticated route can be used to burn the
+    // 100k req/day free-plan budget.
+    { "name": "RL_API_IP", "namespace_id": "1005", "simple": { "limit": 120, "period": 60 } }
+  ],
   "vars": {
     // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes
     // JSON-schema mode on our nullable-union schemas, and the cheapest. Needs max_tokens: 8000.

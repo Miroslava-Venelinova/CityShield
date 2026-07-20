@@ -21,6 +21,19 @@ export default defineWorkersProject(async () => {
           singleWorker: true,
           wrangler: { configPath: "./wrangler.jsonc" },
           miniflare: {
+            // Mirrors the `ratelimits` block in wrangler.jsonc — keep the two
+            // in sync. They are duplicated rather than derived because the
+            // pinned vitest-pool-workers (0.8.x) bundles its own wrangler
+            // 4.35, which predates the `ratelimits` config key and drops it
+            // with an "unexpected field" warning. Deriving them would mean
+            // upgrading to vitest-pool-workers 0.18, which requires vitest 4.
+            ratelimits: {
+              RL_LOGIN_IP: { simple: { limit: 20, period: 60 } },
+              RL_LOGIN_EMAIL: { simple: { limit: 10, period: 60 } },
+              RL_REGISTER_IP: { simple: { limit: 5, period: 60 } },
+              RL_GEOCODE_USER: { simple: { limit: 5, period: 60 } },
+              RL_API_IP: { simple: { limit: 120, period: 60 } },
+            },
             bindings: {
               TEST_MIGRATIONS: migrations,
               TEST_FIXTURES: fixtures,

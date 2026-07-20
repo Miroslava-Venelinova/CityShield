@@ -1,8 +1,24 @@
 import { env } from "cloudflare:test";
 import { app } from "../src/api/app";
 
-export async function api(path: string, init?: RequestInit): Promise<Response> {
-  return app.request(path, init, env);
+let ipCounter = 0;
+
+/** A caller IP no other test has used, so the rate limiters stay out of the way. */
+export function freshIp(): string {
+  const n = ++ipCounter;
+  return `203.0.113.${n % 256}.${Math.floor(n / 256)}`;
+}
+
+/**
+ * Rate limiters key on `CF-Connecting-IP`, and miniflare enforces them for
+ * real. Without a per-call IP the suite throttles itself — every request would
+ * share the one "local" fallback bucket and trip RL_REGISTER_IP after five
+ * registrations. Tests that assert throttling pass an explicit fixed IP.
+ */
+export async function api(path: string, init?: RequestInit, ip?: string): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  headers.set("CF-Connecting-IP", ip ?? freshIp());
+  return app.request(path, { ...init, headers }, env);
 }
 
 export function jsonInit(method: string, body: unknown, token?: string): RequestInit {

@@ -58,11 +58,59 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(401);
   });
 
-  it("throttles after 10 attempts per email+ip per minute", async () => {
-    const email = `throttle-${Date.now()}@example.com`;
+});
+
+describe("rate limiting", () => {
+  // Both shapes matter: the old (email, ip) composite key caught neither,
+  // because each attempt varied one half of the key into a fresh bucket.
+
+  it("throttles brute force against one account, even from many IPs", async () => {
+    const email = `victim-${Date.now()}@example.com`;
     let last: Response | undefined;
     for (let i = 0; i < 11; i++) {
+      // Fresh IP each attempt — only the email-keyed limiter can catch this.
       last = await api("/api/auth/login", jsonInit("POST", { email, password: "wrong" }));
+    }
+    expect(last!.status).toBe(429);
+  });
+
+  it("throttles password spraying from one IP across many accounts", async () => {
+    const ip = "198.51.100.7";
+    let last: Response | undefined;
+    for (let i = 0; i < 21; i++) {
+      // Fresh email each attempt — only the IP-keyed limiter can catch this.
+      last = await api("/api/auth/login",
+        jsonInit("POST", { email: `spray-${i}-${Date.now()}@example.com`, password: "wrong" }), ip);
+    }
+    expect(last!.status).toBe(429);
+  });
+
+  it("throttles signup floods per IP", async () => {
+    const ip = "198.51.100.8";
+    let last: Response | undefined;
+    for (let i = 0; i < 6; i++) {
+      last = await api("/api/auth/register",
+        jsonInit("POST", { email: `flood-${i}-${Date.now()}@example.com`, password: "longenough" }), ip);
+    }
+    expect(last!.status).toBe(429);
+  });
+
+  it("throttles location writes per user, protecting the Nominatim budget", async () => {
+    const { token } = await registerAndLogin();
+
+    // Exactly 5 geocode calls are allowed through; the 6th must be rejected
+    // before any outbound request. Interceptors are registered `.times(5)`, so
+    // a 6th call would fail the test via an unmatched request.
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(500, "boom")
+      .times(5);
+
+    let last: Response | undefined;
+    for (let i = 0; i < 6; i++) {
+      // Fresh IP each call, so this can only be the per-user limiter firing.
+      last = await api("/api/auth/location",
+        jsonInit("PUT", { latitude: 43.2, longitude: 27.9 }, token));
     }
     expect(last!.status).toBe(429);
   });

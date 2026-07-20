@@ -5,6 +5,7 @@ import { authRoutes } from "./auth";
 import type { AppEnv } from "./middleware";
 import { preferenceRoutes } from "./preferences";
 import { privacyRoutes } from "./privacy";
+import { globalRateLimit } from "./rate-limit";
 import { tokenRoutes } from "./tokens";
 
 export const app = new Hono<AppEnv>();
@@ -14,6 +15,11 @@ app.use(async (c, next) => {
   assertConfig(c.env);
   await next();
 });
+
+// Per-IP backstop on the public API. Mounted under /api only: /internal is the
+// push-batch self-chaining route (§1.6), which legitimately bursts far above
+// any human rate and is already gated by INGEST_API_KEY.
+app.use("/api/*", globalRateLimit);
 
 app.route("/api/auth", authRoutes);
 app.route("/api/alerts", alertRoutes);

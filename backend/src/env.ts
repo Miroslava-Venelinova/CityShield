@@ -2,6 +2,15 @@ export interface Env {
   DB: D1Database;
   AI: Ai;
 
+  // Rate limiters (wrangler.jsonc `ratelimits`). Optional in the type because a
+  // stale deploy or a miniflare setup without the binding must not 500 every
+  // request — `enforceLimit` degrades to allow-and-warn, see api/rate-limit.ts.
+  RL_LOGIN_IP?: RateLimit;
+  RL_LOGIN_EMAIL?: RateLimit;
+  RL_REGISTER_IP?: RateLimit;
+  RL_GEOCODE_USER?: RateLimit;
+  RL_API_IP?: RateLimit;
+
   // vars (wrangler.jsonc)
   AI_MODEL: string;
   VIK_URL: string;
