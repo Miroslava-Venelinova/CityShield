@@ -553,19 +553,19 @@ function EmptyInbox() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: colors.navy},
+  container: {flex: 1, backgroundColor: colors.surface},
 
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing.lg, paddingTop: spacing.xl, paddingBottom: spacing.md,
-    backgroundColor: colors.dark, borderBottomWidth: 1, borderBottomColor: colors.border,
+    backgroundColor: colors.background, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   headerTitle: {color: colors.textPrimary, fontSize: font.sizes.xxl, fontWeight: font.weights.bold},
   headerSub:   {color: colors.primary, fontSize: font.sizes.xs, marginTop: 2},
   markAllBtn:  {paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary},
   markAllText: {color: colors.primary, fontSize: font.sizes.xs, fontWeight: font.weights.semibold},
 
-  tabBar:       {flexDirection: 'row', backgroundColor: colors.dark, paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm},
+  tabBar:       {flexDirection: 'row', backgroundColor: colors.background, paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm},
   tab:          {flex: 1, flexDirection: 'row', justifyContent: 'center', gap: 6, alignItems: 'center', paddingVertical: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border},
   tabActive:    {backgroundColor: `${colors.primary}22`, borderColor: colors.primary},
   tabText:      {color: colors.textMuted, fontSize: font.sizes.sm, fontWeight: font.weights.medium},
@@ -589,7 +589,7 @@ const styles = StyleSheet.create({
   cardTitle:       {flex: 1, color: colors.textSecondary, fontSize: font.sizes.md, fontWeight: font.weights.medium},
   cardTitleUnread: {color: colors.textPrimary, fontWeight: font.weights.semibold},
   cardTime:        {color: colors.textMuted, fontSize: font.sizes.xs, marginLeft: spacing.xs},
-  cardMessage:     {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: 18},
+  cardMessage:     {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm},
   timeRow:         {flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2},
   timeText:        {color: colors.textMuted, fontSize: font.sizes.xs},
   cardFooter:      {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4},
@@ -605,10 +605,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   emptyTitle: {color: colors.textPrimary, fontSize: font.sizes.xl, fontWeight: font.weights.semibold},
-  emptySub:   {color: colors.textMuted, fontSize: font.sizes.sm, textAlign: 'center', lineHeight: 20},
+  emptySub:   {color: colors.textMuted, fontSize: font.sizes.sm, textAlign: 'center', lineHeight: font.lineHeights.sm},
 
   settingsWrap: {flex: 1, padding: spacing.lg},
-  settingsHint: {color: colors.textMuted, fontSize: font.sizes.sm, lineHeight: 20, marginBottom: spacing.lg},
+  settingsHint: {color: colors.textMuted, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm, marginBottom: spacing.lg},
   prefsCard:    {backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, overflow: 'hidden'},
   divider:      {height: 1, backgroundColor: colors.border, marginLeft: 68},
   prefRow:      {flexDirection: 'row', alignItems: 'center', padding: spacing.md, gap: spacing.md},
@@ -623,7 +623,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     paddingVertical: spacing.sm, paddingRight: spacing.md,
     paddingLeft: 68, // aligns with the category label above
-    backgroundColor: colors.dark,
+    backgroundColor: colors.background,
     borderTopWidth: 1, borderTopColor: colors.border,
   },
   busLineText:  {flex: 1},
@@ -634,7 +634,7 @@ const styles = StyleSheet.create({
 // ── Bus-line dropdown styles ─────────────────────────────────────────────────
 const picker = StyleSheet.create({
   overlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    flex: 1, backgroundColor: colors.overlay,
     justifyContent: 'center', padding: spacing.lg,
   },
   card: {
@@ -646,9 +646,9 @@ const picker = StyleSheet.create({
   title:    {flex: 1, color: colors.textPrimary, fontSize: font.sizes.lg, fontWeight: font.weights.bold},
   closeBtn: {
     width: 28, height: 28, borderRadius: 14,
-    backgroundColor: colors.dark, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center',
   },
-  hint: {color: colors.textMuted, fontSize: font.sizes.xs, lineHeight: 17, marginBottom: spacing.md},
+  hint: {color: colors.textMuted, fontSize: font.sizes.xs, lineHeight: font.lineHeights.xs, marginBottom: spacing.md},
   list: {flexShrink: 1, borderTopWidth: 1, borderTopColor: colors.border},
   row: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -667,7 +667,7 @@ const picker = StyleSheet.create({
 
 const modal = StyleSheet.create({
   overlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    flex: 1, backgroundColor: colors.overlay,
     justifyContent: 'flex-end',
   },
   sheet: {
@@ -690,14 +690,14 @@ const modal = StyleSheet.create({
   unreadBadge:   {backgroundColor: `${colors.primary}22`, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2, borderWidth: 1, borderColor: `${colors.primary}55`},
   unreadBadgeText:{color: colors.primary, fontSize: 10, fontWeight: font.weights.semibold},
 
-  title:      {color: colors.textPrimary, fontSize: font.sizes.xl, fontWeight: font.weights.bold, lineHeight: 28, marginBottom: spacing.md},
+  title:      {color: colors.textPrimary, fontSize: font.sizes.xl, fontWeight: font.weights.bold, lineHeight: font.lineHeights.xl, marginBottom: spacing.md},
 
   timeBox:      {flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md},
   timeBoxLabel: {color: colors.textMuted, fontSize: font.sizes.xs, marginBottom: 2},
   timeBoxValue: {color: colors.textPrimary, fontSize: font.sizes.md, fontWeight: font.weights.medium},
 
-  bodyBox:    {backgroundColor: colors.dark, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border},
-  bodyText:   {color: colors.textSecondary, fontSize: font.sizes.md, lineHeight: 24},
+  bodyBox:    {backgroundColor: colors.background, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border},
+  bodyText:   {color: colors.textSecondary, fontSize: font.sizes.md, lineHeight: font.lineHeights.md},
 
   receivedAt: {color: colors.textMuted, fontSize: font.sizes.xs, textAlign: 'right', marginBottom: spacing.lg},
 

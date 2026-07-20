@@ -46,6 +46,37 @@ export interface BusLineSubscriptionDTO {
 
 // ── Core fetch ────────────────────────────────────────────────────────────────
 
+/**
+ * An API call that failed. Carries the HTTP status so callers can react to
+ * specific cases (429 cooldowns, 401 re-auth) instead of pattern-matching on
+ * message strings.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  /** Raw response body — for logging, never for display. */
+  readonly body: string;
+
+  constructor(status: number, body: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+
+  /** True when the server rate-limited this request. */
+  get isRateLimited(): boolean {
+    return this.status === 429;
+  }
+}
+
+/** Raised when the request never reached the server at all. */
+export class NetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -65,18 +96,29 @@ async function request<T>(
   try {
     response = await fetch(url, {...options, headers});
   } catch (networkErr: any) {
-    throw new Error(
-      `Network error reaching ${url}\n` +
-      `Cause: ${networkErr?.message ?? String(networkErr)}\n\n` +
-      `Check:\n` +
-      `1. BASE_URL port matches your ASP.NET launchSettings.json\n` +
-      `2. API is running with UseUrls("http://0.0.0.0:<port>")\n` +
-      `3. android/app/src/main/res/xml/network_security_config.xml exists`,
+    // Diagnostics go to the log; the thrown message is shown to users, so it
+    // must not carry the API URL or backend setup instructions. (The previous
+    // message walked the user through ASP.NET launch settings — a backend that
+    // no longer exists.)
+    console.warn(
+      `Network error reaching ${url}: ${networkErr?.message ?? String(networkErr)}`,
     );
+    throw new NetworkError(`Request to ${path} never reached the server`);
   }
 
   const text = await response.text();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
+  if (!response.ok) {
+    // Server error bodies can echo back request content and are not localized,
+    // so they are kept on the error object for logging rather than displayed.
+    console.warn(`API ${options.method ?? 'GET'} ${path} → ${response.status}`);
+    throw new ApiError(
+      response.status,
+      text,
+      // Developer-facing only. Users see the localized string that screens
+      // resolve via `errorMessageKey` in services/errors.ts.
+      `${options.method ?? 'GET'} ${path} failed with ${response.status}`,
+    );
+  }
 
   try { return JSON.parse(text) as T; }
   catch { return text as unknown as T; }

@@ -8,7 +8,8 @@ import {
 } from 'react-native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {authApi} from '../services/api';
-import {colors, spacing, radius, font} from '../theme';
+import {errorMessageKey} from '../services/errors';
+import {colors, spacing, radius, font, elevation} from '../theme';
 import {AuthStackParamList} from '../navigation/types';
 import CityShieldLogo from '../components/CityShieldLogo';
 import Icon from '../components/icons';
@@ -49,8 +50,8 @@ export default function RegisterScreen({navigation}: Props) {
         t('register.createdMsg'),
         [{text: t('register.signIn'), onPress: () => navigation.navigate('Login')}],
       );
-    } catch (err: any) {
-      Alert.alert(t('register.failedTitle'), err.message || t('register.failedMsg'));
+    } catch (err: unknown) {
+      Alert.alert(t('register.failedTitle'), t(errorMessageKey(err, 'register.failedMsg')));
     } finally {
       setLoading(false);
     }
@@ -63,7 +64,7 @@ export default function RegisterScreen({navigation}: Props) {
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.dark} />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
         {/* Header */}
@@ -202,7 +203,7 @@ export default function RegisterScreen({navigation}: Props) {
 }
 
 const styles = StyleSheet.create({
-  flex:   {flex: 1, backgroundColor: colors.dark},
+  flex:   {flex: 1, backgroundColor: colors.background},
   scroll: {flexGrow: 1, padding: spacing.lg, paddingTop: spacing.xl},
 
   header:          {flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xl},
@@ -220,7 +221,7 @@ const styles = StyleSheet.create({
   progressNumInactive:{fontSize: font.sizes.sm, color: colors.textMuted},
   progressLabel:      {textAlign: 'center', color: colors.textMuted, fontSize: font.sizes.xs, marginBottom: spacing.lg},
 
-  card: {backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.xl, borderWidth: 1, borderColor: colors.border, shadowColor: colors.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.08, shadowRadius: 16, elevation: 3},
+  card: {backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.xl, borderWidth: 1, borderColor: colors.border, ...elevation.md},
 
   sectionHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md},
   sectionDot:    {width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent, marginRight: spacing.sm},
@@ -228,7 +229,7 @@ const styles = StyleSheet.create({
 
   inputGroup:   {marginBottom: spacing.md},
   label:        {fontSize: font.sizes.xs, fontWeight: font.weights.semibold, color: colors.textSecondary, marginBottom: spacing.xs, textTransform: 'uppercase', letterSpacing: 0.5},
-  inputWrapper: {flexDirection: 'row', alignItems: 'center', backgroundColor: colors.dark, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border, paddingHorizontal: spacing.md},
+  inputWrapper: {flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border, paddingHorizontal: spacing.md},
   inputValid:   {borderColor: colors.success},
   inputInvalid: {borderColor: colors.danger},
   inputIcon:    {marginRight: spacing.sm},
@@ -237,9 +238,9 @@ const styles = StyleSheet.create({
 
   infoBox:     {flexDirection: 'row', backgroundColor: `${colors.accent}15`, borderRadius: radius.md, padding: spacing.md, borderLeftWidth: 3, borderLeftColor: colors.accent, marginBottom: spacing.md, marginTop: spacing.sm, gap: spacing.sm},
   infoBoxIcon: {marginTop: 1},
-  infoText:    {flex: 1, color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: 20},
+  infoText:    {flex: 1, color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm},
 
-  primaryBtn:     {backgroundColor: colors.primary, borderRadius: radius.md, height: 52, alignItems: 'center', justifyContent: 'center', marginTop: spacing.md, shadowColor: colors.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 10, elevation: 6},
+  primaryBtn:     {backgroundColor: colors.primary, borderRadius: radius.md, height: 52, alignItems: 'center', justifyContent: 'center', marginTop: spacing.md, ...elevation.accent},
   btnDisabled:    {opacity: 0.6},
   primaryBtnText: {color: colors.white, fontSize: font.sizes.lg, fontWeight: font.weights.bold},
   linkBtn:        {alignItems: 'center', marginTop: spacing.lg},

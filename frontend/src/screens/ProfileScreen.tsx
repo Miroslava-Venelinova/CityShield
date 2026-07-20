@@ -9,6 +9,7 @@ import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
 import {TranslationKey} from '../i18n/translations';
 import {tokensApi, authApi} from '../services/api';
+import {errorMessageKey} from '../services/errors';
 import {getFCMToken, registerTokenRefreshHandler} from '../services/fcm';
 import {colors, spacing, radius, font} from '../theme';
 import Icon, {IconName} from '../components/icons';
@@ -151,8 +152,8 @@ export default function ProfileScreen() {
       setDeviceRegistered(true);
       Alert.alert(t('profile.deviceRegisteredTitle'),
         t('profile.deviceRegisteredMsg'));
-    } catch (err: any) {
-      Alert.alert(t('profile.registrationFailed'), err.message);
+    } catch (err: unknown) {
+      Alert.alert(t('profile.registrationFailed'), t(errorMessageKey(err)));
     } finally {
       setFcmLoading(false);
     }
@@ -188,8 +189,10 @@ export default function ProfileScreen() {
       await refreshProfile();
       Alert.alert(t('profile.locationUpdatedTitle'),
         t('profile.locationUpdatedMsg'));
-    } catch (err: any) {
-      Alert.alert(t('profile.updateFailedTitle'), err.message);
+    } catch (err: unknown) {
+      // A 429 here is the per-user geocoding limiter, which protects our
+      // Nominatim usage-policy commitment — the message tells users to wait.
+      Alert.alert(t('profile.updateFailedTitle'), t(errorMessageKey(err)));
     } finally {
       setLocationLoading(false);
     }
@@ -197,7 +200,7 @@ export default function ProfileScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.dark} />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <ScrollView contentContainerStyle={styles.scroll}>
 
         {/* ── No-location banner ── */}
@@ -501,7 +504,7 @@ const sec = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  container:     {flex: 1, backgroundColor: colors.navy},
+  container:     {flex: 1, backgroundColor: colors.surface},
   scroll:        {flexGrow: 1},
 
   locationBanner:{
@@ -514,7 +517,7 @@ const styles = StyleSheet.create({
   bannerTitle:   {color: colors.textPrimary, fontSize: font.sizes.md, fontWeight: font.weights.semibold},
   bannerSub:     {color: colors.textSecondary, fontSize: font.sizes.xs, marginTop: 2},
 
-  profileHeader: {alignItems: 'center', paddingTop: spacing.xl, paddingBottom: spacing.xl, backgroundColor: colors.dark, borderBottomWidth: 1, borderBottomColor: colors.border},
+  profileHeader: {alignItems: 'center', paddingTop: spacing.xl, paddingBottom: spacing.xl, backgroundColor: colors.background, borderBottomWidth: 1, borderBottomColor: colors.border},
   avatarRing:    {width: 90, height: 90, borderRadius: 45, borderWidth: 2.5, borderColor: colors.primary, padding: 3, marginBottom: spacing.md},
   avatar:        {flex: 1, borderRadius: 42, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center'},
   avatarText:    {fontSize: font.sizes.xxl, fontWeight: font.weights.bold, color: colors.white},
@@ -539,7 +542,7 @@ const styles = StyleSheet.create({
   modalCard:     {backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.xl, width: '100%', borderWidth: 1, borderColor: colors.border, gap: spacing.md},
   modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: spacing.sm},
   modalTitle:    {color: colors.textPrimary, fontSize: font.sizes.xl, fontWeight: font.weights.bold},
-  modalSub:      {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: 20},
+  modalSub:      {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm},
   mapWrap:       {height: 320, borderRadius: radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: colors.border},
   map:           {flex: 1},
   coordHint:     {backgroundColor: `${colors.primary}15`, borderRadius: radius.md, padding: spacing.sm, color: colors.textMuted, fontSize: font.sizes.xs, borderLeftWidth: 3, borderLeftColor: colors.primary},

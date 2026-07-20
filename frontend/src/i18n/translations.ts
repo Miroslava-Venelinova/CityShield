@@ -10,6 +10,16 @@ const en = {
   'common.error': 'Error',
   'common.from': 'From',
   'common.until': 'Until',
+  'common.retry': 'Try again',
+
+  // ── API errors ──
+  // Shown to users in place of raw server bodies / HTTP status text.
+  'error.network': 'Could not reach CityShield. Check your connection and try again.',
+  'error.rateLimited': 'Too many attempts. Please wait a moment and try again.',
+  'error.session': 'Your session has expired. Please sign in again.',
+  'error.duplicateEmail': 'An account with this email already exists.',
+  'error.server': 'CityShield is having trouble right now. Please try again later.',
+  'error.generic': 'Something went wrong. Please try again.',
 
   // ── Tab bar ──
   'tabs.home': 'Home',
@@ -219,8 +229,17 @@ const bg: Record<TranslationKey, string> = {
   'common.cancel': 'Отказ',
   'common.loading': 'Зареждане…',
   'common.error': 'Грешка',
+
+  // ── Грешки от API ──
+  'error.network': 'CityShield е недостъпен. Проверете връзката си и опитайте отново.',
+  'error.rateLimited': 'Твърде много опити. Изчакайте малко и опитайте отново.',
+  'error.session': 'Сесията ви изтече. Моля, влезте отново.',
+  'error.duplicateEmail': 'Вече съществува акаунт с този имейл.',
+  'error.server': 'CityShield има временен проблем. Опитайте отново по-късно.',
+  'error.generic': 'Нещо се обърка. Моля, опитайте отново.',
   'common.from': 'От',
   'common.until': 'До',
+  'common.retry': 'Опитай отново',
 
   // ── Долна лента ──
   'tabs.home': 'Начало',

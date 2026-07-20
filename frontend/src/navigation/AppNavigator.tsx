@@ -133,7 +133,7 @@ function UnauthenticatedApp() {
     <AuthStack.Navigator
       screenOptions={{
         headerShown: false,
-        contentStyle: {backgroundColor: colors.navy},
+        contentStyle: {backgroundColor: colors.surface},
       }}>
       <AuthStack.Screen name="Login" component={LoginScreen} />
       <AuthStack.Screen name="Register" component={RegisterScreen} />
@@ -169,7 +169,7 @@ export default function AppNavigator() {
 const splash = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.navy,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },

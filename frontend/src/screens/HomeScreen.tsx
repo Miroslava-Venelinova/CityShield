@@ -13,11 +13,11 @@ import {
   Dimensions,
   ActivityIndicator,
 } from 'react-native';
-import {colors, spacing, radius, font} from '../theme';
+import {colors, spacing, radius, font, elevation} from '../theme';
 import CityShieldLogo from '../components/CityShieldLogo';
 import AlertMap, {AlertMapHandle, MapMarker, MapPolygon} from '../components/AlertMap';
 import Icon from '../components/icons';
-import {alertsApi, Alert} from '../services/api';
+import {alertsApi, Alert, AlertLocation} from '../services/api';
 import {getCategoryMeta, getCategoryLabelKey} from '../services/notifications';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
@@ -33,9 +33,9 @@ const SEVERITY_COLOR: Record<string, string> = {
 };
 
 const SEVERITY_BG: Record<string, string> = {
-  warning: 'rgba(217,119,6,0.12)',
-  info:    'rgba(14,165,233,0.12)',
-  danger:  'rgba(220,38,38,0.12)',
+  warning: colors.warningSoft,
+  info:    colors.infoSoft,
+  danger:  colors.dangerSoft,
 };
 
 // Per-category icon/color/label come from the shared registry in
@@ -63,6 +63,49 @@ function formatTime(alert: Alert, t: T): string {
   if (start_time && end_time) { return `${start_time} – ${end_time}`; }
   if (start_time) { return `${t('common.from')} ${start_time}`; }
   return '';
+}
+
+// ── Untrusted map geometry ────────────────────────────────────────────────────
+// Alert geometry originates from scraped pages, is shaped by an LLM and is
+// stored as opaque JSON, so its runtime shape is not guaranteed by the DTO
+// types. `polygon_geojson.coordinates[0].map(...)` therefore threw a
+// TypeError on any malformed polygon — inside a `useMemo` during render, which
+// took down the whole Home screen rather than dropping one bad shape.
+
+/** Locations array for an alert, tolerating a malformed `processed_data`. */
+function locationsOf(alert: Alert): AlertLocation[] {
+  const locations = alert.processed_data?.locations;
+  return Array.isArray(locations) ? locations : [];
+}
+
+/**
+ * Outer ring of a GeoJSON polygon as Leaflet [lat, lng] pairs, or null if the
+ * geometry is unusable. Accepts a bare Polygon geometry (what the API
+ * normalizes to) and reads the first ring of a MultiPolygon.
+ */
+function polygonRing(geojson: unknown): [number, number][] | null {
+  const geom = geojson as {type?: string; coordinates?: unknown} | null;
+  if (!geom || typeof geom !== 'object' || !Array.isArray(geom.coordinates)) {
+    return null;
+  }
+
+  const ring = geom.type === 'MultiPolygon'
+    ? (geom.coordinates as unknown[][])[0]?.[0]
+    : (geom.coordinates as unknown[])[0];
+  if (!Array.isArray(ring)) { return null; }
+
+  const coords: [number, number][] = [];
+  for (const pair of ring) {
+    // GeoJSON is [lng, lat]; Leaflet wants [lat, lng].
+    if (
+      Array.isArray(pair) && pair.length >= 2 &&
+      Number.isFinite(pair[0]) && Number.isFinite(pair[1])
+    ) {
+      coords.push([pair[1] as number, pair[0] as number]);
+    }
+  }
+  // Fewer than 3 vertices is not a renderable ring.
+  return coords.length >= 3 ? coords : null;
 }
 
 function severityLabel(severity: string, t: T): string {
@@ -218,13 +261,16 @@ export default function HomeScreen() {
 
   const mapMarkers: MapMarker[] = useMemo(
     () => mapAlerts.flatMap(alert =>
-      alert.processed_data.locations
-        .filter(l => l.lat && l.lng)
-        .map((loc, idx): MapMarker => ({
+      locationsOf(alert)
+        // `Number.isFinite`, not truthiness: a coordinate of exactly 0 is
+        // valid and was previously dropped.
+        .map((loc, idx) => ({loc, idx}))
+        .filter(({loc}) => Number.isFinite(loc.lat) && Number.isFinite(loc.lng))
+        .map(({loc, idx}): MapMarker => ({
           id: `${alert.id}::${idx}`,
           lat: loc.lat!,
           lng: loc.lng!,
-          color: SEVERITY_COLOR[alert.severity],
+          color: SEVERITY_COLOR[alert.severity] ?? colors.textMuted,
         }))
     ),
     [mapAlerts],
@@ -232,14 +278,14 @@ export default function HomeScreen() {
 
   const mapPolygons: MapPolygon[] = useMemo(
     () => mapAlerts.flatMap(alert =>
-      alert.processed_data.locations
-        .filter(l => l.is_polygon && l.polygon_geojson)
-        .map((loc, idx): MapPolygon => ({
+      locationsOf(alert)
+        .map((loc, idx) => ({ring: loc.is_polygon ? polygonRing(loc.polygon_geojson) : null, idx}))
+        // Unusable geometry drops that one shape; the rest of the map renders.
+        .filter((entry): entry is {ring: [number, number][]; idx: number} => entry.ring !== null)
+        .map(({ring, idx}): MapPolygon => ({
           id: `poly-${alert.id}-${idx}`,
-          coords: loc.polygon_geojson!.coordinates[0].map(
-            ([lng, lat]: [number, number]): [number, number] => [lat, lng]
-          ),
-          color: SEVERITY_COLOR[alert.severity],
+          coords: ring,
+          color: SEVERITY_COLOR[alert.severity] ?? colors.textMuted,
         }))
     ),
     [mapAlerts],
@@ -425,11 +471,18 @@ export default function HomeScreen() {
             </View>
           ) : feedAlerts.length === 0 ? (
             <View style={styles.emptyWrap}>
-              <Icon
-                name={fetchFailed ? 'refresh' : 'check'}
-                size={30}
-                color={fetchFailed ? colors.textMuted : colors.success}
-              />
+              {/* Tinted disc behind the glyph — gives the empty state a focal
+                  point instead of a bare icon floating in whitespace. */}
+              <View style={[
+                styles.emptyIconDisc,
+                {backgroundColor: fetchFailed ? colors.card : colors.successSoft},
+              ]}>
+                <Icon
+                  name={fetchFailed ? 'refresh' : 'check'}
+                  size={28}
+                  color={fetchFailed ? colors.textSecondary : colors.success}
+                />
+              </View>
               <Text style={styles.emptyTitle}>
                 {fetchFailed ? t('home.loadFailedTitle') : t('home.allClear')}
               </Text>
@@ -440,6 +493,17 @@ export default function HomeScreen() {
                     ? t('home.emptyActiveSub')
                     : t('home.emptyRecentSub')}
               </Text>
+              {/* The failure state previously showed a refresh *icon* with no
+                  way to act on it — pull-to-refresh was the only recovery. */}
+              {fetchFailed && (
+                <TouchableOpacity
+                  style={styles.emptyRetryBtn}
+                  onPress={onRefresh}
+                  activeOpacity={0.85}>
+                  <Icon name="refresh" size={15} color={colors.primary} />
+                  <Text style={styles.emptyRetryText}>{t('common.retry')}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : (
             <>
@@ -582,7 +646,7 @@ export default function HomeScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: colors.dark},
+  container: {flex: 1, backgroundColor: colors.background},
   noLocationBanner: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: `${colors.danger}15`,
@@ -654,8 +718,29 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     paddingVertical: spacing.xl, paddingHorizontal: spacing.lg,
   },
+  emptyIconDisc: {
+    width: 56, height: 56, borderRadius: radius.full,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: spacing.xs,
+  },
   emptyTitle: {color: colors.textPrimary, fontSize: font.sizes.lg, fontWeight: font.weights.semibold, marginTop: spacing.xs},
-  emptySub:   {color: colors.textMuted, fontSize: font.sizes.sm, textAlign: 'center', lineHeight: 19},
+  emptySub: {
+    color: colors.textMuted, fontSize: font.sizes.sm,
+    textAlign: 'center', lineHeight: font.lineHeights.sm,
+    maxWidth: 280,
+  },
+  emptyRetryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm, paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    borderWidth: 1.5, borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  emptyRetryText: {
+    color: colors.primary, fontSize: font.sizes.sm,
+    fontWeight: font.weights.semibold,
+  },
 
   // Map
   mapCard: {
@@ -674,8 +759,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.95)',
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: colors.border,
-    shadowColor: '#000', shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.12, shadowRadius: 4, elevation: 3,
+    ...elevation.md,
   },
   mapLegend: {
     position: 'absolute', bottom: 10, right: 10,
@@ -706,8 +790,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', backgroundColor: colors.surface,
     borderRadius: radius.lg, marginBottom: spacing.sm,
     borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: {width: 0, height: 1},
-    shadowOpacity: 0.05, shadowRadius: 4, elevation: 1,
+    ...elevation.sm,
   },
   alertAccent:  {width: 4},
   alertContent: {flex: 1, padding: spacing.md},
@@ -719,7 +802,7 @@ const styles = StyleSheet.create({
   alertMeta:    {flex: 1},
   alertTitle:   {color: colors.textPrimary, fontSize: font.sizes.md, fontWeight: font.weights.semibold},
   alertTime:    {color: colors.textMuted, fontSize: font.sizes.xs, marginTop: 2},
-  alertMessage: {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: 18},
+  alertMessage: {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm},
   alertTimeRow: {flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4},
   alertTimeWindow:{color: colors.accent, fontSize: font.sizes.xs, fontWeight: font.weights.medium},
   sevBadge: {width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center'},
@@ -732,18 +815,20 @@ const styles = StyleSheet.create({
     padding: spacing.md, borderWidth: 1, borderColor: `${colors.primary}30`, gap: spacing.md,
   },
   infoCardTitle: {color: colors.primary, fontWeight: font.weights.semibold, marginBottom: spacing.xs},
-  infoCardText:  {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: 18},
+  infoCardText:  {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm},
 
   // Bottom sheet
   sheetBackdrop: {
-    flex: 1, backgroundColor: 'rgba(13,33,69,0.35)',
+    flex: 1, backgroundColor: colors.overlay,
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
     padding: spacing.xl, paddingTop: spacing.md,
     borderTopWidth: 1, borderColor: colors.border,
     maxHeight: SCREEN_HEIGHT * 0.65,
+    ...elevation.lg,
   },
   sheetHandle: {
     width: 40, height: 4, backgroundColor: colors.border,
@@ -758,7 +843,7 @@ const styles = StyleSheet.create({
   sheetSourceLabel: {fontSize: font.sizes.sm, fontWeight: font.weights.semibold},
   closeBtn: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: colors.dark, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center',
   },
   sheetTitle: {
     fontSize: font.sizes.xl, fontWeight: font.weights.bold,
@@ -766,13 +851,13 @@ const styles = StyleSheet.create({
   },
   sheetBody: {
     fontSize: font.sizes.md, color: colors.textSecondary,
-    lineHeight: 22, marginBottom: spacing.md,
+    lineHeight: font.lineHeights.md, marginBottom: spacing.md,
   },
   sheetMeta: {flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md},
   sheetMetaChip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: spacing.sm, paddingVertical: 4,
-    backgroundColor: colors.dark, borderRadius: radius.full,
+    backgroundColor: colors.background, borderRadius: radius.full,
     borderWidth: 1, borderColor: colors.border,
   },
   sheetMetaText: {fontSize: font.sizes.xs, color: colors.textSecondary, fontWeight: font.weights.medium},

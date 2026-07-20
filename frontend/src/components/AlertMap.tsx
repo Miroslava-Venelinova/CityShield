@@ -14,6 +14,7 @@ import React, {
 } from 'react';
 import {StyleProp, ViewStyle} from 'react-native';
 import {WebView, WebViewProps, WebViewMessageEvent} from 'react-native-webview';
+import {LEAFLET_HEAD, hardenedWebViewProps} from './leafletWebView';
 
 // react-native-webview's class-component typings don't line up with the
 // React 19 / RN 0.85 type definitions yet (props collapse to `never`), so
@@ -55,10 +56,7 @@ const HOME_ZOOM = 12;
 const HTML = `<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+${LEAFLET_HEAD}
 <style>
   html, body, #map { margin:0; padding:0; height:100%; width:100%; background:#EAF2FF; }
   .cs-marker { background:transparent; border:none; }
@@ -90,18 +88,45 @@ const HTML = `<!DOCTYPE html>
     }
   }
 
+  // Everything below treats its input as untrusted. Alert data originates from
+  // scraped third-party sites and is shaped by an LLM, so it is not guaranteed
+  // to match the DTO the app expects even though it arrives over TLS from our
+  // own API. The RN side validates too; this is the second layer.
+
+  // Only literal hex colours reach the DOM. The colour is currently chosen
+  // from a local severity map, so it is safe today — this keeps it safe if
+  // that ever becomes server-driven, since the value is concatenated into a
+  // style attribute (an HTML injection sink) below.
+  function safeColor(c) {
+    return (typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c)) ? c : '#888888';
+  }
+
+  function isLatLng(pair) {
+    return Array.isArray(pair) && pair.length === 2 &&
+           typeof pair[0] === 'number' && isFinite(pair[0]) &&
+           typeof pair[1] === 'number' && isFinite(pair[1]);
+  }
+
   window.__setData = function (data) {
     overlays.clearLayers();
-    (data.polygons || []).forEach(function (p) {
-      L.polygon(p.coords, {
-        color: p.color, weight: 2,
-        fillColor: p.color, fillOpacity: 0.2
-      }).addTo(overlays);
+    if (!data || typeof data !== 'object') { return; }
+
+    (Array.isArray(data.polygons) ? data.polygons : []).forEach(function (p) {
+      if (!p || !Array.isArray(p.coords)) { return; }
+      // A ring needs 3+ valid vertices to be a polygon; drop the rest rather
+      // than handing Leaflet something that throws mid-render and kills the
+      // whole overlay pass.
+      var ring = p.coords.filter(isLatLng);
+      if (ring.length < 3) { return; }
+      var c = safeColor(p.color);
+      L.polygon(ring, { color: c, weight: 2, fillColor: c, fillOpacity: 0.2 }).addTo(overlays);
     });
-    (data.markers || []).forEach(function (m) {
+
+    (Array.isArray(data.markers) ? data.markers : []).forEach(function (m) {
+      if (!m || !isLatLng([m.lat, m.lng]) || typeof m.id !== 'string') { return; }
       var icon = L.divIcon({
         className: 'cs-marker',
-        html: '<div style="border-color:' + m.color + '"></div>',
+        html: '<div style="border-color:' + safeColor(m.color) + '"></div>',
         iconSize: [24, 24],
         iconAnchor: [12, 12]
       });
@@ -159,11 +184,7 @@ const AlertMap = forwardRef<AlertMapHandle, Props>(function AlertMap(
       ref={webRef}
       style={style}
       source={{html: HTML}}
-      originWhitelist={['*']}
-      javaScriptEnabled
-      domStorageEnabled
-      setSupportMultipleWindows={false}
-      overScrollMode="never"
+      {...hardenedWebViewProps}
       onMessage={(event: WebViewMessageEvent) => {
         try {
           const msg = JSON.parse(event.nativeEvent.data) as {type: string; id?: string};

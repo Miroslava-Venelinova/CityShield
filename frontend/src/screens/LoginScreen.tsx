@@ -15,9 +15,10 @@ import {
 } from 'react-native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {authApi} from '../services/api';
+import {errorMessageKey} from '../services/errors';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
-import {colors, spacing, radius, font} from '../theme';
+import {colors, spacing, radius, font, elevation} from '../theme';
 import {AuthStackParamList} from '../navigation/types';
 import CityShieldLogo from '../components/CityShieldLogo';
 import Icon from '../components/icons';
@@ -43,8 +44,9 @@ export default function LoginScreen({navigation}: Props) {
     try {
       const res = await authApi.login({email: email.trim(), password});
       await login(res.token);
-    } catch (err: any) {
-      Alert.alert(t('login.failedTitle'), err.message || t('login.failedMsg'));
+    } catch (err: unknown) {
+      // On this screen a 401 means bad credentials, not an expired session.
+      Alert.alert(t('login.failedTitle'), t(errorMessageKey(err, 'login.failedMsg')));
     } finally {
       setLoading(false);
     }
@@ -54,7 +56,7 @@ export default function LoginScreen({navigation}: Props) {
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.dark} />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled">
@@ -151,7 +153,7 @@ export default function LoginScreen({navigation}: Props) {
 }
 
 const styles = StyleSheet.create({
-  flex: {flex: 1, backgroundColor: colors.dark},
+  flex: {flex: 1, backgroundColor: colors.background},
   scroll: {
     flexGrow: 1,
     padding: spacing.lg,
@@ -175,11 +177,7 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    shadowColor: colors.primary,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
+    ...elevation.md,
   },
   cardTitle: {
     fontSize: font.sizes.xxl,
@@ -206,7 +204,7 @@ const styles = StyleSheet.create({
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.dark,
+    backgroundColor: colors.background,
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.border,
@@ -229,11 +227,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: spacing.md,
-    shadowColor: colors.primary,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 6,
+    ...elevation.accent,
   },
   btnDisabled: {opacity: 0.6},
   primaryBtnText: {

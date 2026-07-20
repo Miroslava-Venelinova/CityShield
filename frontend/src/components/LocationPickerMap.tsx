@@ -5,6 +5,7 @@
 import React from 'react';
 import {StyleProp, ViewStyle} from 'react-native';
 import {WebView, WebViewProps, WebViewMessageEvent} from 'react-native-webview';
+import {LEAFLET_HEAD, hardenedWebViewProps, safeCoord} from './leafletWebView';
 
 // react-native-webview's class-component typings don't line up with the
 // React 19 / RN 0.85 type definitions yet (props collapse to `never`), so
@@ -26,19 +27,19 @@ const HOME_LNG = 27.9147;
 const HOME_ZOOM = 12;
 
 function buildHtml(initialLat?: number, initialLng?: number): string {
+  // `Number.isFinite` rather than `typeof === 'number'`: these values come from
+  // the stored user profile and are interpolated straight into the generated
+  // page script below, where a NaN would silently leave the map blank.
   const hasInitial =
-    typeof initialLat === 'number' && typeof initialLng === 'number';
-  const centerLat = hasInitial ? initialLat : HOME_LAT;
-  const centerLng = hasInitial ? initialLng : HOME_LNG;
+    Number.isFinite(initialLat as number) && Number.isFinite(initialLng as number);
+  const centerLat = safeCoord(initialLat, HOME_LAT);
+  const centerLng = safeCoord(initialLng, HOME_LNG);
   const centerZoom = hasInitial ? 15 : HOME_ZOOM;
 
   return `<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+${LEAFLET_HEAD}
 <style>
   html, body, #map { margin:0; padding:0; height:100%; width:100%; background:#EAF2FF; }
   .cs-pin { background:transparent; border:none; }
@@ -108,11 +109,7 @@ export default function LocationPickerMap({
     <WebViewComponent
       style={style}
       source={{html: buildHtml(initialLat, initialLng)}}
-      originWhitelist={['*']}
-      javaScriptEnabled
-      domStorageEnabled
-      setSupportMultipleWindows={false}
-      overScrollMode="never"
+      {...hardenedWebViewProps}
       onMessage={(event: WebViewMessageEvent) => {
         try {
           const msg = JSON.parse(event.nativeEvent.data) as {
@@ -120,12 +117,17 @@ export default function LocationPickerMap({
             lat?: number;
             lng?: number;
           };
+          // Range-check before this reaches PUT /api/auth/location, which
+          // rejects out-of-range coordinates with a 400 — better to never
+          // send them than to surface a server error to the user.
           if (
             msg.type === 'pin' &&
-            typeof msg.lat === 'number' &&
-            typeof msg.lng === 'number'
+            Number.isFinite(msg.lat) &&
+            Number.isFinite(msg.lng) &&
+            msg.lat! >= -90 && msg.lat! <= 90 &&
+            msg.lng! >= -180 && msg.lng! <= 180
           ) {
-            onPick(msg.lat, msg.lng);
+            onPick(msg.lat!, msg.lng!);
           }
         } catch {
           // Ignore malformed messages
