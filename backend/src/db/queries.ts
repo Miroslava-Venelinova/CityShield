@@ -196,9 +196,25 @@ export function getUserIdsByRegion(env: Env, regionId: number) {
   return idColumn(env.DB.prepare("SELECT user_id FROM users WHERE region_id = ?").bind(regionId));
 }
 
+/**
+ * Users in the region who are either on the named street or have no street set:
+ * a NULL street_id means "somewhere in this region", so those users must not be
+ * excluded by a street-level alert — only users on a *different* street are.
+ */
 export function getUserIdsByRegionAndStreet(env: Env, regionId: number, streetId: number) {
   return idColumn(env.DB.prepare(
-    "SELECT user_id FROM users WHERE region_id = ? AND street_id = ?").bind(regionId, streetId));
+    "SELECT user_id FROM users WHERE region_id = ? AND (street_id = ? OR street_id IS NULL)")
+    .bind(regionId, streetId));
+}
+
+/**
+ * Region-agnostic street lookup: street_name is globally unique (0001_init.sql),
+ * so a street-only alert can still find its subscribers when the region name
+ * was missing or unrecognizable.
+ */
+export function getUserIdsByStreet(env: Env, streetId: number) {
+  return idColumn(env.DB.prepare(
+    "SELECT user_id FROM users WHERE street_id = ?").bind(streetId));
 }
 
 export function getAllUserIds(env: Env) {

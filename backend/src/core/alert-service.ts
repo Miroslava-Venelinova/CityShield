@@ -97,24 +97,36 @@ function allGeometries(polygonJson: Json): Json[] {
 async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
   const locationName = typeof location.location_name === "string" ? location.location_name : "";
   const region = bestMatch(locationName, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD);
-  if (!region) return [];
 
   const sublocations = Array.isArray(location.sublocations)
     ? location.sublocations.filter((s): s is string => typeof s === "string")
     : [];
 
+  // Streets resolve independently of the region: scraped alerts often name only
+  // a street, and street_name is globally unique, so an unmatched region must
+  // not discard an otherwise perfectly good street match.
   if (sublocations.length > 0) {
     const ids = new Set<string>();
     const streets = await q.getStreets(env);
+    let matchedAnyStreet = false;
     for (const streetName of sublocations) {
       const street = bestMatch(streetName, streets, (s) => s.name, SIMILARITY_THRESHOLD);
       if (!street) continue;
-      for (const id of await q.getUserIdsByRegionAndStreet(env, region.id, street.id)) ids.add(id);
+      matchedAnyStreet = true;
+      // A boulevard can run through several regions — when we do have a region,
+      // pairing the two stays the narrower (and safer) targeting.
+      const matched = region
+        ? await q.getUserIdsByRegionAndStreet(env, region.id, street.id)
+        : await q.getUserIdsByStreet(env, street.id);
+      for (const id of matched) ids.add(id);
     }
-    return [...ids];
+    if (matchedAnyStreet) return [...ids];
+    // None of the named streets exist in our table — the street detail is
+    // unusable, so fall through to region-wide rather than notifying nobody.
   }
 
-  return q.getUserIdsByRegion(env, region.id);
+  // No usable street: region-wide, or nothing if the region is unknown too.
+  return region ? q.getUserIdsByRegion(env, region.id) : [];
 }
 
 async function getUserIdsInPolygonRange(env: Env, polygonJson: Json): Promise<string[]> {

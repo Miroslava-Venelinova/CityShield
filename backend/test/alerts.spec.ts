@@ -132,6 +132,8 @@ describe("targeting decision tree", () => {
 
   it("region+street location targets only matching users; receives_all and disabled-preference users handled", async () => {
     const match = await createUser({ region: "Аспарухово", street: "Дубровник" });
+    // No street set = "somewhere in Аспарухово" — still in scope for a street alert.
+    const regionOnlyUser = await createUser({ region: "Аспарухово" });
     const sameRegionOtherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
     const otherRegion = await createUser({ region: "Левски", street: "Дубровник" });
     const debugUser = await createUser({ receivesAll: true });
@@ -146,10 +148,59 @@ describe("targeting decision tree", () => {
       },
     }));
     const body = await res.json() as SubmitResponse;
-    expect(new Set(body.user_ids)).toEqual(new Set([match, debugUser]));
+    expect(new Set(body.user_ids)).toEqual(new Set([match, regionOnlyUser, debugUser]));
     expect(body.user_ids).not.toContain(sameRegionOtherStreet);
     expect(body.user_ids).not.toContain(otherRegion);
     expect(body.user_ids).not.toContain(disabled);
+  });
+
+  it("street-only location (unmatched region) still targets that street's users", async () => {
+    const onStreet = await createUser({ region: "Аспарухово", street: "Дубровник" });
+    const sameStreetOtherRegion = await createUser({ region: "Левски", street: "Дубровник" });
+    const otherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+    const noLocation = await createUser();
+
+    const res = await submit(basePayload({
+      processed_data: {
+        // location_name empty — the scraper only recognized a street.
+        locations: [{ location_name: "", sublocations: ["ул. Дубровник"], is_polygon: false }],
+      },
+    }));
+    const body = await res.json() as SubmitResponse;
+    // Region-agnostic: both users on the street, regardless of their region.
+    expect(new Set(body.user_ids)).toEqual(new Set([onStreet, sameStreetOtherRegion]));
+    expect(body.user_ids).not.toContain(otherStreet);
+    expect(body.user_ids).not.toContain(noLocation);
+  });
+
+  it("streets that match nothing in our table fall back to region-wide targeting", async () => {
+    const onOtherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+    const regionOnly = await createUser({ region: "Аспарухово" });
+    const otherRegion = await createUser({ region: "Левски" });
+
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "Аспарухово", sublocations: ["ул. Няма такава"], is_polygon: false }],
+      },
+    }));
+    const body = await res.json() as SubmitResponse;
+    // The street detail is unusable, so the region alone decides.
+    expect(new Set(body.user_ids)).toEqual(new Set([onOtherStreet, regionOnly]));
+    expect(body.user_ids).not.toContain(otherRegion);
+  });
+
+  it("unmatched region and unmatched street notifies nobody", async () => {
+    await createUser({ region: "Аспарухово", street: "Дубровник" });
+    await createUser();
+
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "Несъществуващ квартал", sublocations: ["ул. Няма такава"], is_polygon: false }],
+      },
+    }));
+    const body = await res.json() as SubmitResponse;
+    expect(body.user_ids).toEqual([]);
+    expect(body.notified_count).toBe(0);
   });
 
   it("region-only location targets the whole region", async () => {
