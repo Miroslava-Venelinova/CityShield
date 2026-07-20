@@ -16,6 +16,7 @@ import {
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {authApi} from '../services/api';
 import {useAuth} from '../context/AuthContext';
+import {useI18n} from '../context/LanguageContext';
 import {colors, spacing, radius, font} from '../theme';
 import {AuthStackParamList} from '../navigation/types';
 import CityShieldLogo from '../components/CityShieldLogo';
@@ -27,6 +28,7 @@ type Props = {
 
 export default function LoginScreen({navigation}: Props) {
   const {login} = useAuth();
+  const {t} = useI18n();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -34,7 +36,7 @@ export default function LoginScreen({navigation}: Props) {
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Validation', 'Please enter both email and password.');
+      Alert.alert(t('register.validationTitle'), t('login.errRequired'));
       return;
     }
     setLoading(true);
@@ -42,7 +44,7 @@ export default function LoginScreen({navigation}: Props) {
       const res = await authApi.login({email: email.trim(), password});
       await login(res.token);
     } catch (err: any) {
-      Alert.alert('Login Failed', err.message || 'Invalid credentials.');
+      Alert.alert(t('login.failedTitle'), err.message || t('login.failedMsg'));
     } finally {
       setLoading(false);
     }
@@ -60,24 +62,24 @@ export default function LoginScreen({navigation}: Props) {
         {/* Logo */}
         <View style={styles.logoSection}>
           <CityShieldLogo size={80} showWordmark={true} />
-          <Text style={styles.tagline}>Protecting your community</Text>
+          <Text style={styles.tagline}>{t('login.tagline')}</Text>
         </View>
 
         {/* Card */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Welcome back</Text>
-          <Text style={styles.cardSubtitle}>Sign in to your account</Text>
+          <Text style={styles.cardTitle}>{t('login.welcome')}</Text>
+          <Text style={styles.cardSubtitle}>{t('login.subtitle')}</Text>
 
           {/* Email */}
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email Address</Text>
+            <Text style={styles.label}>{t('login.emailLabel')}</Text>
             <View style={styles.inputWrapper}>
               <View style={styles.inputIcon}>
                 <Icon name="mail" size={16} color={colors.textMuted} />
               </View>
               <TextInput
                 style={styles.input}
-                placeholder="you@example.com"
+                placeholder={t('register.emailPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 value={email}
                 onChangeText={setEmail}
@@ -90,14 +92,14 @@ export default function LoginScreen({navigation}: Props) {
 
           {/* Password */}
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password</Text>
+            <Text style={styles.label}>{t('login.passwordLabel')}</Text>
             <View style={styles.inputWrapper}>
               <View style={styles.inputIcon}>
                 <Icon name="lock" size={16} color={colors.textMuted} />
               </View>
               <TextInput
                 style={[styles.input, {flex: 1}]}
-                placeholder="Enter your password"
+                placeholder={t('login.passwordPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 value={password}
                 onChangeText={setPassword}
@@ -122,14 +124,14 @@ export default function LoginScreen({navigation}: Props) {
             {loading ? (
               <ActivityIndicator color={colors.white} />
             ) : (
-              <Text style={styles.primaryBtnText}>Sign In</Text>
+              <Text style={styles.primaryBtnText}>{t('login.signIn')}</Text>
             )}
           </TouchableOpacity>
 
           {/* Divider */}
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>OR</Text>
+            <Text style={styles.dividerText}>{t('login.or')}</Text>
             <View style={styles.dividerLine} />
           </View>
 
@@ -138,11 +140,11 @@ export default function LoginScreen({navigation}: Props) {
             style={styles.secondaryBtn}
             onPress={() => navigation.navigate('Register')}
             activeOpacity={0.85}>
-            <Text style={styles.secondaryBtnText}>Create New Account</Text>
+            <Text style={styles.secondaryBtnText}>{t('login.createAccount')}</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.footer}>CityShield v1.0 · Secure & Encrypted</Text>
+        <Text style={styles.footer}>{t('login.footer')}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

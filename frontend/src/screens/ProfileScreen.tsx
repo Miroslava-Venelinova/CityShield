@@ -6,6 +6,8 @@ import {
   ActivityIndicator, Modal,
 } from 'react-native';
 import {useAuth} from '../context/AuthContext';
+import {useI18n} from '../context/LanguageContext';
+import {TranslationKey} from '../i18n/translations';
 import {tokensApi, authApi} from '../services/api';
 import {getFCMToken, registerTokenRefreshHandler} from '../services/fcm';
 import {colors, spacing, radius, font} from '../theme';
@@ -45,7 +47,9 @@ function decodeJwt(token: string): Record<string, string> {
 }
 
 // ── Request POST_NOTIFICATIONS (Android 13+) ───────────────────────────────────
-async function requestNotificationPermission(): Promise<boolean> {
+async function requestNotificationPermission(
+  t: (key: TranslationKey) => string,
+): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
   if ((Platform.Version as number) < 33) return true;
   const already = await PermissionsAndroid.check(
@@ -53,9 +57,9 @@ async function requestNotificationPermission(): Promise<boolean> {
   if (already) return true;
   const result = await PermissionsAndroid.request(
     PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-    {title: 'CityShield Notifications',
-     message: 'CityShield needs permission to send you real-time alerts.',
-     buttonPositive: 'Allow', buttonNegative: 'Deny'});
+    {title: t('profile.permTitle'),
+     message: t('profile.permMessage'),
+     buttonPositive: t('profile.permAllow'), buttonNegative: t('profile.permDeny')});
   return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
@@ -63,6 +67,7 @@ async function requestNotificationPermission(): Promise<boolean> {
 
 export default function ProfileScreen() {
   const {token, hasLocation, regionName, streetName, setHasLocation, logout, refreshProfile} = useAuth();
+  const {language, setLanguage, t} = useI18n();
 
   const [alertsEnabled,    setAlertsEnabled]    = useState(false);
   const [fcmToken,         setFcmToken]          = useState<string | null>(null);
@@ -77,8 +82,8 @@ export default function ProfileScreen() {
   const email   = payload[EMAIL_CLAIM] ?? payload['email'] ?? 'Unknown';
 
   const permissionSubtext = alertsEnabled
-    ? 'Push notifications are enabled'
-    : 'Tap to enable notifications';
+    ? t('profile.pushEnabled')
+    : t('profile.pushTapToEnable');
 
   const fcmDisplay = fcmToken
     ? fcmToken.slice(0, 14) + '…' + fcmToken.slice(-6)
@@ -115,8 +120,8 @@ export default function ProfileScreen() {
   const refreshFcmToken = async () => {
     setFcmLoading(true);
     try {
-      const t = await getFCMToken();
-      setFcmToken(t);
+      const fetched = await getFCMToken();
+      setFcmToken(fetched);
     } catch {
       setFcmToken(null);
     } finally {
@@ -126,11 +131,10 @@ export default function ProfileScreen() {
 
   const handleAlertsToggle = async (value: boolean) => {
     if (value) {
-      const granted = await requestNotificationPermission();
+      const granted = await requestNotificationPermission(t);
       setAlertsEnabled(granted);
       if (!granted) {
-        Alert.alert('Permission denied',
-          'Enable notifications in device Settings to receive alerts.');
+        Alert.alert(t('profile.permDeniedTitle'), t('profile.permDeniedMsg'));
       }
     } else {
       setAlertsEnabled(false);
@@ -145,19 +149,19 @@ export default function ProfileScreen() {
         {token: fcmToken, platform: Platform.OS,
          deviceName: `${Platform.OS} Device`}, token);
       setDeviceRegistered(true);
-      Alert.alert('Device registered',
-        'This device will now receive CityShield push notifications.');
+      Alert.alert(t('profile.deviceRegisteredTitle'),
+        t('profile.deviceRegisteredMsg'));
     } catch (err: any) {
-      Alert.alert('Registration Failed', err.message);
+      Alert.alert(t('profile.registrationFailed'), err.message);
     } finally {
       setFcmLoading(false);
     }
   };
 
   const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      {text: 'Cancel', style: 'cancel'},
-      {text: 'Sign Out', style: 'destructive',
+    Alert.alert(t('profile.signOut'), t('profile.signOutConfirm'), [
+      {text: t('common.cancel'), style: 'cancel'},
+      {text: t('profile.signOut'), style: 'destructive',
        onPress: () => logout(fcmToken ?? undefined)},
     ]);
   };
@@ -171,7 +175,7 @@ export default function ProfileScreen() {
   // ── Submit the picked pin to the backend ─────────────────────────────────
   const handleSubmitCoords = async () => {
     if (!pickedCoords) {
-      Alert.alert('No pin placed', 'Tap the map to place a pin on your location.');
+      Alert.alert(t('profile.noPinTitle'), t('profile.noPinMsg'));
       return;
     }
     const {lat, lon} = pickedCoords;
@@ -182,10 +186,10 @@ export default function ProfileScreen() {
       await authApi.updateLocation({latitude: lat, longitude: lon}, token!);
       setHasLocation(true);
       await refreshProfile();
-      Alert.alert('Location updated',
-        'Your area has been set. You will now receive local alerts.');
+      Alert.alert(t('profile.locationUpdatedTitle'),
+        t('profile.locationUpdatedMsg'));
     } catch (err: any) {
-      Alert.alert('Update Failed', err.message);
+      Alert.alert(t('profile.updateFailedTitle'), err.message);
     } finally {
       setLocationLoading(false);
     }
@@ -201,10 +205,8 @@ export default function ProfileScreen() {
           <View style={styles.locationBanner}>
             <Icon name="map-pin" size={22} color={colors.warning} />
             <View style={styles.bannerText}>
-              <Text style={styles.bannerTitle}>Location not set</Text>
-              <Text style={styles.bannerSub}>
-                Set your location to start receiving alerts for your area.
-              </Text>
+              <Text style={styles.bannerTitle}>{t('profile.bannerTitle')}</Text>
+              <Text style={styles.bannerSub}>{t('profile.bannerSub')}</Text>
             </View>
           </View>
         )}
@@ -221,12 +223,27 @@ export default function ProfileScreen() {
           <Text style={styles.emailText} numberOfLines={1}>{email}</Text>
           <View style={styles.activeBadge}>
             <View style={styles.activeDot} />
-            <Text style={styles.activeText}>Active Member</Text>
+            <Text style={styles.activeText}>{t('profile.activeMember')}</Text>
           </View>
         </View>
 
+        {/* ── Language ── */}
+        <Section title={t('profile.sectionLanguage')}>
+          <LanguageRow
+            label={t('profile.languageBulgarian')}
+            selected={language === 'bg'}
+            onPress={() => setLanguage('bg')}
+          />
+          <Divider />
+          <LanguageRow
+            label={t('profile.languageEnglish')}
+            selected={language === 'en'}
+            onPress={() => setLanguage('en')}
+          />
+        </Section>
+
         {/* ── Location ── */}
-        <Section title="Location">
+        <Section title={t('profile.sectionLocation')}>
           <TouchableOpacity
             style={styles.actionRow}
             onPress={handleSetLocation}
@@ -235,12 +252,12 @@ export default function ProfileScreen() {
             <RowIcon name="map-pin" />
             <View style={styles.actionText}>
               <Text style={styles.actionLabel}>
-                {hasLocation ? 'Update My Location' : 'Set My Location'}
+                {hasLocation ? t('profile.updateLocation') : t('profile.setLocation')}
               </Text>
               <Text style={styles.actionSub}>
                 {hasLocation
-                  ? 'Coordinates are matched to your area via Nominatim'
-                  : 'Required to receive neighbourhood alerts'}
+                  ? t('profile.locationSetSub')
+                  : t('profile.locationUnsetSub')}
               </Text>
             </View>
             {locationLoading
@@ -251,12 +268,12 @@ export default function ProfileScreen() {
           <View style={styles.infoRow}>
             <RowIcon name="map" />
             <View style={styles.infoTextGroup}>
-              <Text style={styles.infoLabel}>Location Status</Text>
+              <Text style={styles.infoLabel}>{t('profile.locationStatus')}</Text>
               <Text style={[styles.infoValue,
                 {color: hasLocation ? colors.success : colors.danger}]}>
-                {hasLocation === null ? 'Loading…'
-                  : hasLocation ? 'Location set'
-                  : 'Not set — no alerts will be sent'}
+                {hasLocation === null ? t('common.loading')
+                  : hasLocation ? t('profile.locationSet')
+                  : t('profile.locationNotSet')}
               </Text>
             </View>
           </View>
@@ -266,7 +283,7 @@ export default function ProfileScreen() {
               <View style={styles.infoRow}>
                 <RowIcon name="home" />
                 <View style={styles.infoTextGroup}>
-                  <Text style={styles.infoLabel}>Neighbourhood / Region</Text>
+                  <Text style={styles.infoLabel}>{t('profile.region')}</Text>
                   <Text style={styles.infoValue}>
                     {regionName ?? '—'}
                   </Text>
@@ -276,9 +293,9 @@ export default function ProfileScreen() {
               <View style={styles.infoRow}>
                 <RowIcon name="navigation" />
                 <View style={styles.infoTextGroup}>
-                  <Text style={styles.infoLabel}>Street</Text>
+                  <Text style={styles.infoLabel}>{t('profile.street')}</Text>
                   <Text style={styles.infoValue}>
-                    {streetName ?? 'No street match found'}
+                    {streetName ?? t('profile.noStreet')}
                   </Text>
                 </View>
               </View>
@@ -287,10 +304,10 @@ export default function ProfileScreen() {
         </Section>
 
         {/* ── Notifications ── */}
-        <Section title="Notifications">
+        <Section title={t('profile.sectionNotifications')}>
           <SwitchRow
             icon="bell"
-            label="Push Alerts"
+            label={t('profile.pushAlerts')}
             sub={permissionSubtext}
             value={alertsEnabled}
             onChange={handleAlertsToggle}
@@ -298,7 +315,7 @@ export default function ProfileScreen() {
         </Section>
 
         {/* ── Device ── */}
-        <Section title="Device">
+        <Section title={t('profile.sectionDevice')}>
           <TouchableOpacity
             style={styles.actionRow}
             onPress={handleRegisterDevice}
@@ -307,12 +324,12 @@ export default function ProfileScreen() {
             <RowIcon name="smartphone" />
             <View style={styles.actionText}>
               <Text style={styles.actionLabel}>
-                {deviceRegistered ? 'Device Registered' : 'Register This Device'}
+                {deviceRegistered ? t('profile.deviceRegistered') : t('profile.registerDevice')}
               </Text>
               <Text style={styles.actionSub}>
                 {deviceRegistered
-                  ? 'Push notifications are enabled'
-                  : 'Send your FCM token to the backend'}
+                  ? t('profile.deviceRegisteredSub')
+                  : t('profile.registerDeviceSub')}
               </Text>
             </View>
             {fcmLoading
@@ -325,19 +342,19 @@ export default function ProfileScreen() {
           <View style={styles.infoRow}>
             <RowIcon name="key" />
             <View style={styles.infoTextGroup}>
-              <Text style={styles.infoLabel}>FCM Token</Text>
+              <Text style={styles.infoLabel}>{t('profile.fcmToken')}</Text>
               <Text style={styles.infoValue} numberOfLines={1}>{fcmDisplay}</Text>
             </View>
           </View>
         </Section>
 
         {/* ── Account & About ── */}
-        <Section title="About">
-          <Row icon="mail" label="Email" value={email} />
+        <Section title={t('profile.sectionAbout')}>
+          <Row icon="mail" label={t('profile.email')} value={email} />
           <Divider />
           <Row icon="shield" label="CityShield" value="v1.0.0" />
           <Divider />
-          <Row icon="map" label="Map data" value="© OpenStreetMap" />
+          <Row icon="map" label={t('profile.mapData')} value="© OpenStreetMap" />
         </Section>
 
         {/* ── Logout ── */}
@@ -346,10 +363,10 @@ export default function ProfileScreen() {
           onPress={handleLogout}
           activeOpacity={0.85}>
           <Icon name="log-out" size={18} color={colors.danger} />
-          <Text style={styles.logoutText}>Sign Out</Text>
+          <Text style={styles.logoutText}>{t('profile.signOut')}</Text>
         </TouchableOpacity>
 
-        <Text style={styles.footer}>CityShield · Protecting Your Community</Text>
+        <Text style={styles.footer}>{t('profile.footer')}</Text>
         <View style={{height: spacing.xxl}} />
       </ScrollView>
 
@@ -363,12 +380,9 @@ export default function ProfileScreen() {
           <View style={styles.modalCard}>
             <View style={styles.modalTitleRow}>
               <Icon name="map-pin" size={20} color={colors.primary} />
-              <Text style={styles.modalTitle}>Set Location</Text>
+              <Text style={styles.modalTitle}>{t('profile.modalTitle')}</Text>
             </View>
-            <Text style={styles.modalSub}>
-              Tap the map to place a pin on your location. Nominatim will
-              detect your region and street.
-            </Text>
+            <Text style={styles.modalSub}>{t('profile.modalSub')}</Text>
 
             <View style={styles.mapWrap}>
               <LocationPickerMap
@@ -379,21 +393,21 @@ export default function ProfileScreen() {
 
             <Text style={styles.coordHint}>
               {pickedCoords
-                ? `Pin: ${pickedCoords.lat.toFixed(5)}, ${pickedCoords.lon.toFixed(5)}`
-                : 'No pin placed yet — tap the map'}
+                ? `${t('profile.modalPin')}: ${pickedCoords.lat.toFixed(5)}, ${pickedCoords.lon.toFixed(5)}`
+                : t('profile.modalNoPin')}
             </Text>
 
             <View style={styles.modalBtns}>
               <TouchableOpacity
                 style={styles.modalCancelBtn}
                 onPress={() => setCoordModalVisible(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
+                <Text style={styles.modalCancelText}>{t('common.cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalConfirmBtn, !pickedCoords && styles.modalConfirmDisabled]}
                 onPress={handleSubmitCoords}
                 disabled={!pickedCoords}>
-                <Text style={styles.modalConfirmText}>Set Location</Text>
+                <Text style={styles.modalConfirmText}>{t('profile.modalConfirm')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -411,6 +425,18 @@ function Section({title, children}: {title: string; children: React.ReactNode}) 
       <Text style={sec.title}>{title}</Text>
       <View style={sec.card}>{children}</View>
     </View>
+  );
+}
+
+function LanguageRow({label, selected, onPress}: {
+  label: string; selected: boolean; onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={row.wrap} onPress={onPress} activeOpacity={0.7}>
+      <RowIcon name="globe" />
+      <Text style={row.label}>{label}</Text>
+      {selected && <Icon name="check" size={18} color={colors.primary} />}
+    </TouchableOpacity>
   );
 }
 

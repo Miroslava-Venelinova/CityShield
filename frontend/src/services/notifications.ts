@@ -1,6 +1,7 @@
 // ─── src/services/notifications.ts ───────────────────────────────────────────
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {IconName} from '../components/icons';
+import type {TranslationKey} from '../i18n/translations';
 
 const STORAGE_KEY = 'cityshield_notifications';
 const MAX_ITEMS   = 10;
@@ -97,4 +98,11 @@ export function getCategoryMeta(category: string) {
     CATEGORIES.find(c => c.key === category) ??
     CATEGORIES.find(c => c.key === 'general')!
   );
+}
+
+// Translation key for a category's display label; screens render it with t()
+// so the label follows the selected language (the `label` field above stays
+// as the English fallback for non-UI uses).
+export function getCategoryLabelKey(category: string): TranslationKey {
+  return `category.${getCategoryMeta(category).key}` as TranslationKey;
 }

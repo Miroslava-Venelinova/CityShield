@@ -5,6 +5,7 @@ import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {ErrorBoundary} from './src/components/ErrorBoundary';
 import {AuthProvider} from './src/context/AuthContext';
+import {LanguageProvider} from './src/context/LanguageContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import {
   registerForegroundHandler,
@@ -28,9 +29,11 @@ export default function App() {
     <ErrorBoundary>
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>
-          <AuthProvider>
-            <AppNavigator />
-          </AuthProvider>
+          <LanguageProvider>
+            <AuthProvider>
+              <AppNavigator />
+            </AuthProvider>
+          </LanguageProvider>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

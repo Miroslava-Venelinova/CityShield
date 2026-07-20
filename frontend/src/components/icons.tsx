@@ -35,7 +35,8 @@ export type IconName =
   | 'megaphone'
   | 'refresh'
   | 'flame'
-  | 'road';
+  | 'road'
+  | 'globe';
 
 interface IconProps {
   name: IconName;
@@ -170,6 +171,17 @@ export default function Icon({
         );
       case 'check':
         return <Polyline points="20 6 9 17 4 12" {...common} />;
+      case 'globe':
+        return (
+          <>
+            <Circle cx="12" cy="12" r="10" {...common} />
+            <Line x1="2" y1="12" x2="22" y2="12" {...common} />
+            <Path
+              d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+              {...common}
+            />
+          </>
+        );
       case 'chevron-right':
         return <Polyline points="9 18 15 12 9 6" {...common} />;
       case 'chevron-left':

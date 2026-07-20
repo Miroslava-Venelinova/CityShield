@@ -6,6 +6,7 @@ import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 
 import {useAuth} from '../context/AuthContext';
+import {useI18n} from '../context/LanguageContext';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -70,6 +71,7 @@ const tab = StyleSheet.create({
 // ─── Tab navigator (shown when logged in) ────────────────────────────────────
 
 function MainTabs() {
+  const {t} = useI18n();
   return (
     <Tab.Navigator
       screenOptions={{
@@ -88,7 +90,7 @@ function MainTabs() {
         component={HomeScreen}
         options={{
           tabBarIcon: ({focused}) => (
-            <TabIcon icon="home" label="Home" focused={focused} />
+            <TabIcon icon="home" label={t('tabs.home')} focused={focused} />
           ),
         }}
       />
@@ -97,7 +99,7 @@ function MainTabs() {
         component={NotificationsScreen}
         options={{
           tabBarIcon: ({focused}) => (
-            <TabIcon icon="bell" label="Alerts" focused={focused} />
+            <TabIcon icon="bell" label={t('tabs.alerts')} focused={focused} />
           ),
         }}
       />
@@ -106,7 +108,7 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           tabBarIcon: ({focused}) => (
-            <TabIcon icon="user" label="Profile" focused={focused} />
+            <TabIcon icon="user" label={t('tabs.profile')} focused={focused} />
           ),
         }}
       />

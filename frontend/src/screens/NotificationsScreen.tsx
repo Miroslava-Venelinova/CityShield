@@ -9,18 +9,20 @@ import {useFocusEffect} from '@react-navigation/native';
 import {colors, spacing, radius, font} from '../theme';
 import Icon from '../components/icons';
 import {useAuth} from '../context/AuthContext';
+import {useI18n} from '../context/LanguageContext';
 import {
   preferencesApi, NotificationPreferenceDTO, BusLineSubscriptionDTO,
 } from '../services/api';
 import {
   loadNotifications, markAsRead, markAllAsRead,
-  deleteNotification, StoredNotification, getCategoryMeta,
+  deleteNotification, StoredNotification, getCategoryMeta, getCategoryLabelKey,
 } from '../services/notifications';
 
 type Tab = 'inbox' | 'settings';
 
 export default function NotificationsScreen() {
   const {token} = useAuth();
+  const {t} = useI18n();
 
   const [activeTab,     setActiveTab]     = useState<Tab>('inbox');
   const [notifications, setNotifications] = useState<StoredNotification[]>([]);
@@ -84,9 +86,9 @@ export default function NotificationsScreen() {
 
   const handleDeleteFromDetail = async () => {
     if (!selected) return;
-    Alert.alert('Delete notification', 'Remove this alert from your inbox?', [
-      {text: 'Cancel', style: 'cancel'},
-      {text: 'Delete', style: 'destructive', onPress: async () => {
+    Alert.alert(t('notif.deleteTitle'), t('notif.deleteMsg'), [
+      {text: t('common.cancel'), style: 'cancel'},
+      {text: t('notif.delete'), style: 'destructive', onPress: async () => {
         await deleteNotification(selected.id);
         setNotifications(prev => prev.filter(n => n.id !== selected.id));
         setSelected(null);
@@ -113,7 +115,7 @@ export default function NotificationsScreen() {
     } catch {
       setPreferences(prev =>
         prev.map(p => p.category === category ? {...p, isEnabled: !newValue} : p));
-      Alert.alert('Error', 'Failed to save preference. Please try again.');
+      Alert.alert(t('common.error'), t('notif.prefSaveFailed'));
     }
   };
 
@@ -127,7 +129,7 @@ export default function NotificationsScreen() {
       await preferencesApi.setBusLines(nextSelection, token);
     } catch {
       setBusLines(prev);
-      Alert.alert('Error', 'Failed to save bus lines. Please try again.');
+      Alert.alert(t('common.error'), t('notif.busSaveFailed'));
     }
   };
 
@@ -147,7 +149,7 @@ export default function NotificationsScreen() {
   const busLineSummary = !busLines
     ? '—'
     : selectedLines.length === 0
-      ? 'All lines'
+      ? t('notif.allLines')
       : selectedLines.join(', ');
 
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -158,14 +160,16 @@ export default function NotificationsScreen() {
       {/* ── Header ── */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>Notifications</Text>
+          <Text style={styles.headerTitle}>{t('notif.title')}</Text>
           {unreadCount > 0 && (
-            <Text style={styles.headerSub}>{unreadCount} unread</Text>
+            <Text style={styles.headerSub}>
+              {t('notif.unread').replace('{n}', String(unreadCount))}
+            </Text>
           )}
         </View>
         {unreadCount > 0 && activeTab === 'inbox' && (
           <TouchableOpacity onPress={handleMarkAllRead} style={styles.markAllBtn}>
-            <Text style={styles.markAllText}>Mark all read</Text>
+            <Text style={styles.markAllText}>{t('notif.markAllRead')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -181,7 +185,7 @@ export default function NotificationsScreen() {
             color={activeTab === 'inbox' ? colors.primary : colors.textMuted}
           />
           <Text style={[styles.tabText, activeTab === 'inbox' && styles.tabTextActive]}>
-            Inbox{unreadCount > 0 ? ` (${unreadCount})` : ''}
+            {t('notif.inbox')}{unreadCount > 0 ? ` (${unreadCount})` : ''}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -193,7 +197,7 @@ export default function NotificationsScreen() {
             color={activeTab === 'settings' ? colors.primary : colors.textMuted}
           />
           <Text style={[styles.tabText, activeTab === 'settings' && styles.tabTextActive]}>
-            Categories
+            {t('notif.categories')}
           </Text>
         </TouchableOpacity>
       </View>
@@ -222,9 +226,7 @@ export default function NotificationsScreen() {
       {/* ── Categories ── */}
       {activeTab === 'settings' && (
         <View style={styles.settingsWrap}>
-          <Text style={styles.settingsHint}>
-            Choose which types of city alerts you want to receive.
-          </Text>
+          <Text style={styles.settingsHint}>{t('notif.settingsHint')}</Text>
           {prefLoading ? (
             <ActivityIndicator style={{marginTop: spacing.xl}} color={colors.primary} />
           ) : (
@@ -239,9 +241,11 @@ export default function NotificationsScreen() {
                         <Icon name={meta.icon} size={20} color={meta.color} />
                       </View>
                       <View style={styles.prefText}>
-                        <Text style={styles.prefLabel}>{pref.label}</Text>
+                        <Text style={styles.prefLabel}>
+                          {t(getCategoryLabelKey(pref.category))}
+                        </Text>
                         <Text style={styles.prefSub}>
-                          {pref.isEnabled ? 'Receiving alerts' : 'Muted'}
+                          {pref.isEnabled ? t('notif.receiving') : t('notif.muted')}
                         </Text>
                       </View>
                       <Switch
@@ -260,7 +264,7 @@ export default function NotificationsScreen() {
                         disabled={!busLines}
                         activeOpacity={0.7}>
                         <View style={styles.busLineText}>
-                          <Text style={styles.busLineLabel}>Bus lines</Text>
+                          <Text style={styles.busLineLabel}>{t('notif.busLines')}</Text>
                           <Text style={styles.busLineValue} numberOfLines={1}>
                             {busLineSummary}
                           </Text>
@@ -272,9 +276,7 @@ export default function NotificationsScreen() {
                 );
               })}
               {preferences.length === 0 && (
-                <Text style={styles.prefEmpty}>
-                  Could not load preferences. Check your connection.
-                </Text>
+                <Text style={styles.prefEmpty}>{t('notif.prefLoadFailed')}</Text>
               )}
             </View>
           )}
@@ -291,7 +293,7 @@ export default function NotificationsScreen() {
           <View style={picker.card}>
             <View style={picker.titleRow}>
               <Icon name="bus" size={18} color={colors.primary} />
-              <Text style={picker.title}>Bus lines</Text>
+              <Text style={picker.title}>{t('notif.busLines')}</Text>
               <TouchableOpacity
                 onPress={() => setLinePickerOpen(false)}
                 style={picker.closeBtn}
@@ -299,10 +301,7 @@ export default function NotificationsScreen() {
                 <Icon name="x" size={14} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <Text style={picker.hint}>
-              Pick the lines you ride to only get route changes that affect
-              them. With no lines selected you receive every route change.
-            </Text>
+            <Text style={picker.hint}>{t('notif.pickerHint')}</Text>
 
             <ScrollView style={picker.list} showsVerticalScrollIndicator>
               {/* No filter */}
@@ -313,7 +312,7 @@ export default function NotificationsScreen() {
                   picker.rowText,
                   selectedLines.length === 0 && picker.rowTextActive,
                 ]}>
-                  All lines
+                  {t('notif.allLines')}
                 </Text>
                 {selectedLines.length === 0 && (
                   <Icon name="check" size={16} color={colors.primary} />
@@ -328,7 +327,7 @@ export default function NotificationsScreen() {
                     style={[picker.row, isSelected && picker.rowActive]}
                     onPress={() => toggleBusLine(line)}>
                     <Text style={[picker.rowText, isSelected && picker.rowTextActive]}>
-                      Line {line}
+                      {t('notif.line').replace('{n}', line)}
                     </Text>
                     {isSelected && (
                       <Icon name="check" size={16} color={colors.primary} />
@@ -341,7 +340,7 @@ export default function NotificationsScreen() {
             <TouchableOpacity
               style={picker.doneBtn}
               onPress={() => setLinePickerOpen(false)}>
-              <Text style={picker.doneText}>Done</Text>
+              <Text style={picker.doneText}>{t('notif.done')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -365,6 +364,7 @@ function NotificationCard({item, onPress, onDelete}: {
   onPress:  () => void;
   onDelete: () => void;
 }) {
+  const {t}          = useI18n();
   const meta         = getCategoryMeta(item.category);
   const receivedDate = new Date(item.receivedAt);
   const timeStr      = receivedDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -405,14 +405,18 @@ function NotificationCard({item, onPress, onDelete}: {
             <Text style={styles.timeText}>
               {item.startTime && item.endTime
                 ? `${item.startTime} – ${item.endTime}`
-                : item.startTime ? `From ${item.startTime}` : `Until ${item.endTime}`}
+                : item.startTime
+                  ? `${t('common.from')} ${item.startTime}`
+                  : `${t('common.until')} ${item.endTime}`}
             </Text>
           </View>
         )}
 
         <View style={styles.cardFooter}>
           <View style={[styles.catBadge, {borderColor: `${meta.color}55`}]}>
-            <Text style={[styles.catBadgeText, {color: meta.color}]}>{meta.label}</Text>
+            <Text style={[styles.catBadgeText, {color: meta.color}]}>
+              {t(getCategoryLabelKey(item.category))}
+            </Text>
           </View>
           <Text style={styles.cardDate}>{dateStr}</Text>
         </View>
@@ -437,6 +441,7 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
   onMarkRead:  () => void;
   onDelete:    () => void;
 }) {
+  const {t} = useI18n();
   if (!item) return null;
 
   const meta         = getCategoryMeta(item.category);
@@ -464,11 +469,13 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
             <View style={modal.categoryRow}>
               <View style={[modal.categoryBadge, {backgroundColor: `${meta.color}22`}]}>
                 <Icon name={meta.icon} size={15} color={meta.color} />
-                <Text style={[modal.categoryLabel, {color: meta.color}]}>{meta.label}</Text>
+                <Text style={[modal.categoryLabel, {color: meta.color}]}>
+                  {t(getCategoryLabelKey(item.category))}
+                </Text>
               </View>
               {!item.read && (
                 <View style={modal.unreadBadge}>
-                  <Text style={modal.unreadBadgeText}>Unread</Text>
+                  <Text style={modal.unreadBadgeText}>{t('notif.unreadBadge')}</Text>
                 </View>
               )}
             </View>
@@ -481,11 +488,13 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
               <View style={modal.timeBox}>
                 <Icon name="clock" size={20} color={colors.textSecondary} />
                 <View>
-                  <Text style={modal.timeBoxLabel}>Scheduled window</Text>
+                  <Text style={modal.timeBoxLabel}>{t('notif.scheduledWindow')}</Text>
                   <Text style={modal.timeBoxValue}>
                     {item.startTime && item.endTime
                       ? `${item.startTime} – ${item.endTime}`
-                      : item.startTime ? `From ${item.startTime}` : `Until ${item.endTime}`}
+                      : item.startTime
+                        ? `${t('common.from')} ${item.startTime}`
+                        : `${t('common.until')} ${item.endTime}`}
                   </Text>
                 </View>
               </View>
@@ -497,7 +506,9 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
             </View>
 
             {/* Received at */}
-            <Text style={modal.receivedAt}>Received {fullDateTime}</Text>
+            <Text style={modal.receivedAt}>
+              {t('notif.received').replace('{date}', fullDateTime)}
+            </Text>
 
           </ScrollView>
 
@@ -506,15 +517,15 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
             {!item.read && (
               <TouchableOpacity style={modal.actionSecondary} onPress={onMarkRead}>
                 <Icon name="check" size={14} color={colors.primary} />
-                <Text style={modal.actionSecondaryText}>Mark as read</Text>
+                <Text style={modal.actionSecondaryText}>{t('notif.markAsRead')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity style={modal.actionDanger} onPress={onDelete}>
               <Icon name="trash" size={14} color={colors.danger} />
-              <Text style={modal.actionDangerText}>Delete</Text>
+              <Text style={modal.actionDangerText}>{t('notif.delete')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={modal.actionPrimary} onPress={onClose}>
-              <Text style={modal.actionPrimaryText}>Close</Text>
+              <Text style={modal.actionPrimaryText}>{t('notif.close')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -527,15 +538,14 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
 // ── EmptyInbox ────────────────────────────────────────────────────────────────
 
 function EmptyInbox() {
+  const {t} = useI18n();
   return (
     <View style={styles.emptyWrap}>
       <View style={styles.emptyIconWrap}>
         <Icon name="bell" size={36} color={colors.textMuted} />
       </View>
-      <Text style={styles.emptyTitle}>No notifications yet</Text>
-      <Text style={styles.emptySub}>
-        Alerts for your area will appear here once they are issued.
-      </Text>
+      <Text style={styles.emptyTitle}>{t('notif.emptyTitle')}</Text>
+      <Text style={styles.emptySub}>{t('notif.emptySub')}</Text>
     </View>
   );
 }

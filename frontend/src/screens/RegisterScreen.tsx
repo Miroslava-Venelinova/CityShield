@@ -12,12 +12,15 @@ import {colors, spacing, radius, font} from '../theme';
 import {AuthStackParamList} from '../navigation/types';
 import CityShieldLogo from '../components/CityShieldLogo';
 import Icon from '../components/icons';
+import LanguageSwitcher from '../components/LanguageSwitcher';
+import {useI18n} from '../context/LanguageContext';
 
 type Props = {
   navigation: NativeStackNavigationProp<AuthStackParamList, 'Register'>;
 };
 
 export default function RegisterScreen({navigation}: Props) {
+  const {t} = useI18n();
   const [email,           setEmail]           = useState('');
   const [password,        setPassword]        = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -26,15 +29,15 @@ export default function RegisterScreen({navigation}: Props) {
 
   const handleRegister = async () => {
     if (!email.trim() || !password) {
-      Alert.alert('Validation', 'Email and password are required.');
+      Alert.alert(t('register.validationTitle'), t('register.errRequired'));
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Validation', 'Passwords do not match.');
+      Alert.alert(t('register.validationTitle'), t('register.errMismatch'));
       return;
     }
     if (password.length < 8) {
-      Alert.alert('Validation', 'Password must be at least 8 characters.');
+      Alert.alert(t('register.validationTitle'), t('register.errTooShort'));
       return;
     }
 
@@ -42,12 +45,12 @@ export default function RegisterScreen({navigation}: Props) {
     try {
       await authApi.register({email: email.trim(), password});
       Alert.alert(
-        'Account created',
-        'Sign in and then set your location to start receiving alerts.',
-        [{text: 'Sign In', onPress: () => navigation.navigate('Login')}],
+        t('register.createdTitle'),
+        t('register.createdMsg'),
+        [{text: t('register.signIn'), onPress: () => navigation.navigate('Login')}],
       );
     } catch (err: any) {
-      Alert.alert('Registration Failed', err.message || 'Something went wrong.');
+      Alert.alert(t('register.failedTitle'), err.message || t('register.failedMsg'));
     } finally {
       setLoading(false);
     }
@@ -72,9 +75,10 @@ export default function RegisterScreen({navigation}: Props) {
             <CityShieldLogo size={36} showWordmark={false} />
           </View>
           <View style={styles.headerTitleGroup}>
-            <Text style={styles.headerTitle}>Create Account</Text>
-            <Text style={styles.headerSubtitle}>Join your city's protection network</Text>
+            <Text style={styles.headerTitle}>{t('register.headerTitle')}</Text>
+            <Text style={styles.headerSubtitle}>{t('register.headerSubtitle')}</Text>
           </View>
+          <LanguageSwitcher />
         </View>
 
         {/* Progress */}
@@ -87,24 +91,24 @@ export default function RegisterScreen({navigation}: Props) {
             <Text style={styles.progressNumInactive}>2</Text>
           </View>
         </View>
-        <Text style={styles.progressLabel}>Account Details · Set Location</Text>
+        <Text style={styles.progressLabel}>{t('register.progressLabel')}</Text>
 
         {/* Form Card */}
         <View style={styles.card}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionDot} />
-            <Text style={styles.sectionTitle}>Account Details</Text>
+            <Text style={styles.sectionTitle}>{t('register.sectionTitle')}</Text>
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email Address *</Text>
+            <Text style={styles.label}>{t('register.emailLabel')}</Text>
             <View style={styles.inputWrapper}>
               <View style={styles.inputIcon}>
                 <Icon name="mail" size={15} color={colors.textMuted} />
               </View>
               <TextInput
                 style={styles.input}
-                placeholder="you@example.com"
+                placeholder={t('register.emailPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 value={email}
                 onChangeText={setEmail}
@@ -116,14 +120,14 @@ export default function RegisterScreen({navigation}: Props) {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password * (min. 8 characters)</Text>
+            <Text style={styles.label}>{t('register.passwordLabel')}</Text>
             <View style={styles.inputWrapper}>
               <View style={styles.inputIcon}>
                 <Icon name="lock" size={15} color={colors.textMuted} />
               </View>
               <TextInput
                 style={[styles.input, {flex: 1}]}
-                placeholder="Create a strong password"
+                placeholder={t('register.passwordPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 value={password}
                 onChangeText={setPassword}
@@ -140,7 +144,7 @@ export default function RegisterScreen({navigation}: Props) {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Confirm Password *</Text>
+            <Text style={styles.label}>{t('register.confirmLabel')}</Text>
             <View style={[
               styles.inputWrapper,
               passwordsMatch   ? styles.inputValid   : null,
@@ -151,7 +155,7 @@ export default function RegisterScreen({navigation}: Props) {
               </View>
               <TextInput
                 style={styles.input}
-                placeholder="Re-enter your password"
+                placeholder={t('register.confirmPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
@@ -172,10 +176,7 @@ export default function RegisterScreen({navigation}: Props) {
             <View style={styles.infoBoxIcon}>
               <Icon name="map-pin" size={16} color={colors.accent} />
             </View>
-            <Text style={styles.infoText}>
-              After creating your account, you'll be prompted to set your location.
-              This lets CityShield send you alerts relevant to your area.
-            </Text>
+            <Text style={styles.infoText}>{t('register.locationHint')}</Text>
           </View>
 
           <TouchableOpacity
@@ -185,13 +186,13 @@ export default function RegisterScreen({navigation}: Props) {
             activeOpacity={0.85}>
             {loading
               ? <ActivityIndicator color={colors.white} />
-              : <Text style={styles.primaryBtnText}>Create Account →</Text>}
+              : <Text style={styles.primaryBtnText}>{t('register.submit')}</Text>}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.linkBtn} onPress={() => navigation.navigate('Login')}>
             <Text style={styles.linkBtnText}>
-              Already have an account?{' '}
-              <Text style={styles.linkBtnHighlight}>Sign In</Text>
+              {t('register.haveAccount')}{' '}
+              <Text style={styles.linkBtnHighlight}>{t('register.signIn')}</Text>
             </Text>
           </TouchableOpacity>
         </View>

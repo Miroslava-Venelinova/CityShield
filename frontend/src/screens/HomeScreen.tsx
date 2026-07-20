@@ -18,8 +18,10 @@ import CityShieldLogo from '../components/CityShieldLogo';
 import AlertMap, {AlertMapHandle, MapMarker, MapPolygon} from '../components/AlertMap';
 import Icon from '../components/icons';
 import {alertsApi, Alert} from '../services/api';
-import {getCategoryMeta} from '../services/notifications';
+import {getCategoryMeta, getCategoryLabelKey} from '../services/notifications';
 import {useAuth} from '../context/AuthContext';
+import {useI18n} from '../context/LanguageContext';
+import {TranslationKey} from '../i18n/translations';
 
 const {height: SCREEN_HEIGHT} = Dimensions.get('window');
 
@@ -41,10 +43,13 @@ const SEVERITY_BG: Record<string, string> = {
 // notification inbox can never drift apart.
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function getAlertTitle(alert: Alert): string {
+// Display helpers take the i18n `t` so their output follows the app language.
+type T = (key: TranslationKey) => string;
+
+function getAlertTitle(alert: Alert, t: T): string {
   return alert.original_message.title
     ?? alert.original_message.header
-    ?? 'Alert';
+    ?? t('home.defaultAlertTitle');
 }
 
 function getAlertBody(alert: Alert): string {
@@ -53,11 +58,18 @@ function getAlertBody(alert: Alert): string {
     ?? '';
 }
 
-function formatTime(alert: Alert): string {
+function formatTime(alert: Alert, t: T): string {
   const {start_time, end_time} = alert.processed_data;
   if (start_time && end_time) { return `${start_time} – ${end_time}`; }
-  if (start_time) { return `From ${start_time}`; }
+  if (start_time) { return `${t('common.from')} ${start_time}`; }
   return '';
+}
+
+function severityLabel(severity: string, t: T): string {
+  if (severity === 'danger' || severity === 'warning' || severity === 'info') {
+    return t(`severity.${severity}`);
+  }
+  return severity.toUpperCase();
 }
 
 // ── Active window ─────────────────────────────────────────────────────────────
@@ -82,25 +94,26 @@ function isActive(alert: Alert): boolean {
   return alert.source !== 'vt' && activeUntil(alert) > Date.now();
 }
 
-function timeAgo(iso: string): string {
+function timeAgo(iso: string, t: T): string {
   const diff = Date.now() - new Date(iso).getTime();
   const h = Math.floor(diff / 3600000);
-  if (h < 1) { return 'Just now'; }
-  if (h < 24) { return `${h}h ago`; }
-  return `${Math.floor(h / 24)}d ago`;
+  if (h < 1) { return t('home.justNow'); }
+  if (h < 24) { return t('home.hoursAgo').replace('{n}', String(h)); }
+  return t('home.daysAgo').replace('{n}', String(Math.floor(h / 24)));
 }
 
-function greeting(): string {
+function greeting(t: T): string {
   const h = new Date().getHours();
-  if (h < 5)  { return 'Good evening,'; }
-  if (h < 12) { return 'Good morning,'; }
-  if (h < 18) { return 'Good afternoon,'; }
-  return 'Good evening,';
+  if (h < 5)  { return t('home.goodEvening'); }
+  if (h < 12) { return t('home.goodMorning'); }
+  if (h < 18) { return t('home.goodAfternoon'); }
+  return t('home.goodEvening');
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function HomeScreen() {
   const {token, hasLocation} = useAuth();
+  const {t} = useI18n();
   const mapRef = useRef<AlertMapHandle>(null);
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -258,10 +271,8 @@ export default function HomeScreen() {
           <View style={styles.noLocationBanner}>
             <Icon name="map-pin" size={22} color={colors.danger} />
             <View style={styles.noLocationText}>
-              <Text style={styles.noLocationTitle}>Location not set</Text>
-              <Text style={styles.noLocationSub}>
-                Go to Profile → Set My Location to receive alerts for your area.
-              </Text>
+              <Text style={styles.noLocationTitle}>{t('home.noLocationTitle')}</Text>
+              <Text style={styles.noLocationSub}>{t('home.noLocationSub')}</Text>
             </View>
           </View>
         )}
@@ -269,11 +280,11 @@ export default function HomeScreen() {
         {/* ── Hero ── */}
         <View style={styles.hero}>
           <View style={styles.heroLeft}>
-            <Text style={styles.heroGreeting}>{greeting()}</Text>
-            <Text style={styles.heroTitle}>City Monitor</Text>
+            <Text style={styles.heroGreeting}>{greeting(t)}</Text>
+            <Text style={styles.heroTitle}>{t('home.title')}</Text>
             <View style={styles.statusBadge}>
               <View style={styles.statusDot} />
-              <Text style={styles.statusText}>System Active</Text>
+              <Text style={styles.statusText}>{t('home.systemActive')}</Text>
             </View>
           </View>
           <CityShieldLogo size={54} showWordmark={false} />
@@ -283,31 +294,31 @@ export default function HomeScreen() {
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{activeCount}</Text>
-            <Text style={styles.statLabel}>Active Alerts</Text>
+            <Text style={styles.statLabel}>{t('home.statActive')}</Text>
           </View>
           <View style={styles.statCard}>
             <Text style={[styles.statValue, warningCount > 0 && {color: colors.warning}]}>
               {warningCount}
             </Text>
-            <Text style={styles.statLabel}>Warnings</Text>
+            <Text style={styles.statLabel}>{t('home.statWarnings')}</Text>
           </View>
           <View style={[styles.statCard, criticalCount > 0 && styles.statCardDanger]}>
             <Text style={[styles.statValue, criticalCount > 0 && {color: colors.danger}]}>
               {criticalCount}
             </Text>
-            <Text style={styles.statLabel}>Critical</Text>
+            <Text style={styles.statLabel}>{t('home.statCritical')}</Text>
           </View>
         </View>
 
         {/* ── Map section ── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Alert Map</Text>
+            <Text style={styles.sectionTitle}>{t('home.alertMap')}</Text>
             <TouchableOpacity
               style={styles.expandBtn}
               onPress={() => setMapExpanded(v => !v)}>
               <Text style={styles.expandBtnText}>
-                {mapExpanded ? 'Collapse' : 'Expand'}
+                {mapExpanded ? t('home.collapse') : t('home.expand')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -331,15 +342,15 @@ export default function HomeScreen() {
             <View style={styles.mapLegend}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, {backgroundColor: colors.danger}]} />
-                <Text style={styles.legendText}>Critical</Text>
+                <Text style={styles.legendText}>{t('home.legendCritical')}</Text>
               </View>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, {backgroundColor: colors.warning}]} />
-                <Text style={styles.legendText}>Warning</Text>
+                <Text style={styles.legendText}>{t('home.legendWarning')}</Text>
               </View>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, {backgroundColor: colors.accent}]} />
-                <Text style={styles.legendText}>Info</Text>
+                <Text style={styles.legendText}>{t('home.legendInfo')}</Text>
               </View>
             </View>
           </View>
@@ -363,7 +374,7 @@ export default function HomeScreen() {
                 styles.filterChipText,
                 activeFilter === f && styles.filterChipTextActive,
               ]}>
-                {f === 'all' ? 'All' : getCategoryMeta(f).label}
+                {f === 'all' ? t('home.filterAll') : t(getCategoryLabelKey(f))}
               </Text>
             </TouchableOpacity>
           ))}
@@ -372,10 +383,12 @@ export default function HomeScreen() {
         {/* ── Alert cards ── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Alerts</Text>
+            <Text style={styles.sectionTitle}>{t('home.alerts')}</Text>
             {activeAlerts.length > 0 && (
               <View style={styles.alertBadge}>
-                <Text style={styles.alertBadgeText}>{activeAlerts.length} active</Text>
+                <Text style={styles.alertBadgeText}>
+                  {activeAlerts.length} {t('home.activeSuffix')}
+                </Text>
               </View>
             )}
           </View>
@@ -390,7 +403,7 @@ export default function HomeScreen() {
                 styles.feedTabText,
                 feedTab === 'recent' && styles.feedTabTextActive,
               ]}>
-                Recent
+                {t('home.tabRecent')}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -400,7 +413,7 @@ export default function HomeScreen() {
                 styles.feedTabText,
                 feedTab === 'active' && styles.feedTabTextActive,
               ]}>
-                Active{activeAlerts.length > 0 ? ` (${activeAlerts.length})` : ''}
+                {t('home.tabActive')}{activeAlerts.length > 0 ? ` (${activeAlerts.length})` : ''}
               </Text>
             </TouchableOpacity>
           </View>
@@ -408,7 +421,7 @@ export default function HomeScreen() {
           {loading ? (
             <View style={styles.loadingWrap}>
               <ActivityIndicator color={colors.primary} size="large" />
-              <Text style={styles.loadingText}>Loading alerts…</Text>
+              <Text style={styles.loadingText}>{t('home.loadingAlerts')}</Text>
             </View>
           ) : feedAlerts.length === 0 ? (
             <View style={styles.emptyWrap}>
@@ -418,19 +431,19 @@ export default function HomeScreen() {
                 color={fetchFailed ? colors.textMuted : colors.success}
               />
               <Text style={styles.emptyTitle}>
-                {fetchFailed ? 'Couldn’t load alerts' : 'All clear'}
+                {fetchFailed ? t('home.loadFailedTitle') : t('home.allClear')}
               </Text>
               <Text style={styles.emptySub}>
                 {fetchFailed
-                  ? 'The alert service is unreachable. Pull down to try again.'
+                  ? t('home.loadFailedSub')
                   : feedTab === 'active'
-                    ? 'No alerts are active right now. Pull down to refresh.'
-                    : 'No recent alerts for Varna. Pull down to refresh.'}
+                    ? t('home.emptyActiveSub')
+                    : t('home.emptyRecentSub')}
               </Text>
             </View>
           ) : (
             <>
-              <Text style={styles.sectionSubtitle}>Tap a card to view details</Text>
+              <Text style={styles.sectionSubtitle}>{t('home.tapCard')}</Text>
               {feedAlerts.map(alert => (
                 <TouchableOpacity
                   key={alert.id}
@@ -449,10 +462,10 @@ export default function HomeScreen() {
                       </View>
                       <View style={styles.alertMeta}>
                         <Text style={styles.alertTitle} numberOfLines={1}>
-                          {getAlertTitle(alert)}
+                          {getAlertTitle(alert, t)}
                         </Text>
                         <Text style={styles.alertTime}>
-                          {timeAgo(alert.created_at)}
+                          {timeAgo(alert.created_at, t)}
                           {alert.processed_data.locations[0]?.location_name
                             ? ` · ${alert.processed_data.locations[0].location_name}`
                             : ''}
@@ -465,10 +478,10 @@ export default function HomeScreen() {
                     <Text style={styles.alertMessage} numberOfLines={2}>
                       {getAlertBody(alert)}
                     </Text>
-                    {formatTime(alert) ? (
+                    {formatTime(alert, t) ? (
                       <View style={styles.alertTimeRow}>
                         <Icon name="clock" size={12} color={colors.accent} />
-                        <Text style={styles.alertTimeWindow}>{formatTime(alert)}</Text>
+                        <Text style={styles.alertTimeWindow}>{formatTime(alert, t)}</Text>
                       </View>
                     ) : null}
                   </View>
@@ -482,13 +495,8 @@ export default function HomeScreen() {
         <View style={styles.infoCard}>
           <Icon name="info" size={20} color={colors.primary} />
           <View style={{flex: 1}}>
-            <Text style={styles.infoCardTitle}>How it works</Text>
-            <Text style={styles.infoCardText}>
-              Alerts from ВиК (water), еПро (power), Веолия (heating) and АПИ
-              (roads) are scraped, AI-parsed, and geo-located on the map.
-              VarnaTraffic route changes arrive as notifications and show up
-              under Recent — pick your bus lines in Notifications → Categories.
-            </Text>
+            <Text style={styles.infoCardTitle}>{t('home.howItWorks')}</Text>
+            <Text style={styles.infoCardText}>{t('home.howItWorksText')}</Text>
           </View>
         </View>
 
@@ -520,7 +528,7 @@ export default function HomeScreen() {
                       color={SEVERITY_COLOR[selectedAlert.severity]}
                     />
                     <Text style={[styles.sheetSourceLabel, {color: SEVERITY_COLOR[selectedAlert.severity]}]}>
-                      {getCategoryMeta(selectedAlert.source).label}
+                      {t(getCategoryLabelKey(selectedAlert.source))}
                     </Text>
                   </View>
                   <TouchableOpacity onPress={closeSheet} style={styles.closeBtn}>
@@ -528,23 +536,23 @@ export default function HomeScreen() {
                   </TouchableOpacity>
                 </View>
 
-                <Text style={styles.sheetTitle}>{getAlertTitle(selectedAlert)}</Text>
+                <Text style={styles.sheetTitle}>{getAlertTitle(selectedAlert, t)}</Text>
                 <Text style={styles.sheetBody}>{getAlertBody(selectedAlert)}</Text>
 
                 {/* Meta row */}
                 <View style={styles.sheetMeta}>
-                  {formatTime(selectedAlert) ? (
+                  {formatTime(selectedAlert, t) ? (
                     <View style={styles.sheetMetaChip}>
                       <Icon name="clock" size={12} color={colors.textSecondary} />
-                      <Text style={styles.sheetMetaText}>{formatTime(selectedAlert)}</Text>
+                      <Text style={styles.sheetMetaText}>{formatTime(selectedAlert, t)}</Text>
                     </View>
                   ) : null}
                   <View style={styles.sheetMetaChip}>
-                    <Text style={styles.sheetMetaText}>{timeAgo(selectedAlert.created_at)}</Text>
+                    <Text style={styles.sheetMetaText}>{timeAgo(selectedAlert.created_at, t)}</Text>
                   </View>
                   <View style={[styles.sheetMetaChip, {backgroundColor: SEVERITY_BG[selectedAlert.severity]}]}>
                     <Text style={[styles.sheetMetaText, {color: SEVERITY_COLOR[selectedAlert.severity]}]}>
-                      {selectedAlert.severity.toUpperCase()}
+                      {severityLabel(selectedAlert.severity, t)}
                     </Text>
                   </View>
                 </View>
