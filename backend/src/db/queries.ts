@@ -160,14 +160,27 @@ export async function getPreferenceRows(env: Env, userId: string): Promise<Prefe
   return results;
 }
 
+/**
+ * Categories are opt-out (§1.9): "enabled" is the default, so the only state
+ * worth storing is a disabled row. Re-enabling deletes instead of writing
+ * is_enabled = 1 — an enabled row is indistinguishable from no row to every
+ * reader, and the table stays small enough that getDisabledUserIds examines
+ * only genuine opt-outs.
+ */
 export async function upsertPreference(env: Env, userId: string, category: string, isEnabled: boolean) {
+  if (isEnabled) {
+    await env.DB.prepare(
+      "DELETE FROM user_notification_preferences WHERE user_id = ? AND category = ?",
+    ).bind(userId, category).run();
+    return;
+  }
   await env.DB.prepare(
     `INSERT INTO user_notification_preferences (user_id, category, is_enabled, updated_at)
-     VALUES (?, ?, ?, ?)
+     VALUES (?, ?, 0, ?)
      ON CONFLICT(user_id, category) DO UPDATE SET
-       is_enabled = excluded.is_enabled,
+       is_enabled = 0,
        updated_at = excluded.updated_at`,
-  ).bind(userId, category, isEnabled ? 1 : 0, nowIso()).run();
+  ).bind(userId, category, nowIso()).run();
 }
 
 // ── alert targeting (user-id queries; only ids are materialized) ─────────────
