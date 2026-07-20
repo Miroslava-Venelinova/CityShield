@@ -3,6 +3,7 @@
 
 import { env, fetchMock } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearAlertFeedCache } from "../src/api/alerts";
 import { clearFcmTokenCache } from "../src/core/fcm";
 import { clearRefCaches } from "../src/db/queries";
 import { api, jsonInit } from "./helpers";
@@ -16,6 +17,7 @@ beforeAll(() => {
 
 beforeEach(async () => {
   clearRefCaches(); // module caches outlive per-test D1 resets
+  await clearAlertFeedCache(); // as does the edge-cached /recent feed
   await env.DB.prepare(
     "INSERT INTO regions (region_name) VALUES ('Аспарухово'), ('Левски')").run();
   await env.DB.prepare(

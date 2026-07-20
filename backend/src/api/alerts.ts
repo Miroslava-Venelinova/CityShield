@@ -13,6 +13,30 @@ import { requireAuth, requireIngestKey } from "./middleware";
 const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const RECENT_LIMIT = 100;
 
+// /recent is the same payload for every authenticated caller, so one cached
+// copy serves all of them. Without this, D1 rows read scale with clients ×
+// poll rate (100 rows a poll); with it they scale with time only, which is
+// what keeps the free plan's daily row-read budget in reach. Ingest runs on a
+// 10-minute cron, so a 60 s edge TTL is well inside the source's own latency.
+const FEED_CACHE_TTL_S = 60;
+
+/** User-independent cache key — never derived from the caller's token. */
+const feedCacheKey = (url: string) => new Request(`${new URL(url).origin}/api/alerts/recent`);
+
+/** Hono only exposes executionCtx when one was supplied (not via app.request in tests). */
+function detach(c: { executionCtx: { waitUntil(p: Promise<unknown>): void } }, promise: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(promise);
+  } catch {
+    void promise; // no ExecutionContext — the cache write is best-effort anyway
+  }
+}
+
+/** Test hook: drop the edge-cached feed, which outlives per-test D1 resets. */
+export async function clearAlertFeedCache(origin = "http://localhost"): Promise<void> {
+  await caches.default.delete(feedCacheKey(origin)).catch(() => false);
+}
+
 export const alertRoutes = new Hono<AppEnv>()
 
   .post("/submit-data", requireIngestKey, async (c) => {
@@ -66,8 +90,19 @@ export const alertRoutes = new Hono<AppEnv>()
     });
   })
 
+  // requireAuth still runs on every request — only the D1 read is cached, and
+  // the payload carries no per-user data (city alerts are public information).
   .get("/recent", requireAuth, async (c) => {
-    return c.json(await getRecentAlerts(c.env, RECENT_WINDOW_MS, RECENT_LIMIT));
+    const key = feedCacheKey(c.req.url);
+    const hit = await caches.default.match(key);
+    if (hit) return hit;
+
+    const res = c.json(await getRecentAlerts(c.env, RECENT_WINDOW_MS, RECENT_LIMIT));
+    // `public` is required for the Cache API to store the response at all;
+    // clients honouring it just means fewer requests for the same public data.
+    res.headers.set("Cache-Control", `public, max-age=${FEED_CACHE_TTL_S}`);
+    detach(c, caches.default.put(key, res.clone()));
+    return res;
   });
 
 /** Fan-out chain hop (§1.6): each self-invocation gets a fresh 50-subrequest budget. */
