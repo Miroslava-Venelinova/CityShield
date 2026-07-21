@@ -71,6 +71,11 @@ export async function runDailyCleanup(env: Env): Promise<void> {
     // expires_at; the row is kept a day longer only so an "already used" click
     // still lands on a sensible page rather than looking unknown.
     { label: "expired auth token(s)", sql: "DELETE FROM auth_tokens WHERE expires_at < ?", cutoffDays: 1 },
+    // Spent and expired sessions (migration 0007). Rotated rows are kept a week
+    // so replay detection still recognises a leaked chain instead of treating
+    // it as an unknown token; past that, the family is long dead anyway.
+    { label: "expired refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE expires_at < ?", cutoffDays: 0 },
+    { label: "spent refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE used_at IS NOT NULL AND used_at < ?", cutoffDays: 7 },
   ];
 
   for (const job of jobs) {

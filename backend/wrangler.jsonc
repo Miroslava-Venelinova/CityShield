@@ -40,7 +40,13 @@
     // hosts mailbombing one. Tight, because every allowed call sends real mail
     // against a 300/day provider quota.
     { "name": "RL_EMAIL_IP", "namespace_id": "1006", "simple": { "limit": 5, "period": 60 } },
-    { "name": "RL_EMAIL_ADDR", "namespace_id": "1007", "simple": { "limit": 2, "period": 60 } }
+    { "name": "RL_EMAIL_ADDR", "namespace_id": "1007", "simple": { "limit": 2, "period": 60 } },
+    // Session renewal. Its own bucket rather than RL_LOGIN_IP's: a refresh is a
+    // normal thing a signed-in app does hourly, and behind carrier NAT enough
+    // of them share an IP that they would otherwise eat the login allowance —
+    // throttling sign-ins because other people's apps woke up. Still bounded,
+    // because the endpoint mints access tokens.
+    { "name": "RL_REFRESH_IP", "namespace_id": "1008", "simple": { "limit": 30, "period": 60 } }
   ],
   "vars": {
     // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes

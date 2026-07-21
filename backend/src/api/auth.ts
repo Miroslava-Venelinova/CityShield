@@ -9,6 +9,9 @@ import {
 import { bestMatch, SIMILARITY_THRESHOLD } from "../core/fuzzy";
 import { reverseGeocode } from "../core/geocoding";
 import { signToken } from "../core/jwt";
+import {
+  issueRefreshToken, revokeAllRefreshTokens, revokeRefreshToken, rotateRefreshToken,
+} from "../core/refresh-tokens";
 import { passwordResetMail, sendMail, verificationMail } from "../core/mailer";
 import { hashPassword, verifyPassword } from "../core/password";
 import * as q from "../db/queries";
@@ -39,6 +42,8 @@ const locationSchema = z.object({
 });
 
 const forgotSchema = z.object({ email: z.string().email() });
+
+const refreshSchema = z.object({ refreshToken: z.string().min(1) });
 
 /** Same bounds as registration, so a reset cannot install a password signup would reject. */
 const newPasswordSchema = z.string().min(8).max(50);
@@ -96,7 +101,53 @@ export const authRoutes = new Hono<AppEnv>()
     if (!user || !(await verifyPassword(password, user.password_hash)))
       return c.text("Invalid email or password", 401);
 
-    return c.json({ token: await signToken(c.env, user.user_id, user.email) });
+    return c.json({
+      token: await signToken(c.env, user.user_id, user.email),
+      refreshToken: await issueRefreshToken(c.env, user.user_id),
+    });
+  })
+
+  /**
+   * Trade a refresh token for a fresh access token (and a fresh refresh token —
+   * rotation, see core/refresh-tokens.ts). Unauthenticated by design: the
+   * caller's access token is expected to be expired, which is the whole reason
+   * they are here. The refresh token is the credential.
+   *
+   * Rate limited per IP, because this endpoint hands out access tokens — but on
+   * its own bucket, so hourly renewals from a shared IP cannot throttle
+   * sign-ins.
+   */
+  .post("/refresh", async (c) => {
+    const ip = clientIp(c.req.raw.headers);
+    if (await isOverLimit(c.env.RL_REFRESH_IP, ip, "RL_REFRESH_IP")) return tooManyRequests(60);
+
+    const parsed = refreshSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.body(null, 401);
+
+    const rotated = await rotateRefreshToken(c.env, parsed.data.refreshToken);
+    if (!rotated) return c.body(null, 401);
+
+    // The email lives in the JWT, so it is read fresh rather than carried in
+    // the refresh row — and a user deleted mid-session fails here instead of
+    // being handed a token for an account that no longer exists.
+    const user = await q.getUserById(c.env, rotated.userId);
+    if (!user) return c.body(null, 401);
+
+    return c.json({
+      token: await signToken(c.env, user.user_id, user.email),
+      refreshToken: rotated.refreshToken,
+    });
+  })
+
+  /**
+   * End this device's session. 204 whatever happens: a client that is signing
+   * out has already discarded its tokens locally, and an error it cannot act on
+   * would only strand it on a "could not sign out" dialog.
+   */
+  .post("/logout", async (c) => {
+    const parsed = refreshSchema.safeParse(await c.req.json().catch(() => null));
+    if (parsed.success) await revokeRefreshToken(c.env, parsed.data.refreshToken);
+    return c.body(null, 204);
   })
 
   .get("/me", requireAuth, async (c) => {
@@ -243,13 +294,18 @@ export const authRoutes = new Hono<AppEnv>()
     // Receiving the mail proves control of the address, so this doubles as
     // verification for accounts that never clicked the signup link.
     await q.markEmailVerified(c.env, userId);
+    // Sign every device out. Someone resetting a password may be evicting
+    // whoever got in, and a 60-day refresh token would otherwise outlive the
+    // password it was issued against. Access tokens already in flight still
+    // work until they expire — that hour is the bound we cannot revoke.
+    await revokeAllRefreshTokens(c.env, userId);
 
     return c.html(resultPage(
       "Паролата е сменена. Влезте в приложението с новата парола.",
       "Your password has been changed. Sign in to the app with the new one.",
       true,
-      "Активните сесии изтичат до един час.",
-      "Any active sessions expire within an hour.",
+      "Другите устройства са отписани.",
+      "Other devices have been signed out.",
     ));
   })
 

@@ -6,7 +6,12 @@ import {API_BASE_URL as BASE_URL} from '../config';
 export interface LoginRequest    { email: string; password: string; }
 // Register no longer takes regionId / streetId — location is set separately
 export interface RegisterRequest { email: string; password: string; }
-export interface LoginResponse   { token: string; }
+/**
+ * `token` is the 60-minute access token; `refreshToken` outlives it and is
+ * traded for a new pair by `POST /api/auth/refresh` (see the session hook
+ * below).
+ */
+export interface LoginResponse   { token: string; refreshToken: string; }
 
 export interface UserDTO {
   email:         string;
@@ -102,10 +107,51 @@ export class NetworkError extends Error {
   }
 }
 
+// ── Session renewal ───────────────────────────────────────────────────────────
+//
+// Access tokens expire after an hour. Nothing here used to notice: screens held
+// whatever token was in storage, every call started coming back 401, and each
+// screen swallowed it into its own "couldn't load" state — so the app read as
+// permanently offline until it was reinstalled.
+//
+// So `request` renews once on a 401 and replays the call. AuthContext owns the
+// tokens and installs the renewer below; this module stays unaware of storage
+// and of navigation, and screens keep passing the token they already have.
+
+/** Returns a fresh access token, or null when the session is truly over. */
+type Renewer = () => Promise<string | null>;
+
+let renewSession: Renewer | null = null;
+
+/**
+ * Installed once by AuthProvider. Without it (tests, the login screen) a 401 is
+ * just a 401 — which is correct: there is no session to renew yet.
+ */
+export function setSessionRenewer(renewer: Renewer | null): void {
+  renewSession = renewer;
+}
+
+// A screen that fans out several calls gets several simultaneous 401s. They
+// must not each rotate the refresh token — rotation invalidates the previous
+// one, so the second rotation would race the first and one caller would end up
+// signed out. Everyone waits on the same in-flight renewal instead.
+let inFlightRenewal: Promise<string | null> | null = null;
+
+function renewOnce(): Promise<string | null> {
+  if (!inFlightRenewal) {
+    inFlightRenewal = (renewSession ?? (async () => null))()
+      .catch(() => null)
+      .finally(() => { inFlightRenewal = null; });
+  }
+  return inFlightRenewal;
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
   authToken?: string,
+  /** Set on the replay after a renewal, so one failure cannot loop. */
+  isRetry = false,
 ): Promise<T> {
   const url = `${BASE_URL}${path}`;
 
@@ -129,6 +175,16 @@ async function request<T>(
       `Network error reaching ${url}: ${networkErr?.message ?? String(networkErr)}`,
     );
     throw new NetworkError(`Request to ${path} never reached the server`);
+  }
+
+  // An expired access token on an authenticated call: renew and replay once.
+  // Unauthenticated calls (login, /password/forgot) are excluded — a 401 there
+  // means bad credentials and is the caller's answer, not a stale session.
+  if (response.status === 401 && authToken && !isRetry && renewSession) {
+    const renewed = await renewOnce();
+    if (renewed) {
+      return request<T>(path, options, renewed, true);
+    }
   }
 
   const text = await response.text();
@@ -159,6 +215,20 @@ export const authApi = {
   register: (body: RegisterRequest): Promise<string> =>
     request<string>('/api/auth/register',
       {method: 'POST', body: JSON.stringify(body)}),
+
+  /**
+   * Trade a refresh token for a new pair. Called only by AuthContext's renewer;
+   * screens never touch it. Deliberately not sent with an Authorization header
+   * — the whole point is that the access token is expired.
+   */
+  refresh: (refreshToken: string): Promise<LoginResponse> =>
+    request<LoginResponse>('/api/auth/refresh',
+      {method: 'POST', body: JSON.stringify({refreshToken})}),
+
+  /** Drop this device's session server-side. Best-effort; never throws to the UI. */
+  logout: (refreshToken: string): Promise<void> =>
+    request<void>('/api/auth/logout',
+      {method: 'POST', body: JSON.stringify({refreshToken})}),
 
   me: (authToken: string): Promise<UserDTO> =>
     request<UserDTO>('/api/auth/me', {method: 'GET'}, authToken),

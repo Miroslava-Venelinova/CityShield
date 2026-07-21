@@ -46,7 +46,7 @@ export default function LoginScreen({navigation}: Props) {
     setLoading(true);
     try {
       const res = await authApi.login({email: email.trim(), password});
-      await login(res.token);
+      await login(res.token, res.refreshToken);
     } catch (err: unknown) {
       // On this screen a 401 means bad credentials, not an expired session.
       Alert.alert(t('login.failedTitle'), t(errorMessageKey(err, 'login.failedMsg')));

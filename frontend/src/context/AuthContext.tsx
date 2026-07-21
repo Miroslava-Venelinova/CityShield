@@ -1,9 +1,12 @@
 // ─── src/context/AuthContext.tsx ──────────────────────────────────────────────
 import React, {
-  createContext, useContext, useState, useEffect, useCallback, ReactNode,
+  createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {authApi, tokensApi} from '../services/api';
+import {authApi, setSessionRenewer, tokensApi} from '../services/api';
+
+const ACCESS_KEY  = 'auth_token';
+const REFRESH_KEY = 'refresh_token';
 
 interface AuthContextType {
   token:         string | null;
@@ -12,7 +15,7 @@ interface AuthContextType {
   streetName:    string | null;
   emailVerified: boolean | null;   // null = not yet loaded
   isLoading:     boolean;
-  login:       (token: string) => Promise<void>;
+  login:       (token: string, refreshToken: string) => Promise<void>;
   logout:      (fcmToken?: string) => Promise<void>;
   setHasLocation: (value: boolean) => void;
   refreshProfile: () => Promise<void>;
@@ -39,12 +42,62 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
   const [emailVerified, setEmailVerified] = useState<boolean | null>(null);
   const [isLoading,   setIsLoading]   = useState(true);
 
+  // The refresh token is never rendered, and the renewer must always see the
+  // newest one (rotation replaces it on every use), so it lives in a ref rather
+  // than in state where a stale closure could capture a spent value.
+  const refreshTokenRef = useRef<string | null>(null);
+
+  /** Wipe the session locally. Dropping `token` sends the navigator to Login. */
+  const clearSession = useCallback(async () => {
+    refreshTokenRef.current = null;
+    await AsyncStorage.multiRemove([ACCESS_KEY, REFRESH_KEY]).catch(() => {});
+    setToken(null);
+    setHasLocation(null);
+    setRegionName(null);
+    setStreetName(null);
+    setEmailVerified(null);
+  }, []);
+
+  // Teach the API layer how to renew an expired access token. Registered before
+  // the boot effect below (effects run in declaration order), so the very first
+  // /me call after a cold start can already be retried — that call is the one
+  // most likely to carry an hours-old token.
+  useEffect(() => {
+    setSessionRenewer(async () => {
+      const refreshToken = refreshTokenRef.current;
+      if (!refreshToken) { return null; }
+      try {
+        const res = await authApi.refresh(refreshToken);
+        refreshTokenRef.current = res.refreshToken;
+        await AsyncStorage.multiSet([
+          [ACCESS_KEY, res.token],
+          [REFRESH_KEY, res.refreshToken],
+        ]).catch(() => {});
+        setToken(res.token);
+        return res.token;
+      } catch {
+        // 401 means the refresh token is spent, expired or revoked — the
+        // session is genuinely over and the user must sign in again. A network
+        // failure lands here too and signs them out a little eagerly; the
+        // alternative is leaving the app in the exact silent-dead state this
+        // whole mechanism exists to remove.
+        await clearSession();
+        return null;
+      }
+    });
+    return () => setSessionRenewer(null);
+  }, [clearSession]);
+
   useEffect(() => {
     (async () => {
       try {
-        const stored = await AsyncStorage.getItem('auth_token');
+        const [[, stored], [, storedRefresh]] =
+          await AsyncStorage.multiGet([ACCESS_KEY, REFRESH_KEY]);
+        refreshTokenRef.current = storedRefresh ?? null;
         if (stored) {
           setToken(stored);
+          // May well be expired after a night on the shelf; the renewer above
+          // handles that transparently.
           await fetchProfile(stored);
         }
       } catch {
@@ -73,8 +126,12 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
     }
   }
 
-  const login = async (newToken: string) => {
-    await AsyncStorage.setItem('auth_token', newToken);
+  const login = async (newToken: string, newRefreshToken: string) => {
+    refreshTokenRef.current = newRefreshToken;
+    await AsyncStorage.multiSet([
+      [ACCESS_KEY, newToken],
+      [REFRESH_KEY, newRefreshToken],
+    ]);
     setToken(newToken);
     await fetchProfile(newToken);
   };
@@ -84,12 +141,14 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
       try { await tokensApi.unregister({token: fcmToken}, token); }
       catch { /* best-effort */ }
     }
-    await AsyncStorage.removeItem('auth_token');
-    setToken(null);
-    setHasLocation(null);
-    setRegionName(null);
-    setStreetName(null);
-    setEmailVerified(null);
+    // Revoke server-side too, so the 60-day refresh token dies with the session
+    // rather than lingering in the database until it expires on its own.
+    const refreshToken = refreshTokenRef.current;
+    if (refreshToken) {
+      try { await authApi.logout(refreshToken); }
+      catch { /* best-effort — signing out locally is what matters */ }
+    }
+    await clearSession();
   };
 
   const refreshProfile = useCallback(async () => {

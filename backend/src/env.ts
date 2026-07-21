@@ -7,6 +7,8 @@ export interface Env {
   // request — `enforceLimit` degrades to allow-and-warn, see api/rate-limit.ts.
   RL_LOGIN_IP?: RateLimit;
   RL_LOGIN_EMAIL?: RateLimit;
+  /** Session renewal (/api/auth/refresh) — separate from login, see wrangler.jsonc. */
+  RL_REFRESH_IP?: RateLimit;
   RL_REGISTER_IP?: RateLimit;
   RL_GEOCODE_USER?: RateLimit;
   RL_API_IP?: RateLimit;
