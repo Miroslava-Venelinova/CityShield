@@ -56,6 +56,40 @@ export const LEAFLET_HEAD = `
         crossorigin="anonymous"></script>`;
 
 /**
+ * Page-side half of the "map inside a ScrollView" fix, injected into both map
+ * documents (they define `post` before including it).
+ *
+ * The problem: on Android the parent ScrollView claims a vertical drag that
+ * started inside the WebView, so trying to pan the map scrolled the whole
+ * Home screen instead. The RN side reacts by disabling the ScrollView for the
+ * duration of the gesture — but it can only put scrolling *back* once it knows
+ * the touch is over, and a native child swallows the touch-end that the
+ * responder system would otherwise report. So the page tells us directly.
+ *
+ * `touchcancel` matters as much as `touchend`: it is what fires if the
+ * platform tears the gesture away mid-pan, and without it the ScrollView would
+ * stay disabled for good.
+ */
+export const MAP_GESTURE_SCRIPT = `
+  (function () {
+    var active = false;
+    function start() {
+      if (active) { return; }
+      active = true;
+      post({ type: 'gestureStart' });
+    }
+    function end(e) {
+      // Multi-touch pinch: only release once the last finger is up.
+      if (!active || (e && e.touches && e.touches.length > 0)) { return; }
+      active = false;
+      post({ type: 'gestureEnd' });
+    }
+    document.addEventListener('touchstart', start, { passive: true });
+    document.addEventListener('touchend', end, { passive: true });
+    document.addEventListener('touchcancel', end, { passive: true });
+  })();`;
+
+/**
  * Security props shared by both maps.
  *
  * Neither page ever legitimately navigates: they are fixed local documents.
@@ -88,6 +122,9 @@ export const hardenedWebViewProps: Partial<WebViewProps> = {
   mixedContentMode: 'never',
   setSupportMultipleWindows: false,
   overScrollMode: 'never',
+  // Android: let the WebView win the drag against an enclosing ScrollView
+  // instead of forwarding it upward the moment it moves vertically.
+  nestedScrollEnabled: true,
 };
 
 /**

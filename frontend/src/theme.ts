@@ -1,8 +1,62 @@
 // ─── src/theme.ts ────────────────────────────────────────────────────────────
 // Design tokens. Screens should reference these rather than literal values, so
 // that spacing rhythm, elevation and colour stay consistent across the app.
+//
+// Colour is the one scale that is *not* a plain export: the app ships a light
+// and a dark palette and picks between them at runtime. Get them from
+// `useTheme()` / `useThemedStyles()` in context/ThemeContext.tsx rather than
+// importing a palette directly, otherwise the value is frozen at module load
+// and the screen stops following the theme.
 
-export const colors = {
+/**
+ * Colour roles. Both palettes implement this exact set, so a screen written
+ * against it renders in either theme without branching.
+ *
+ * Names describe the *role*, not the hue — `background` is the app canvas in
+ * both themes even though one is near-white and the other near-black.
+ */
+export interface Colors {
+  background: string;
+  surface: string;
+  card: string;
+  border: string;
+  borderLight: string;
+
+  primary: string;
+  primaryDark: string;
+  primaryLight: string;
+  accent: string;
+  accentGlow: string;
+
+  textPrimary: string;
+  textSecondary: string;
+  textMuted: string;
+  textInverse: string;
+
+  success: string;
+  warning: string;
+  danger: string;
+  info: string;
+
+  successSoft: string;
+  warningSoft: string;
+  dangerSoft: string;
+  infoSoft: string;
+
+  white: string;
+  black: string;
+  overlay: string;
+
+  /** Shadow colour — near-black in light, pure black in dark. */
+  shadow: string;
+  /**
+   * Backdrop painted behind a map WebView while its tiles load, and the page
+   * background inside it. Kept next to the palette so the two never disagree.
+   */
+  mapBackdrop: string;
+}
+
+export const lightColors: Colors = {
   // ── Surfaces ──
   // Named by role, not by hue. These were previously `navy` and `dark`, left
   // over from a dark theme; after the switch to a light palette `navy` was
@@ -46,6 +100,54 @@ export const colors = {
   black: '#000000',
   /** Scrim behind modals and bottom sheets. */
   overlay: 'rgba(13,33,69,0.45)',
+  shadow: '#0D2145',
+  mapBackdrop: '#EAF2FF',
+};
+
+/**
+ * Dark palette.
+ *
+ * Surfaces are navy rather than neutral grey so the brand blue still reads as
+ * the accent instead of the only colour on screen. Brand and status hues are
+ * lifted a few steps versus the light palette — #1A56DB on a #131E31 card is
+ * below any usable contrast ratio, so `primary` here is a lifted tint rather
+ * than the literal brand value. The one place the raw brand blue survives is
+ * the logo mark, which carries its own literal colours by design.
+ */
+export const darkColors: Colors = {
+  background:  '#0A1220',
+  surface:     '#131E31',
+  card:        '#1C2B44',
+  border:      '#283A57',
+  borderLight: '#1E2C42',
+
+  primary:     '#5B93F8',
+  primaryDark: '#3B7AE8',
+  primaryLight:'#8AB4FF',
+  accent:      '#38BDF8',
+  accentGlow:  '#0C4A6E',
+
+  textPrimary:   '#E9F1FD',
+  textSecondary: '#A9C1E2',
+  textMuted:     '#7189AC',
+  textInverse:   '#0A1220',
+
+  success:  '#4ADE80',
+  warning:  '#FBBF24',
+  danger:   '#F87171',
+  info:     '#38BDF8',
+
+  // Softer fills need more alpha on a dark canvas to stay visible at all.
+  successSoft: 'rgba(74,222,128,0.16)',
+  warningSoft: 'rgba(251,191,36,0.16)',
+  dangerSoft:  'rgba(248,113,113,0.16)',
+  infoSoft:    'rgba(56,189,248,0.16)',
+
+  white: '#FFFFFF',
+  black: '#000000',
+  overlay: 'rgba(2,6,14,0.65)',
+  shadow: '#000000',
+  mapBackdrop: '#0F1826',
 };
 
 /** 4pt spacing scale. */
@@ -109,34 +211,42 @@ export const font = {
  *   md — headers, floating controls, raised cards
  *   lg — modals and bottom sheets
  * `accent` is the primary-tinted variant used by filled brand buttons.
+ *
+ * Palette-dependent (shadow colour, and a stronger opacity in dark where a
+ * soft navy shadow on a navy canvas is invisible), hence a factory.
  */
-export const elevation = {
-  sm: {
-    shadowColor: colors.textPrimary,
-    shadowOffset: {width: 0, height: 1},
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  md: {
-    shadowColor: colors.textPrimary,
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  lg: {
-    shadowColor: colors.textPrimary,
-    shadowOffset: {width: 0, height: -2},
-    shadowOpacity: 0.16,
-    shadowRadius: 20,
-    elevation: 12,
-  },
-  accent: {
-    shadowColor: colors.primary,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.28,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-} as const;
+export function createElevation(c: Colors, dark: boolean) {
+  const boost = dark ? 2 : 1;
+  return {
+    sm: {
+      shadowColor: c.shadow,
+      shadowOffset: {width: 0, height: 1},
+      shadowOpacity: 0.05 * boost,
+      shadowRadius: 4,
+      elevation: 1,
+    },
+    md: {
+      shadowColor: c.shadow,
+      shadowOffset: {width: 0, height: 2},
+      shadowOpacity: 0.1 * boost,
+      shadowRadius: 8,
+      elevation: 3,
+    },
+    lg: {
+      shadowColor: c.shadow,
+      shadowOffset: {width: 0, height: -2},
+      shadowOpacity: 0.16 * boost,
+      shadowRadius: 20,
+      elevation: 12,
+    },
+    accent: {
+      shadowColor: dark ? c.shadow : c.primary,
+      shadowOffset: {width: 0, height: 4},
+      shadowOpacity: 0.28,
+      shadowRadius: 10,
+      elevation: 6,
+    },
+  } as const;
+}
+
+export type Elevation = ReturnType<typeof createElevation>;

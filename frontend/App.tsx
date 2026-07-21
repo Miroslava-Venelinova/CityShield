@@ -6,6 +6,7 @@ import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {ErrorBoundary} from './src/components/ErrorBoundary';
 import {AuthProvider, useAuth} from './src/context/AuthContext';
 import {LanguageProvider} from './src/context/LanguageContext';
+import {ThemeProvider} from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import {registerNotificationHandlers} from './src/services/push';
 import {syncFromRecentAlerts} from './src/services/notifications';
@@ -47,12 +48,14 @@ export default function App() {
     <ErrorBoundary>
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>
-          <LanguageProvider>
-            <AuthProvider>
-              <PushSync />
-              <AppNavigator />
-            </AuthProvider>
-          </LanguageProvider>
+          <ThemeProvider>
+            <LanguageProvider>
+              <AuthProvider>
+                <PushSync />
+                <AppNavigator />
+              </AuthProvider>
+            </LanguageProvider>
+          </ThemeProvider>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

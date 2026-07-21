@@ -36,7 +36,9 @@ export type IconName =
   | 'refresh'
   | 'flame'
   | 'road'
-  | 'globe';
+  | 'globe'
+  | 'sun'
+  | 'moon';
 
 interface IconProps {
   name: IconName;
@@ -279,6 +281,27 @@ export default function Icon({
             <Line x1="12" y1="11" x2="12" y2="14" {...common} />
             <Line x1="12" y1="18" x2="12" y2="20" {...common} />
           </>
+        );
+      case 'sun':
+        return (
+          <>
+            <Circle cx="12" cy="12" r="4.2" {...common} />
+            <Line x1="12" y1="1.5" x2="12" y2="3.6" {...common} />
+            <Line x1="12" y1="20.4" x2="12" y2="22.5" {...common} />
+            <Line x1="4.2" y1="4.2" x2="5.7" y2="5.7" {...common} />
+            <Line x1="18.3" y1="18.3" x2="19.8" y2="19.8" {...common} />
+            <Line x1="1.5" y1="12" x2="3.6" y2="12" {...common} />
+            <Line x1="20.4" y1="12" x2="22.5" y2="12" {...common} />
+            <Line x1="4.2" y1="19.8" x2="5.7" y2="18.3" {...common} />
+            <Line x1="18.3" y1="5.7" x2="19.8" y2="4.2" {...common} />
+          </>
+        );
+      case 'moon':
+        return (
+          <Path
+            d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"
+            {...common}
+          />
         );
       default:
         return null;

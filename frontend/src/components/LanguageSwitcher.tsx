@@ -3,7 +3,8 @@
 import React from 'react';
 import {View, Text, TouchableOpacity, StyleSheet} from 'react-native';
 import {useI18n} from '../context/LanguageContext';
-import {colors, radius, font} from '../theme';
+import {Colors, radius, font} from '../theme';
+import {useThemedStyles} from '../context/ThemeContext';
 import {Language} from '../i18n/translations';
 
 const OPTIONS: {value: Language; label: string}[] = [
@@ -13,6 +14,7 @@ const OPTIONS: {value: Language; label: string}[] = [
 
 export default function LanguageSwitcher() {
   const {language, setLanguage} = useI18n();
+  const styles = useThemedStyles(makeStyles);
 
   return (
     <View style={styles.wrap}>
@@ -34,7 +36,7 @@ export default function LanguageSwitcher() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   wrap: {
     flexDirection: 'row',
     backgroundColor: colors.surface,

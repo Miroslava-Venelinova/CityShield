@@ -12,7 +12,8 @@ import {authApi} from '../services/api';
 import {API_BASE_URL} from '../config';
 import {errorMessageKey} from '../services/errors';
 import {hasPushPermission, requestPushPermission} from '../services/push';
-import {colors, spacing, radius, font} from '../theme';
+import {Colors, spacing, radius, font} from '../theme';
+import {useTheme, useThemedStyles} from '../context/ThemeContext';
 import Icon, {IconName} from '../components/icons';
 import LocationPickerMap from '../components/LocationPickerMap';
 
@@ -59,6 +60,8 @@ export default function ProfileScreen() {
   const {token, hasLocation, regionName, streetName, emailVerified,
          setHasLocation, logout, refreshProfile} = useAuth();
   const {language, setLanguage, t} = useI18n();
+  const {colors, isDark, preference, setPreference} = useTheme();
+  const styles = useThemedStyles(makeStyles);
 
   const [alertsEnabled,    setAlertsEnabled]    = useState(false);
   const [locationLoading,  setLocationLoading]   = useState(false);
@@ -248,7 +251,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" translucent />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} translucent />
       <ScrollView contentContainerStyle={styles.scroll}>
 
         {/* ── No-location banner ── */}
@@ -290,6 +293,33 @@ export default function ProfileScreen() {
             label={t('profile.languageEnglish')}
             selected={language === 'en'}
             onPress={() => setLanguage('en')}
+          />
+        </Section>
+
+        {/* ── Appearance ── */}
+        <Section title={t('profile.sectionAppearance')}>
+          {/* `system` first, and the default: it is the only option that keeps
+              following the device once night mode flips. */}
+          <ChoiceRow
+            icon="settings"
+            label={t('profile.themeSystem')}
+            sub={t('profile.themeSystemSub')}
+            selected={preference === 'system'}
+            onPress={() => setPreference('system')}
+          />
+          <Divider />
+          <ChoiceRow
+            icon="sun"
+            label={t('profile.themeLight')}
+            selected={preference === 'light'}
+            onPress={() => setPreference('light')}
+          />
+          <Divider />
+          <ChoiceRow
+            icon="moon"
+            label={t('profile.themeDark')}
+            selected={preference === 'dark'}
+            onPress={() => setPreference('dark')}
           />
         </Section>
 
@@ -519,6 +549,7 @@ export default function ProfileScreen() {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function Section({title, children}: {title: string; children: React.ReactNode}) {
+  const sec = useThemedStyles(makeSec);
   return (
     <View style={sec.wrap}>
       <Text style={sec.title}>{title}</Text>
@@ -530,10 +561,44 @@ function Section({title, children}: {title: string; children: React.ReactNode}) 
 function LanguageRow({label, selected, onPress}: {
   label: string; selected: boolean; onPress: () => void;
 }) {
+  const {colors} = useTheme();
+  const row = useThemedStyles(makeRow);
   return (
     <TouchableOpacity style={row.wrap} onPress={onPress} activeOpacity={0.7}>
       <RowIcon name="globe" />
       <Text style={row.label}>{label}</Text>
+      {selected && <Icon name="check" size={18} color={colors.primary} />}
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * One option in a pick-one list, with an optional explanatory subtitle.
+ * Distinct from ActionRow: this shows a checkmark for the current choice
+ * rather than a chevron into somewhere else.
+ */
+function ChoiceRow({icon, label, sub, selected, onPress}: {
+  icon: IconName; label: string; sub?: string;
+  selected: boolean; onPress: () => void;
+}) {
+  const {colors} = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const row = useThemedStyles(makeRow);
+  return (
+    <TouchableOpacity style={styles.actionRow} onPress={onPress} activeOpacity={0.7}>
+      <View style={row.iconWrap}>
+        <Icon
+          name={icon}
+          size={17}
+          color={selected ? colors.primary : colors.textSecondary}
+        />
+      </View>
+      <View style={styles.actionText}>
+        <Text style={[styles.actionLabel, selected && {color: colors.primary}]}>
+          {label}
+        </Text>
+        {sub ? <Text style={styles.actionSub}>{sub}</Text> : null}
+      </View>
       {selected && <Icon name="check" size={18} color={colors.primary} />}
     </TouchableOpacity>
   );
@@ -544,6 +609,9 @@ function ActionRow({icon, label, sub, onPress, loading = false, disabled = false
   icon: IconName; label: string; sub: string; onPress: () => void;
   loading?: boolean; disabled?: boolean; danger?: boolean;
 }) {
+  const {colors} = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const row = useThemedStyles(makeRow);
   return (
     <TouchableOpacity
       style={[styles.actionRow, disabled && !loading && {opacity: 0.5}]}
@@ -566,6 +634,8 @@ function ActionRow({icon, label, sub, onPress, loading = false, disabled = false
 }
 
 function RowIcon({name}: {name: IconName}) {
+  const {colors} = useTheme();
+  const row = useThemedStyles(makeRow);
   return (
     <View style={row.iconWrap}>
       <Icon name={name} size={17} color={colors.textSecondary} />
@@ -574,6 +644,7 @@ function RowIcon({name}: {name: IconName}) {
 }
 
 function Row({icon, label, value}: {icon: IconName; label: string; value: string}) {
+  const row = useThemedStyles(makeRow);
   return (
     <View style={row.wrap}>
       <RowIcon name={icon} />
@@ -587,6 +658,8 @@ function SwitchRow({icon, label, sub, value, onChange}: {
   icon: IconName; label: string; sub: string;
   value: boolean; onChange: (v: boolean) => void;
 }) {
+  const {colors} = useTheme();
+  const row = useThemedStyles(makeRow);
   return (
     <View style={row.switchWrap}>
       <RowIcon name={icon} />
@@ -605,11 +678,12 @@ function SwitchRow({icon, label, sub, value, onChange}: {
 }
 
 function Divider() {
+  const {colors} = useTheme();
   return <View style={{height: 1, backgroundColor: colors.border, marginLeft: 44}} />;
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const row = StyleSheet.create({
+const makeRow = (colors: Colors) => StyleSheet.create({
   wrap:       {flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.md},
   switchWrap: {flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.md, gap: spacing.sm},
   iconWrap:   {width: 28, alignItems: 'flex-start'},
@@ -619,13 +693,13 @@ const row = StyleSheet.create({
   sub:        {color: colors.textMuted, fontSize: font.sizes.xs, marginTop: 2},
 });
 
-const sec = StyleSheet.create({
+const makeSec = (colors: Colors) => StyleSheet.create({
   wrap:  {paddingHorizontal: spacing.lg, marginTop: spacing.lg},
   title: {color: colors.textMuted, fontSize: font.sizes.xs, fontWeight: font.weights.semibold, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: spacing.sm},
   card:  {backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, overflow: 'hidden'},
 });
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   container:     {flex: 1, backgroundColor: colors.surface},
   scroll:        {flexGrow: 1},
 
@@ -660,7 +734,7 @@ const styles = StyleSheet.create({
   footer:        {textAlign: 'center', color: colors.textMuted, fontSize: font.sizes.xs, marginTop: spacing.xl},
 
   // ── Map pin-picker modal ──
-  modalOverlay:  {flex: 1, backgroundColor: 'rgba(13,33,69,0.5)', justifyContent: 'center', alignItems: 'center', padding: spacing.lg},
+  modalOverlay:  {flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', alignItems: 'center', padding: spacing.lg},
   modalCard:     {backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.xl, width: '100%', borderWidth: 1, borderColor: colors.border, gap: spacing.md},
   modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: spacing.sm},
   modalTitle:    {color: colors.textPrimary, fontSize: font.sizes.xl, fontWeight: font.weights.bold},

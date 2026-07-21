@@ -7,7 +7,8 @@ import {
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
 import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
-import {colors, spacing, radius, font} from '../theme';
+import {Colors, spacing, radius, font} from '../theme';
+import {useTheme, useThemedStyles} from '../context/ThemeContext';
 import Icon from '../components/icons';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
@@ -24,6 +25,9 @@ type Tab = 'inbox' | 'settings';
 export default function NotificationsScreen() {
   const {token} = useAuth();
   const {t} = useI18n();
+  const {colors} = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const picker = useThemedStyles(makePicker);
 
   const [activeTab,     setActiveTab]     = useState<Tab>('inbox');
   const [notifications, setNotifications] = useState<StoredNotification[]>([]);
@@ -370,6 +374,8 @@ function NotificationCard({item, onPress, onDelete}: {
   onDelete: () => void;
 }) {
   const {t}          = useI18n();
+  const {colors}     = useTheme();
+  const styles       = useThemedStyles(makeStyles);
   const meta         = getCategoryMeta(item.category);
   const receivedDate = new Date(item.receivedAt);
   const timeStr      = receivedDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -447,6 +453,8 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
   onDelete:    () => void;
 }) {
   const {t} = useI18n();
+  const {colors} = useTheme();
+  const modal = useThemedStyles(makeModal);
   // Modals render outside the screen's SafeAreaView, so this sheet has to
   // clear the gesture bar on its own.
   const insets = useSafeAreaInsets();
@@ -547,6 +555,8 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
 
 function EmptyInbox() {
   const {t} = useI18n();
+  const {colors} = useTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.emptyWrap}>
       <View style={styles.emptyIconWrap}>
@@ -560,7 +570,7 @@ function EmptyInbox() {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   container: {flex: 1, backgroundColor: colors.surface},
 
   header: {
@@ -640,7 +650,7 @@ const styles = StyleSheet.create({
 });
 
 // ── Bus-line dropdown styles ─────────────────────────────────────────────────
-const picker = StyleSheet.create({
+const makePicker = (colors: Colors) => StyleSheet.create({
   overlay: {
     flex: 1, backgroundColor: colors.overlay,
     justifyContent: 'center', padding: spacing.lg,
@@ -673,7 +683,7 @@ const picker = StyleSheet.create({
   doneText: {color: colors.white, fontSize: font.sizes.md, fontWeight: font.weights.semibold},
 });
 
-const modal = StyleSheet.create({
+const makeModal = (colors: Colors) => StyleSheet.create({
   overlay: {
     flex: 1, backgroundColor: colors.overlay,
     justifyContent: 'flex-end',

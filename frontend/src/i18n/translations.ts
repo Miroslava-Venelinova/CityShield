@@ -174,6 +174,13 @@ const en = {
   'profile.languageEnglish': 'English',
   'profile.languageBulgarian': 'Български',
 
+  // ── Profile: appearance ──
+  'profile.sectionAppearance': 'Appearance',
+  'profile.themeSystem': 'System',
+  'profile.themeSystemSub': 'Follow the device setting',
+  'profile.themeLight': 'Light',
+  'profile.themeDark': 'Dark',
+
   'profile.sectionLocation': 'Location',
   'profile.updateLocation': 'Update My Location',
   'profile.setLocation': 'Set My Location',
@@ -444,6 +451,13 @@ const bg: Record<TranslationKey, string> = {
   'profile.sectionLanguage': 'Език',
   'profile.languageEnglish': 'English',
   'profile.languageBulgarian': 'Български',
+
+  // ── Профил: изглед ──
+  'profile.sectionAppearance': 'Изглед',
+  'profile.themeSystem': 'Системен',
+  'profile.themeSystemSub': 'Според настройката на устройството',
+  'profile.themeLight': 'Светъл',
+  'profile.themeDark': 'Тъмен',
 
   'profile.sectionLocation': 'Локация',
   'profile.updateLocation': 'Обнови локацията ми',

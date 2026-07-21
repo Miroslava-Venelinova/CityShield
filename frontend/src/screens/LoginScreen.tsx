@@ -19,7 +19,8 @@ import {errorMessageKey} from '../services/errors';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {colors, spacing, radius, font, elevation} from '../theme';
+import {Colors, Elevation, spacing, radius, font} from '../theme';
+import {useTheme, useThemedStyles} from '../context/ThemeContext';
 import {AuthStackParamList} from '../navigation/types';
 import CityShieldLogo from '../components/CityShieldLogo';
 import Icon from '../components/icons';
@@ -31,6 +32,8 @@ type Props = {
 export default function LoginScreen({navigation}: Props) {
   const {login} = useAuth();
   const {t} = useI18n();
+  const {colors, isDark} = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -94,7 +97,7 @@ export default function LoginScreen({navigation}: Props) {
       // scroll content unless we inset it here.
       style={[styles.flex, {paddingTop: insets.top, paddingBottom: insets.bottom}]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <StatusBar barStyle="dark-content" translucent />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} translucent />
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled">
@@ -201,7 +204,7 @@ export default function LoginScreen({navigation}: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors, elevation: Elevation) => StyleSheet.create({
   flex: {flex: 1, backgroundColor: colors.background},
   scroll: {
     flexGrow: 1,

@@ -1,7 +1,9 @@
 // ─── src/navigation/AppNavigator.tsx ─────────────────────────────────────────
-import React from 'react';
+import React, {useMemo} from 'react';
 import {View, Text, StyleSheet, ActivityIndicator} from 'react-native';
-import {NavigationContainer} from '@react-navigation/native';
+import {
+  DarkTheme, DefaultTheme, NavigationContainer,
+} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -15,7 +17,8 @@ import NotificationsScreen from '../screens/NotificationsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import CityShieldLogo from '../components/CityShieldLogo';
 import Icon, {IconName} from '../components/icons';
-import {colors, font, spacing} from '../theme';
+import {Colors, font, spacing} from '../theme';
+import {useTheme, useThemedStyles} from '../context/ThemeContext';
 import {AuthStackParamList, AppStackParamList, AppTabParamList} from './types';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -33,6 +36,8 @@ function TabIcon({
   label: string;
   focused: boolean;
 }) {
+  const {colors} = useTheme();
+  const tab = useThemedStyles(makeTab);
   return (
     <View style={tab.wrapper}>
       <View style={[tab.pill, focused && tab.pillActive]}>
@@ -48,7 +53,7 @@ function TabIcon({
   );
 }
 
-const tab = StyleSheet.create({
+const makeTab = (colors: Colors) => StyleSheet.create({
   wrapper: {alignItems: 'center', paddingTop: spacing.xs},
   pill: {
     width: 44,
@@ -73,6 +78,7 @@ const tab = StyleSheet.create({
 
 function MainTabs() {
   const {t} = useI18n();
+  const {colors} = useTheme();
   // Android 15 / RN 0.85 draw edge-to-edge, so the gesture bar sits on top of
   // the tab bar unless we grow it by the bottom inset ourselves. The explicit
   // height below is what stops react-navigation from doing this for us.
@@ -134,6 +140,7 @@ function AuthenticatedApp() {
 // ─── Unauthenticated stack ────────────────────────────────────────────────────
 
 function UnauthenticatedApp() {
+  const {colors} = useTheme();
   return (
     <AuthStack.Navigator
       screenOptions={{
@@ -150,6 +157,27 @@ function UnauthenticatedApp() {
 
 export default function AppNavigator() {
   const {token, isLoading} = useAuth();
+  const {colors, isDark} = useTheme();
+  const splash = useThemedStyles(makeSplash);
+
+  // React Navigation paints the gaps our screens do not: the window behind a
+  // screen transition, and the card background mid-animation. Left on its
+  // default light theme it flashes white between dark screens.
+  const navigationTheme = useMemo(() => {
+    const base = isDark ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        primary: colors.primary,
+        background: colors.background,
+        card: colors.surface,
+        text: colors.textPrimary,
+        border: colors.border,
+        notification: colors.danger,
+      },
+    };
+  }, [isDark, colors]);
 
   if (isLoading) {
     return (
@@ -165,13 +193,13 @@ export default function AppNavigator() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navigationTheme}>
       {token ? <AuthenticatedApp /> : <UnauthenticatedApp />}
     </NavigationContainer>
   );
 }
 
-const splash = StyleSheet.create({
+const makeSplash = (colors: Colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.surface,

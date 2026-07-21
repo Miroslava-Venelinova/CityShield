@@ -4,17 +4,20 @@
 //
 // RN → web: marker/polygon data via injectJavaScript (window.__setData),
 //           camera moves via window.__flyTo.
-// web → RN: marker taps via window.ReactNativeWebView.postMessage.
+// web → RN: marker taps and pan/zoom gesture boundaries via
+//           window.ReactNativeWebView.postMessage.
 import React, {
   forwardRef,
   useImperativeHandle,
   useRef,
   useEffect,
   useCallback,
+  useMemo,
 } from 'react';
 import {StyleProp, ViewStyle} from 'react-native';
 import {WebView, WebViewProps, WebViewMessageEvent} from 'react-native-webview';
-import {LEAFLET_HEAD, hardenedWebViewProps} from './leafletWebView';
+import {LEAFLET_HEAD, MAP_GESTURE_SCRIPT, hardenedWebViewProps} from './leafletWebView';
+import {useTheme} from '../context/ThemeContext';
 
 // react-native-webview's class-component typings don't line up with the
 // React 19 / RN 0.85 type definitions yet (props collapse to `never`), so
@@ -45,6 +48,11 @@ interface Props {
   markers: MapMarker[];
   polygons: MapPolygon[];
   onMarkerPress?: (id: string) => void;
+  /**
+   * Fired when a touch lands on the map and again when it lifts. A map inside
+   * a ScrollView needs this: see the note on MAP_GESTURE_SCRIPT.
+   */
+  onGesture?: (active: boolean) => void;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -53,19 +61,45 @@ const HOME_LAT = 43.2141;
 const HOME_LNG = 27.9147;
 const HOME_ZOOM = 12;
 
-const HTML = `<!DOCTYPE html>
+function buildHtml(dark: boolean, backdrop: string): string {
+  return `<!DOCTYPE html>
 <html>
 <head>
 ${LEAFLET_HEAD}
 <style>
-  html, body, #map { margin:0; padding:0; height:100%; width:100%; background:#EAF2FF; }
+  html, body, #map {
+    margin:0; padding:0; height:100%; width:100%;
+    background:${backdrop};
+  }
+  /* The page owns every gesture inside its own bounds. Without this the
+     WebView tries to scroll the (unscrollable) document and Android reads the
+     unconsumed drag as a scroll for the RN ScrollView above it. */
+  #map { touch-action: none; }
+  body { overflow: hidden; overscroll-behavior: none; }
+
   .cs-marker { background:transparent; border:none; }
   .cs-marker div {
     width:24px; height:24px; border-radius:50%;
-    background:#fff; border:3px solid #888;
+    background:${dark ? '#0A1220' : '#fff'}; border:3px solid #888;
     box-shadow:0 1px 4px rgba(0,0,0,0.35);
     box-sizing:border-box;
   }
+
+  ${dark ? `
+  /* Dark tiles without a second tile provider: invert + rotate hue turns the
+     standard OSM raster into a dark map, keeping one origin in the CSP and
+     one attribution. Only the tile pane is filtered, so our own markers and
+     polygons keep their severity colours. */
+  .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92) saturate(0.75);
+  }
+  .leaflet-container { background:${backdrop}; }
+  .leaflet-control-attribution {
+    background: rgba(10,18,32,0.75) !important;
+    color: #A9C1E2 !important;
+  }
+  .leaflet-control-attribution a { color: #8AB4FF !important; }
+  ` : ''}
 </style>
 </head>
 <body>
@@ -87,6 +121,8 @@ ${LEAFLET_HEAD}
       window.ReactNativeWebView.postMessage(JSON.stringify(msg));
     }
   }
+
+${MAP_GESTURE_SCRIPT}
 
   // Everything below treats its input as untrusted. Alert data originates from
   // scraped third-party sites and is shaped by an LLM, so it is not guaranteed
@@ -144,13 +180,24 @@ ${LEAFLET_HEAD}
 </script>
 </body>
 </html>`;
+}
 
 const AlertMap = forwardRef<AlertMapHandle, Props>(function AlertMap(
-  {markers, polygons, onMarkerPress, style},
+  {markers, polygons, onMarkerPress, onGesture, style},
   ref,
 ) {
+  const {isDark, colors} = useTheme();
   const webRef = useRef<WebView>(null);
   const readyRef = useRef(false);
+
+  // Theming is baked into the document (tile filter, marker fill), so a theme
+  // change reloads the page. `key` on the WebView below forces that; this
+  // clears the flag so overlays are not pushed at the outgoing document.
+  const html = useMemo(
+    () => buildHtml(isDark, colors.mapBackdrop),
+    [isDark, colors.mapBackdrop],
+  );
+  useEffect(() => { readyRef.current = false; }, [html]);
 
   const pushData = useCallback(() => {
     const payload = JSON.stringify({markers, polygons});
@@ -181,9 +228,10 @@ const AlertMap = forwardRef<AlertMapHandle, Props>(function AlertMap(
 
   return (
     <WebViewComponent
+      key={isDark ? 'dark' : 'light'}
       ref={webRef}
       style={style}
-      source={{html: HTML}}
+      source={{html}}
       {...hardenedWebViewProps}
       onMessage={(event: WebViewMessageEvent) => {
         try {
@@ -193,6 +241,10 @@ const AlertMap = forwardRef<AlertMapHandle, Props>(function AlertMap(
             pushData();
           } else if (msg.type === 'markerPress' && msg.id && onMarkerPress) {
             onMarkerPress(msg.id);
+          } else if (msg.type === 'gestureStart') {
+            onGesture?.(true);
+          } else if (msg.type === 'gestureEnd') {
+            onGesture?.(false);
           }
         } catch {
           // Ignore malformed messages

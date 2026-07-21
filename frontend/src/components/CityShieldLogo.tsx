@@ -16,6 +16,7 @@ import Svg, {
   Stop,
 } from 'react-native-svg';
 import {font} from '../theme';
+import {useTheme} from '../context/ThemeContext';
 
 interface Props {
   size?: number; // shield height in dp (the mark is square)
@@ -52,6 +53,10 @@ const TOWER_PATH = `M 57.5 94 L 57.5 59.5 Q 57.5 58 59 58 L 60.5 58 L 60.5 51.5
   L 69 58 Q 70.5 58 70.5 59.5 L 70.5 94 Z`;
 
 export default function CityShieldLogo({size = 72, showWordmark = true}: Props) {
+  // The mark itself keeps its literal brand colours (see above); only the
+  // wordmark has to follow the theme, since ink-navy "City" is unreadable on
+  // a dark canvas.
+  const {colors} = useTheme();
   // Gradient ids are document-global, so two logos on one screen would other-
   // wise fight over them.
   const uid = React.useId().replace(/:/g, '');
@@ -140,7 +145,7 @@ export default function CityShieldLogo({size = 72, showWordmark = true}: Props) 
 
       {showWordmark && (
         <Text style={styles.wordmark}>
-          <Text style={styles.wordmarkCity}>City</Text>
+          <Text style={{color: colors.textPrimary}}>City</Text>
           <Text style={styles.wordmarkShield}>Shield</Text>
         </Text>
       )}
@@ -156,6 +161,5 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     marginTop: 6,
   },
-  wordmarkCity: {color: INK},
   wordmarkShield: {color: SHIELD_MID},
 });

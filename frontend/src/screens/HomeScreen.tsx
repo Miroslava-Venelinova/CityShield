@@ -14,7 +14,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
-import {colors, spacing, radius, font, elevation} from '../theme';
+import {Colors, Elevation, spacing, radius, font} from '../theme';
+import {useTheme, useThemedStyles} from '../context/ThemeContext';
 import CityShieldLogo from '../components/CityShieldLogo';
 import AlertMap, {AlertMapHandle, MapMarker, MapPolygon} from '../components/AlertMap';
 import Icon from '../components/icons';
@@ -27,17 +28,19 @@ import {TranslationKey} from '../i18n/translations';
 const {height: SCREEN_HEIGHT} = Dimensions.get('window');
 
 // ─── Severity / source helpers ────────────────────────────────────────────────
-const SEVERITY_COLOR: Record<string, string> = {
-  warning: colors.warning,
-  info:    colors.accent,
-  danger:  colors.danger,
-};
+// Palette-dependent, so these are resolved per theme rather than at module
+// load; the component memoizes them against the active `colors`.
+const severityColors = (c: Colors): Record<string, string> => ({
+  warning: c.warning,
+  info:    c.accent,
+  danger:  c.danger,
+});
 
-const SEVERITY_BG: Record<string, string> = {
-  warning: colors.warningSoft,
-  info:    colors.infoSoft,
-  danger:  colors.dangerSoft,
-};
+const severityFills = (c: Colors): Record<string, string> => ({
+  warning: c.warningSoft,
+  info:    c.infoSoft,
+  danger:  c.dangerSoft,
+});
 
 // Per-category icon/color/label come from the shared registry in
 // services/notifications.ts (CATEGORIES) so map pins, filter chips and the
@@ -158,8 +161,13 @@ function greeting(t: T): string {
 export default function HomeScreen() {
   const {token, hasLocation} = useAuth();
   const {t} = useI18n();
+  const {colors, isDark} = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
   const mapRef = useRef<AlertMapHandle>(null);
+
+  const SEVERITY_COLOR = useMemo(() => severityColors(colors), [colors]);
+  const SEVERITY_BG    = useMemo(() => severityFills(colors), [colors]);
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -170,8 +178,32 @@ export default function HomeScreen() {
   const [activeFilter, setActiveFilter] =
     useState<'all' | 'vik' | 'vt' | 'epro' | 'heating'>('all');
   const [feedTab, setFeedTab] = useState<'recent' | 'active'>('recent');
+  // Suspended while a finger is down on the map — see `mapGestureProps`.
+  const [scrollEnabled, setScrollEnabled] = useState(true);
 
   const sheetAnim = useRef(new Animated.Value(0)).current;
+
+  // ── Map vs. ScrollView gesture arbitration ──────────────────────────────────
+  // Dragging the map used to scroll the whole screen instead: the ScrollView
+  // claims any vertical drag that starts in a native child. Handing the map a
+  // `scrollEnabled={false}` window for the duration of the touch is the only
+  // way to give it the gesture.
+  //
+  // Both halves are needed. The capture handler runs synchronously before the
+  // WebView sees the touch, which is early enough to beat the ScrollView; it
+  // returns false so the WebView still becomes the responder. Re-enabling can
+  // only happen once the touch ends, which the WebView swallows — so the page
+  // reports that itself over the bridge (`onGesture`).
+  const mapGestureProps = {
+    onStartShouldSetResponderCapture: () => {
+      setScrollEnabled(false);
+      return false;
+    },
+    // Belt and braces for a touch that never reaches the page (a tap landing
+    // on the recenter button, say): RN still delivers these to the wrapper.
+    onTouchEnd: () => setScrollEnabled(true),
+    onTouchCancel: () => setScrollEnabled(true),
+  };
 
   // ── Fetch alerts from the API ───────────────────────────────────────────────
   const fetchAlerts = useCallback(async () => {
@@ -275,7 +307,7 @@ export default function HomeScreen() {
           color: SEVERITY_COLOR[alert.severity] ?? colors.textMuted,
         }))
     ),
-    [mapAlerts],
+    [mapAlerts, SEVERITY_COLOR, colors.textMuted],
   );
 
   const mapPolygons: MapPolygon[] = useMemo(
@@ -290,7 +322,7 @@ export default function HomeScreen() {
           color: SEVERITY_COLOR[alert.severity] ?? colors.textMuted,
         }))
     ),
-    [mapAlerts],
+    [mapAlerts, SEVERITY_COLOR, colors.textMuted],
   );
 
   const handleMarkerPress = (markerId: string) => {
@@ -300,11 +332,12 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" translucent />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} translucent />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled
+        scrollEnabled={scrollEnabled}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -371,7 +404,9 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={[styles.mapCard, mapExpanded && styles.mapCardExpanded]}>
+          <View
+            style={[styles.mapCard, mapExpanded && styles.mapCardExpanded]}
+            {...mapGestureProps}>
             {/* OpenStreetMap via Leaflet in a WebView — no Google SDK, no keys */}
             <AlertMap
               ref={mapRef}
@@ -379,6 +414,7 @@ export default function HomeScreen() {
               markers={mapMarkers}
               polygons={mapPolygons}
               onMarkerPress={handleMarkerPress}
+              onGesture={active => setScrollEnabled(!active)}
             />
 
             {/* Recenter button */}
@@ -653,7 +689,7 @@ export default function HomeScreen() {
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors, elevation: Elevation) => StyleSheet.create({
   container: {flex: 1, backgroundColor: colors.background},
   noLocationBanner: {
     flexDirection: 'row', alignItems: 'center',
@@ -677,9 +713,9 @@ const styles = StyleSheet.create({
   heroTitle:   {color: colors.textPrimary, fontSize: font.sizes.xxl, fontWeight: font.weights.extrabold, marginTop: 2},
   statusBadge: {
     flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm,
-    backgroundColor: 'rgba(22,163,74,0.1)', paddingHorizontal: spacing.sm,
+    backgroundColor: colors.successSoft, paddingHorizontal: spacing.sm,
     paddingVertical: 4, borderRadius: radius.full, alignSelf: 'flex-start',
-    borderWidth: 1, borderColor: 'rgba(22,163,74,0.3)',
+    borderWidth: 1, borderColor: `${colors.success}55`,
   },
   statusDot:  {width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success, marginRight: spacing.xs},
   statusText: {color: colors.success, fontSize: font.sizes.xs, fontWeight: font.weights.semibold},
@@ -700,9 +736,9 @@ const styles = StyleSheet.create({
   sectionTitle:  {fontSize: font.sizes.lg, fontWeight: font.weights.bold, color: colors.textPrimary, flex: 1},
   sectionSubtitle:{color: colors.textMuted, fontSize: font.sizes.sm, marginBottom: spacing.md},
   alertBadge: {
-    backgroundColor: 'rgba(220,38,38,0.1)', borderRadius: radius.full,
+    backgroundColor: colors.dangerSoft, borderRadius: radius.full,
     paddingHorizontal: spacing.sm, paddingVertical: 3,
-    borderWidth: 1, borderColor: 'rgba(220,38,38,0.3)',
+    borderWidth: 1, borderColor: `${colors.danger}55`,
   },
   alertBadgeText: {color: colors.danger, fontSize: font.sizes.xs, fontWeight: font.weights.semibold},
 
@@ -764,15 +800,18 @@ const styles = StyleSheet.create({
   recenterBtn: {
     position: 'absolute', top: 10, right: 10,
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    backgroundColor: colors.surface,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: colors.border,
     ...elevation.md,
   },
+  // Bottom-*left*: the bottom-right corner belongs to Leaflet's OSM
+  // attribution control, which the legend used to sit on top of.
   mapLegend: {
-    position: 'absolute', bottom: 10, right: 10,
-    backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: radius.md,
+    position: 'absolute', bottom: 10, left: 10,
+    backgroundColor: colors.surface, borderRadius: radius.md,
     padding: 8, gap: 4, borderWidth: 1, borderColor: colors.border,
+    ...elevation.sm,
   },
   legendItem: {flexDirection: 'row', alignItems: 'center', gap: 5},
   legendDot:  {width: 8, height: 8, borderRadius: 4},

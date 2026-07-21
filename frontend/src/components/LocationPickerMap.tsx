@@ -6,6 +6,7 @@ import React from 'react';
 import {StyleProp, ViewStyle} from 'react-native';
 import {WebView, WebViewProps, WebViewMessageEvent} from 'react-native-webview';
 import {LEAFLET_HEAD, hardenedWebViewProps, safeCoord} from './leafletWebView';
+import {useTheme} from '../context/ThemeContext';
 
 // react-native-webview's class-component typings don't line up with the
 // React 19 / RN 0.85 type definitions yet (props collapse to `never`), so
@@ -26,7 +27,12 @@ const HOME_LAT = 43.2141;
 const HOME_LNG = 27.9147;
 const HOME_ZOOM = 12;
 
-function buildHtml(initialLat?: number, initialLng?: number): string {
+function buildHtml(
+  dark: boolean,
+  backdrop: string,
+  initialLat?: number,
+  initialLng?: number,
+): string {
   // `Number.isFinite` rather than `typeof === 'number'`: these values come from
   // the stored user profile and are interpolated straight into the generated
   // page script below, where a NaN would silently leave the map blank.
@@ -41,9 +47,25 @@ function buildHtml(initialLat?: number, initialLng?: number): string {
 <head>
 ${LEAFLET_HEAD}
 <style>
-  html, body, #map { margin:0; padding:0; height:100%; width:100%; background:#EAF2FF; }
+  html, body, #map { margin:0; padding:0; height:100%; width:100%; background:${backdrop}; }
+  /* The picker owns every gesture in its bounds — see MAP_GESTURE_SCRIPT. */
+  #map { touch-action: none; }
+  body { overflow: hidden; overscroll-behavior: none; }
   .cs-pin { background:transparent; border:none; }
   .cs-pin svg { filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4)); }
+  ${dark ? `
+  /* Same single-provider dark treatment as AlertMap; the pin sits above the
+     filtered tile pane and keeps its brand blue. */
+  .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92) saturate(0.75);
+  }
+  .leaflet-container { background:${backdrop}; }
+  .leaflet-control-attribution {
+    background: rgba(10,18,32,0.75) !important;
+    color: #A9C1E2 !important;
+  }
+  .leaflet-control-attribution a { color: #8AB4FF !important; }
+  ` : ''}
 </style>
 </head>
 <body>
@@ -105,10 +127,15 @@ export default function LocationPickerMap({
   initialLng,
   style,
 }: Props) {
+  const {isDark, colors} = useTheme();
   return (
     <WebViewComponent
+      // Theming is baked into the document, so a theme change reloads it.
+      key={isDark ? 'dark' : 'light'}
       style={style}
-      source={{html: buildHtml(initialLat, initialLng)}}
+      source={{
+        html: buildHtml(isDark, colors.mapBackdrop, initialLat, initialLng),
+      }}
       {...hardenedWebViewProps}
       onMessage={(event: WebViewMessageEvent) => {
         try {
