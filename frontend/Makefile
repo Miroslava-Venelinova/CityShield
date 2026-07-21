@@ -1,4 +1,4 @@
-.PHONY: dev reverse reload rebuild ship build install install-host uninstall adb-host logs stop clean
+.PHONY: dev reverse reload rebuild ship build release release-fast install install-host install-release uninstall adb-host logs stop clean
 
 # ── Development ───────────────────────────────────────────────────────────────
 
@@ -33,8 +33,23 @@ rebuild:
 build:
 	docker compose run --rm build
 
+# Standalone APK: JS bundled in, runs with no Metro and no adb reverse.
+# Both variables are inlined into the bundle and the build refuses to start
+# without them. Signed with the debug keystore — sideload only, not Play Store.
+#   CITYSHIELD_API_URL=https://... ONESIGNAL_APP_ID=... make release
+release:
+	BUILD_TYPE=release docker compose run --rm build
+
+# Same APK, arm64-v8a only — much faster, but it will NOT install on an
+# x86_64 emulator. Use it when you test on a real phone.
+release-fast:
+	BUILD_TYPE=release ABIS=arm64-v8a docker compose run --rm build
+
 install-host:
 	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+
+install-release:
+	adb install -r android/app/build/outputs/apk/release/app-release.apk
 
 uninstall:
 	@PKG=$${PACKAGE_NAME:-com.cityshield.fcmtest}; \

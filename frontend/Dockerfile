@@ -30,11 +30,18 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" && \
     mv /tmp/cmdline-tools-extracted/cmdline-tools "${ANDROID_HOME}/cmdline-tools/latest" && \
     rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-tools-extracted
 
+# These MUST match android/build.gradle's ext block. Anything Gradle wants that
+# is not baked in here gets downloaded on *every* build instead: the container
+# runs with --rm and ANDROID_HOME is an image layer, not a volume, so the
+# download cannot persist. The NDK alone is ~1GB, which is why the versions
+# drifting out of sync costs minutes per build rather than a one-off.
 RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
     sdkmanager \
         "platform-tools" \
-        "platforms;android-35" \
-        "build-tools;35.0.0"
+        "platforms;android-36" \
+        "build-tools;36.0.0" \
+        "ndk;27.1.12297006" \
+        "cmake;3.22.1"
 
 # ── Project setup ──────────────────────────────────────────────────────────────
 WORKDIR /app

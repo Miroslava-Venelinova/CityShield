@@ -216,8 +216,15 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
       cd frontend
       export ONESIGNAL_APP_ID=2988dfb1-4647-4dc5-b5bb-7c52a3150b5f
       export CITYSHIELD_API_URL=https://cityshield.cityshield-varna.workers.dev
-      make build && make install-host
+      make release && make install-release
       ```
+      Standalone APK built 2026-07-21 and verified to carry the Hermes bundle plus both
+      inlined values; **not yet installed or subscribed** — no device was attached.
+      Debug-signed (see §Phase 5 release note), so uninstall it before ever installing a
+      properly-signed build. `make build`/`make install-host` still work for the
+      Metro-backed debug APK, and now inline `ONESIGNAL_APP_ID` too — before
+      2026-07-21 docker-compose forwarded neither variable into the build container,
+      so every earlier APK shipped with an empty app id and could never subscribe
       Then sign in and confirm the device appears in OneSignal → Audience with
       `external_id` equal to the account's `user_id` (visible in the GDPR export).
       Untested end to end: the Android build has not been run since the Firebase SDK and

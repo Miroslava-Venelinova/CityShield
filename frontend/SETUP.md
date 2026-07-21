@@ -155,11 +155,42 @@ app itself carries no `google-services.json` and no Firebase SDK.
 ### Step B — Build with the app id
 `ONESIGNAL_APP_ID` is inlined at bundle time (see `src/config.ts`); a release
 build without it fails immediately rather than shipping a push-less app.
+
+The variable has to reach the *build container*, not just your shell —
+`docker-compose.yml` forwards it, so export it before invoking make:
 ```sh
 export ONESIGNAL_APP_ID=<app id>
-make build
+make build          # debug APK — JS served by Metro
 make install-host
 ```
+
+For a standalone APK (JS bundled in, no Metro, installs on any device) use
+`make release`, which additionally requires an HTTPS `CITYSHIELD_API_URL`:
+```sh
+export ONESIGNAL_APP_ID=<app id>
+export CITYSHIELD_API_URL=https://<worker-url>
+make release
+make install-release
+```
+The release APK is signed with the **debug keystore** (`android/app/build.gradle`),
+so it sideloads fine but cannot go to the Play Store. Swapping in a real keystore
+later changes the signature, which means uninstalling first.
+
+On Windows, **`build-apk.bat`** does all of the above in one double-click
+(`build-apk.bat` = release, `fast` = arm64 only, `debug` = Metro build). It
+checks Docker is running and offers to install if a device is attached.
+
+### Build times
+`newArchEnabled=true` compiles React Native's C++ once per ABI, and
+`gradle.properties` lists all four, so a first build is slow. `make release-fast`
+(or `build-apk.bat fast`) passes `-PreactNativeArchitectures=arm64-v8a` and skips
+three quarters of that — at the cost of an APK that will **not** install on an
+x86_64 emulator. Modern physical phones are all arm64-v8a.
+
+The Android SDK, NDK and CMake versions in the `Dockerfile` must stay in sync
+with `android/build.gradle`'s `ext` block. If they drift, Gradle silently
+re-downloads the difference — about 1GB for the NDK — on *every* build, because
+the container runs `--rm` and `ANDROID_HOME` is not a volume.
 
 ### Step C — Subscribe the device
 1. Open the app → **Profile** tab

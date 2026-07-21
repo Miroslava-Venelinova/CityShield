@@ -1,10 +1,35 @@
 #!/bin/sh
 set -e
 
-APK_FINAL="/app/android/app/build/outputs/apk/debug/app-debug.apk"
 MANIFEST="/app/android/app/src/main/AndroidManifest.xml"
 ROOT_GRADLE="/app/android/build.gradle"
 APP_GRADLE="/app/android/app/build.gradle"
+
+# Comma-separated ABI list. Empty means "whatever android/gradle.properties
+# says", which is all four. Narrowing it is the single biggest build-time lever
+# we have: newArchEnabled=true compiles React Native's C++ from source once per
+# ABI, so arm64-v8a alone is roughly a quarter of the native work. The cost is
+# that the APK then only installs on matching devices — arm64-v8a covers modern
+# phones but not x86_64 emulators.
+ABIS="${ABIS:-}"
+
+# debug   — no JS bundle in the APK; the app pulls it from Metro over adb reverse.
+# release — Hermes bundle baked in, so the APK runs standalone with no dev server.
+BUILD_TYPE="${BUILD_TYPE:-debug}"
+case "$BUILD_TYPE" in
+  debug)
+    GRADLE_TASK="assembleDebug"
+    APK_FINAL="/app/android/app/build/outputs/apk/debug/app-debug.apk"
+    ;;
+  release)
+    GRADLE_TASK="assembleRelease"
+    APK_FINAL="/app/android/app/build/outputs/apk/release/app-release.apk"
+    ;;
+  *)
+    echo "ERROR: BUILD_TYPE must be 'debug' or 'release', got '$BUILD_TYPE'." >&2
+    exit 1
+    ;;
+esac
 
 # The app's Android package name. It used to be read out of google-services.json;
 # push now goes through OneSignal, which carries no per-app file in the build, so
@@ -14,8 +39,31 @@ PACKAGE_NAME="${PACKAGE_NAME:-com.cityshield.fcmtest}"
 
 echo ""
 echo "=========================================="
-echo " CityShield — Build"
+echo " CityShield — Build ($BUILD_TYPE)"
 echo "=========================================="
+
+# src/config.ts throws at startup if either of these is missing from a release
+# bundle. Check here too: the same failure costs one second now instead of a
+# full Gradle run followed by an app that dies on its first screen.
+if [ "$BUILD_TYPE" = "release" ]; then
+  missing=""
+  [ -z "$CITYSHIELD_API_URL" ] && missing="$missing CITYSHIELD_API_URL"
+  [ -z "$ONESIGNAL_APP_ID" ]   && missing="$missing ONESIGNAL_APP_ID"
+  if [ -n "$missing" ]; then
+    echo "ERROR: release build is missing:$missing" >&2
+    echo "       Pass them through docker-compose, e.g." >&2
+    echo "       CITYSHIELD_API_URL=https://... ONESIGNAL_APP_ID=... make release" >&2
+    exit 1
+  fi
+  case "$CITYSHIELD_API_URL" in
+    https://*) ;;
+    *) echo "ERROR: CITYSHIELD_API_URL must be HTTPS ('$CITYSHIELD_API_URL')." >&2
+       echo "       Release builds block cleartext HTTP to anything but 10.0.2.2." >&2
+       exit 1 ;;
+  esac
+  echo ">>> API:       $CITYSHIELD_API_URL"
+  echo ">>> OneSignal: $ONESIGNAL_APP_ID"
+fi
 
 # ── 1. JS deps ────────────────────────────────────────────────────────────────
 echo ">>> Installing JS dependencies..."
@@ -178,16 +226,25 @@ else:
 PYEOF
 
 # ── 8. Gradle build ───────────────────────────────────────────────────────────
-echo ">>> Running Gradle assembleDebug..."
 chmod +x /app/android/gradlew
 cd /app/android
-./gradlew assembleDebug --no-daemon
+
+# Unquoted on purpose: this has to split into separate argv entries, and an ABI
+# list never contains spaces.
+GRADLE_ARGS="$GRADLE_TASK --no-daemon"
+if [ -n "$ABIS" ]; then
+  GRADLE_ARGS="$GRADLE_ARGS -PreactNativeArchitectures=$ABIS"
+  echo ">>> Running Gradle $GRADLE_TASK (ABIs: $ABIS)..."
+else
+  echo ">>> Running Gradle $GRADLE_TASK (all ABIs)..."
+fi
+./gradlew $GRADLE_ARGS
 
 if [ -f "$APK_FINAL" ]; then
   echo ""
   echo "=========================================="
   echo " APK ready:"
-  echo " android/app/build/outputs/apk/debug/app-debug.apk"
+  echo " ${APK_FINAL#/app/}"
   echo "=========================================="
 else
   echo "ERROR: APK not found." >&2; exit 1
