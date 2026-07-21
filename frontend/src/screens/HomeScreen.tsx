@@ -13,6 +13,7 @@ import {
   Dimensions,
   ActivityIndicator,
 } from 'react-native';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import {colors, spacing, radius, font, elevation} from '../theme';
 import CityShieldLogo from '../components/CityShieldLogo';
 import AlertMap, {AlertMapHandle, MapMarker, MapPolygon} from '../components/AlertMap';
@@ -157,6 +158,7 @@ function greeting(t: T): string {
 export default function HomeScreen() {
   const {token, hasLocation} = useAuth();
   const {t} = useI18n();
+  const insets = useSafeAreaInsets();
   const mapRef = useRef<AlertMapHandle>(null);
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -297,8 +299,8 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar barStyle="dark-content" translucent />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -575,7 +577,13 @@ export default function HomeScreen() {
         onRequestClose={closeSheet}>
         <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={closeSheet}>
           <Animated.View
-            style={[styles.sheet, {transform: [{translateY: sheetTranslate}]}]}
+            style={[
+              styles.sheet,
+              // Modals sit outside the screen's SafeAreaView, so the sheet has
+              // to clear the gesture bar itself.
+              {paddingBottom: spacing.xl + insets.bottom},
+              {transform: [{translateY: sheetTranslate}]},
+            ]}
             // Prevent backdrop close when tapping the sheet itself
             onStartShouldSetResponder={() => true}>
             {selectedAlert && (
@@ -640,7 +648,7 @@ export default function HomeScreen() {
           </Animated.View>
         </TouchableOpacity>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

@@ -41,7 +41,7 @@ export const LEAFLET_HEAD = `
   default-src 'none';
   script-src https://unpkg.com 'unsafe-inline';
   style-src https://unpkg.com 'unsafe-inline';
-  img-src https://*.tile.openstreetmap.org https://unpkg.com data:;
+  img-src https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://unpkg.com data:;
   connect-src 'none';
   form-action 'none';
   base-uri 'none';

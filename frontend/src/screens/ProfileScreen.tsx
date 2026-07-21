@@ -5,6 +5,7 @@ import {
   StatusBar, Alert, Switch, Platform, PermissionsAndroid,
   ActivityIndicator, Modal, Linking, Share,
 } from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
 import {TranslationKey} from '../i18n/translations';
@@ -317,8 +318,8 @@ export default function ProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar barStyle="dark-content" translucent />
       <ScrollView contentContainerStyle={styles.scroll}>
 
         {/* ── No-location banner ── */}
@@ -616,7 +617,7 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

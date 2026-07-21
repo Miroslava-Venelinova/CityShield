@@ -6,6 +6,7 @@ import {
   Modal, ScrollView, Platform,
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import {colors, spacing, radius, font} from '../theme';
 import Icon from '../components/icons';
 import {useAuth} from '../context/AuthContext';
@@ -155,7 +156,7 @@ export default function NotificationsScreen() {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
 
       {/* ── Header ── */}
       <View style={styles.header}>
@@ -353,7 +354,7 @@ export default function NotificationsScreen() {
         onMarkRead={handleMarkReadFromDetail}
         onDelete={handleDeleteFromDetail}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -442,6 +443,9 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
   onDelete:    () => void;
 }) {
   const {t} = useI18n();
+  // Modals render outside the screen's SafeAreaView, so this sheet has to
+  // clear the gesture bar on its own.
+  const insets = useSafeAreaInsets();
   if (!item) return null;
 
   const meta         = getCategoryMeta(item.category);
@@ -458,7 +462,7 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
       animationType="slide"
       onRequestClose={onClose}>
       <View style={modal.overlay}>
-        <View style={modal.sheet}>
+        <View style={[modal.sheet, {paddingBottom: insets.bottom + spacing.lg}]}>
 
           {/* Handle bar */}
           <View style={modal.handle} />

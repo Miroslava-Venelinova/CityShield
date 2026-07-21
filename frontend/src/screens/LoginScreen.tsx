@@ -18,6 +18,7 @@ import {authApi} from '../services/api';
 import {errorMessageKey} from '../services/errors';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {colors, spacing, radius, font, elevation} from '../theme';
 import {AuthStackParamList} from '../navigation/types';
 import CityShieldLogo from '../components/CityShieldLogo';
@@ -30,6 +31,7 @@ type Props = {
 export default function LoginScreen({navigation}: Props) {
   const {login} = useAuth();
   const {t} = useI18n();
+  const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -87,9 +89,12 @@ export default function LoginScreen({navigation}: Props) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.flex}
+      // Auth screens render outside the tab navigator and the app draws
+      // edge-to-edge, so both the status bar and the gesture bar overlap the
+      // scroll content unless we inset it here.
+      style={[styles.flex, {paddingTop: insets.top, paddingBottom: insets.bottom}]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <StatusBar barStyle="dark-content" translucent />
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled">

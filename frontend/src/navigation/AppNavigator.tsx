@@ -4,6 +4,7 @@ import {View, Text, StyleSheet, ActivityIndicator} from 'react-native';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
@@ -72,6 +73,10 @@ const tab = StyleSheet.create({
 
 function MainTabs() {
   const {t} = useI18n();
+  // Android 15 / RN 0.85 draw edge-to-edge, so the gesture bar sits on top of
+  // the tab bar unless we grow it by the bottom inset ourselves. The explicit
+  // height below is what stops react-navigation from doing this for us.
+  const insets = useSafeAreaInsets();
   return (
     <Tab.Navigator
       screenOptions={{
@@ -80,8 +85,8 @@ function MainTabs() {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 68,
-          paddingBottom: 8,
+          height: 68 + insets.bottom,
+          paddingBottom: 8 + insets.bottom,
         },
         tabBarShowLabel: false,
       }}>
