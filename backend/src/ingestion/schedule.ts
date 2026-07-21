@@ -3,26 +3,26 @@
 // messages a week, so hitting them every tick is pure waste (and burns AI +
 // D1 quota on nothing).
 //
-// The Worker still wakes on ONE cron ("*/5 * * * *", see wrangler.toml);
+// The Worker still wakes on ONE cron ("*/15 * * * *", see wrangler.jsonc);
 // this module decides which sources are due on a given tick. Whether a source
 // runs is derived purely from wall-clock time, so it costs no state row and
 // survives restarts — the trade-off is that the phase is fixed to the epoch
 // rather than to "when this source last ran".
 
-/** Must stay in sync with the ingest cron in wrangler.toml. */
-// 5 rather than 10 so a 15-minute interval is expressible; ticks with nothing
-// due return immediately.
-export const TICK_MINUTES = 5;
+/** Must stay in sync with the ingest cron in wrangler.jsonc. */
+// 15 is the greatest common divisor of every interval below, so no source is
+// polled more often than it asks for and the Worker never wakes for nothing.
+export const TICK_MINUTES = 15;
 
 const TICK_MS = TICK_MINUTES * 60 * 1000;
 
 /**
  * How often each source is polled, in minutes. Values are rounded UP to a
  * multiple of TICK_MINUTES — the Worker can't wake more precisely than the
- * cron, so 22 behaves as 25. A source missing from this map falls back to
+ * cron, so 20 behaves as 30. A source missing from this map falls back to
  * DEFAULT_INTERVAL_MINUTES.
  */
-export const DEFAULT_INTERVAL_MINUTES = 10;
+export const DEFAULT_INTERVAL_MINUTES = 15;
 
 export const SOURCE_INTERVAL_MINUTES: Record<string, number> = {
   vik: 15, // several outages a day

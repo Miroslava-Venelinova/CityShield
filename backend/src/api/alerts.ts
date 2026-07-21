@@ -22,7 +22,7 @@ const SUBMIT_BUDGET_MS = 20_000;
 // copy serves all of them. Without this, D1 rows read scale with clients ×
 // poll rate (100 rows a poll); with it they scale with time only, which is
 // what keeps the free plan's daily row-read budget in reach. Ingest runs on a
-// 10-minute cron, so a 60 s edge TTL is well inside the source's own latency.
+// 15-minute cron, so a 60 s edge TTL is well inside the source's own latency.
 const FEED_CACHE_TTL_S = 60;
 
 /** User-independent cache key — never derived from the caller's token. */

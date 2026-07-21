@@ -6,7 +6,7 @@
   "workers_dev": true,
   "observability": { "enabled": true },
   // Ingest tick + daily cleanup (§1.7 / §1.10).
-  "triggers": { "crons": ["*/5 * * * *", "30 3 * * *"] },
+  "triggers": { "crons": ["*/15 * * * *", "30 3 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

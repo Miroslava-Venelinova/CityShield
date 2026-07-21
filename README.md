@@ -51,7 +51,7 @@ Workers-AI binding, and one FCM client.
 ```
                         ┌───────────────────────── backend/ (Cloudflare Worker) ─────────────────────────┐
                         │                                                                                 │
-  official sources ───► │  scheduled() every 10 min                        fetch()  (Hono router)         │
+  official sources ───► │  scheduled() every 15 min                        fetch()  (Hono router)         │
   (ViK, ePro, Veolia,   │   scrape (cheerio) → parse (Workers AI, JSON     ┌─────────────────────────┐    │
    VarnaTraffic, API)   │   schema) → geocode (Nominatim) → build polygon  │ /api/auth  /api/alerts   │    │ ◄── React Native app
                         │   (Overpass + JSTS) → store → match users →      │ /api/tokens /api/prefs   │    │      (frontend/)
@@ -62,7 +62,7 @@ Workers-AI binding, and one FCM client.
                         └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Ingestion** (`backend/src/ingestion/`) — the `scheduled` handler runs every 10
+- **Ingestion** (`backend/src/ingestion/`) — the `scheduled` handler runs every 15
   minutes (plus a daily cleanup). One module per source scrapes new announcements,
   Workers AI parses them into structured data in JSON-schema mode, Nominatim
   geocodes them, and an Overpass + [JSTS](https://github.com/bjornharrtell/jsts)
