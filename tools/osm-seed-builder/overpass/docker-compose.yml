@@ -1,0 +1,98 @@
+# A self-hosted Overpass instance holding only Bulgaria.
+#
+# The public Overpass endpoints are a shared free service: they rate-limit,
+# they return 504 on anything expensive, and a full street extract for an
+# oblast sits right at the edge of what they will answer. A local instance has
+# no quota, so the whole seeding workflow stops being something you retry.
+#
+# Geofabrik publishes a Bulgaria-only extract (~170 MB), so there is no reason
+# to import Europe or the planet.
+#
+#   docker compose up -d          # first run imports; see the README for timing
+#   docker compose logs -f        # watch the import
+#   docker compose down           # stop (the volume keeps the database)
+#
+# Once it answers, pick "Self-hosted (localhost:12345)" in the tool's endpoint
+# dropdown.
+
+services:
+  # /db is the overpass user's home directory, and the image ships it as mode
+  # 700. A named volume preserves that, but the CGI answering queries runs as
+  # `nginx` (see supervisord.conf) and so cannot traverse into /db to reach the
+  # dispatcher socket — every query fails with
+  #   runtime error: open64: 13 Permission denied /db/db//osm3s_osm_base
+  # after an import that looked perfectly successful. Widen it before the
+  # server starts. Bind mounts don't hit this; named volumes do.
+  fix-db-perms:
+    image: busybox:latest
+    command: chmod 755 /db
+    volumes:
+      - overpass-db:/db
+
+  overpass:
+    depends_on:
+      fix-db-perms:
+        condition: service_completed_successfully
+    image: wiktorn/overpass-api:latest
+    container_name: cityshield-overpass
+    ports:
+      - "12345:80"
+    volumes:
+      - overpass-db:/db
+    environment:
+      # init = download the extract and index it locally. The image only
+      # imports when /db is empty, so a restart reuses the named volume
+      # instead of re-importing.
+      OVERPASS_MODE: init
+      OVERPASS_PLANET_URL: https://download.geofabrik.de/europe/bulgaria-latest.osm.pbf
+
+      # No OVERPASS_DIFF_URL on purpose. Pointed at Geofabrik's bulgaria-updates/
+      # the updater errored on every pass ("Error while downloading diffs",
+      # status 3) even once it was reading the state files successfully — the
+      # import already sits at the latest published sequence. Street and district
+      # names change on the scale of years, so a permanently-failing update loop
+      # making daily outbound requests buys nothing. To refresh, re-import:
+      #   docker compose down -v && docker compose up -d
+
+      # The image feeds the download straight into bunzip2, so it expects
+      # bzip2-compressed XML — a .osm.pbf fails with "is not a bzip2 file".
+      # Geofabrik publishes no .osm.bz2 for Bulgaria (404), only PBF, so convert
+      # after download using the image's own preprocess hook. osmium (1.15) ships
+      # in the image and infers both formats from the file extension.
+      OVERPASS_PLANET_PREPROCESS: >-
+        mv /db/planet.osm.bz2 /db/planet.pbf &&
+        osmium cat -o /db/planet.osm.bz2 /db/planet.pbf &&
+        rm /db/planet.pbf
+
+      # Not optional, and NOT enabled by default: the entrypoint generates areas
+      # only when this is exactly "true". Every query the tool builds starts with
+      # `area(...)`, so without it each extraction silently returns nothing.
+      OVERPASS_USE_AREAS: "true"
+      OVERPASS_RULES_LOAD: "10"
+
+      # Also not optional: the entrypoint keeps serving only when this is the
+      # exact string "false". Otherwise it imports, prints "initialization
+      # complete", and exits 0 — a container that looks like a clean success
+      # while nothing is listening on 12345.
+      OVERPASS_STOP_AFTER_INIT: "false"
+
+      # Metadata (versions, changesets, usernames) roughly doubles the database
+      # and is only in Geofabrik's -internal- files, which need an OSM login.
+      # Seeding wants names and geometry, so leave it off.
+      OVERPASS_META: "no"
+
+      # The image defaults this to "no", which rejects an identical query issued
+      # again shortly after the first — and re-running the same extraction is
+      # the normal workflow here (tweak the selection, run it again). The
+      # rejection arrives as an HTML error page, not JSON.
+      OVERPASS_ALLOW_DUPLICATE_QUERIES: "yes"
+
+      OVERPASS_COMPRESSION: gz
+
+    # A failed init re-downloads the whole extract, so cap the retries rather
+    # than letting a bad config hammer Geofabrik in a loop.
+    restart: on-failure:3
+    stop_grace_period: 5m # let a running import checkpoint rather than corrupt
+
+volumes:
+  overpass-db:

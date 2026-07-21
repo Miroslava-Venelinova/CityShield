@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CityShield — OSM seed builder</title>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1a1f27; --line: #2b323d; --text: #e6e9ef;
+    --muted: #98a2b3; --accent: #4f9cf9; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --panel: #fff; --line: #dfe3e8; --text: #1a1f27;
+      --muted: #5c6673; --accent: #1667d0; --ok: #1a7f37; --warn: #9a6700; --err: #cf222e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  label:first-of-type { margin-top: 0; }
+  input, select, textarea, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%;
+  }
+  textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical; }
+  /* A generated query is read-only, and should look it — greyed out until
+     "Edit the query by hand" hands it over. */
+  textarea[readonly] { color: var(--muted); opacity: .65; cursor: default; }
+  textarea:not([readonly]) { border-color: var(--accent); }
+  button { background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+  button.danger { background: var(--err); }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row > * { flex: 1; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip {
+    width: auto; flex: 0 0 auto; background: transparent; border: 1px solid var(--line);
+    color: var(--muted); font-size: 12px; padding: 4px 9px; border-radius: 999px; font-weight: 500;
+  }
+  .chip:hover { color: var(--text); border-color: var(--accent); }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+  .check input { width: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--panel); }
+  td.num, th.num { text-align: right; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .scroll { max-height: 480px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .msg { padding: 9px 11px; border-radius: 6px; border: 1px solid var(--line); margin-bottom: 12px; font-size: 13px; white-space: pre-wrap; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; font-size: 12px; margin: 0; max-height: 260px; }
+  .stat { display: flex; gap: 20px; margin-bottom: 12px; }
+  .stat div span { display: block; font-size: 20px; font-weight: 600; }
+  .stat div small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .hide { display: none; }
+  .cheat { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .cheat summary { cursor: pointer; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .cheat summary:hover { color: var(--text); }
+  .cheat table { margin-top: 10px; font-size: 12px; }
+  .cheat th, .cheat td { padding: 4px 6px; vertical-align: top; }
+  .cheat td:first-child { font-family: ui-monospace, Consolas, monospace; text-align: center; color: var(--accent); }
+  .cheat p { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OSM seed builder</h1>
+  <p class="sub">Extract regions and streets from Overpass into the tool's own <code>output/</code>,
+  generate <code>seed.sql</code> there and apply it to D1. <code>backend/seeds/</code> is only
+  touched by the explicit merge in step 4.</p>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>1 · Source</h2>
+        <label for="endpoint">Overpass endpoint</label>
+        <select id="endpoint"></select>
+
+        <label for="country">Country <span class="muted">— "България", "Bulgaria" or "BG"; blank for no filter</span></label>
+        <input id="country" placeholder="България">
+
+        <label for="areaName">Area</label>
+        <input id="areaName" placeholder="e.g. Варна" value="Варна">
+        <div class="row">
+          <button id="resolveBtn" class="ghost">Resolve area</button>
+        </div>
+        <div id="areaResult" class="hide" style="margin-top:12px"></div>
+
+        <label for="areaId">Area id (relation id + 3600000000)</label>
+        <input id="areaId" placeholder="resolve above, or paste one">
+
+        <details class="cheat">
+          <summary>admin_level cheat sheet</summary>
+          <table>
+            <thead><tr><th>Level</th><th>Meaning</th><th>Example</th></tr></thead>
+            <tbody>
+              <tr><td>2</td><td>държава — country</td><td>България</td></tr>
+              <tr><td>4</td><td>област — province (28)</td><td>Варна, Стара Загора</td></tr>
+              <tr><td>5</td><td>община — municipality</td><td>община Варна, Чирпан</td></tr>
+              <tr><td>8</td><td>населено място — city, town, village</td><td>гр. Варна, с. Аврен</td></tr>
+              <tr><td>9</td><td>район — city district</td><td>districts of Варна, София</td></tr>
+              <tr><td>10</td><td>квартал — neighbourhood (rare)</td><td>Дебър, Любеново</td></tr>
+            </tbody>
+          </table>
+          <p><strong>Pick 4</strong> to cover a whole province — that is the scope the
+          current seed data was built at. <strong>Pick 8</strong> for a single city.</p>
+          <p>The Bulgaria extract also carries thin border strips of the neighbouring
+          countries, which number their levels differently. Keeping the country field
+          set to България is what keeps those out of your results.</p>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>2 · What to extract</h2>
+        <label for="kind">Kind</label>
+        <select id="kind"></select>
+
+        <label for="timeout">Overpass timeout (seconds)</label>
+        <input id="timeout" type="number" value="180" min="30" max="900">
+
+        <div class="check">
+          <input type="checkbox" id="cyrillicOnly" checked>
+          <label for="cyrillicOnly" style="margin:0">Cyrillic names only</label>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          Drops Latin-script names — the extract includes border strips of the
+          neighbouring countries, and alerts are written in Bulgarian.
+        </div>
+
+        <div class="check">
+          <input type="checkbox" id="rawMode">
+          <label for="rawMode" style="margin:0">Edit the query by hand</label>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          Changing the country, area or kind regenerates the query and discards hand
+          edits. Switching endpoint does not — it only changes where the query is sent.
+        </div>
+
+        <label for="query" style="margin-top:12px">Query</label>
+        <textarea id="query" rows="10" readonly></textarea>
+
+        <div class="row">
+          <button id="runBtn">Run query</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3 · Output</h2>
+        <div id="outputDir" class="muted" style="font-size:12px;margin-bottom:8px"></div>
+        <div id="outputStatus" class="muted">loading…</div>
+
+        <div class="row">
+          <button class="ghost" id="genBtn">Generate seed.sql</button>
+        </div>
+        <div id="sqlStatus" class="muted" style="font-size:12px;margin-top:8px"></div>
+
+        <div class="row">
+          <button class="ghost" id="applyLocal">Apply → local D1</button>
+          <button class="danger" id="applyRemote">Apply → remote D1</button>
+        </div>
+        <pre id="cmdOut" class="hide" style="margin-top:12px"></pre>
+
+        <div class="row">
+          <button class="ghost" id="revealBtn">Open in Explorer</button>
+          <button class="ghost" id="wipeBtn">Wipe output</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>4 · backend/seeds</h2>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">
+          The checked-in seed data. Nothing above writes here — this button does.
+        </div>
+        <div id="backendStatus" class="muted">loading…</div>
+        <div class="check">
+          <input type="checkbox" id="promoteOverwrite">
+          <label for="promoteOverwrite" style="margin:0">Overwrite coordinates already in backend/seeds</label>
+        </div>
+        <div class="row">
+          <button class="ghost" id="promoteBtn">Merge output → backend/seeds</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div id="messages"></div>
+
+      <div class="card">
+        <h2>Results</h2>
+        <div id="resultsEmpty" class="muted">Run a query to see extracted rows here.</div>
+
+        <div id="resultsBody" class="hide">
+          <div class="stat">
+            <div><span id="statTotal">0</span><small>found</small></div>
+            <div><span id="statSelected">0</span><small>selected</small></div>
+            <div><span id="statNew">—</span><small>not in seeds</small></div>
+          </div>
+
+          <div class="row" style="margin-bottom:12px">
+            <input id="filter" placeholder="Filter by name…">
+            <button class="ghost" id="selectAll" style="flex:0 0 auto;width:auto;padding:7px 14px">All</button>
+            <button class="ghost" id="selectNone" style="flex:0 0 auto;width:auto;padding:7px 14px">None</button>
+          </div>
+
+          <div class="scroll">
+            <table>
+              <thead><tr>
+                <th style="width:32px"></th><th>Name</th>
+                <th class="num">Lat</th><th class="num">Lng</th><th class="num">Parts</th>
+              </tr></thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+
+          <label for="target">Merge into <span class="muted">— output/</span></label>
+          <select id="target"></select>
+          <div class="check">
+            <input type="checkbox" id="overwrite">
+            <label for="overwrite" style="margin:0">Overwrite coordinates on entries that already have them</label>
+          </div>
+          <div class="row">
+            <button id="mergeBtn">Merge selected into output</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card hide" id="mergeCard">
+        <h2>Merge report</h2>
+        <div id="mergeReport"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = new URLSearchParams(location.search).get("t") || "";
+const $ = (id) => document.getElementById(id);
+let rows = [];       // rows returned by the last query
+let selected = new Set();
+// Names already in output/, per target — drives the "not in output" count so
+// you can see what a merge would add before writing anything.
+let existingNames = { regions: new Set(), streets: new Set() };
+let lastSeeds = null;   // last /api/config status, for the wipe confirmation
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-Seed-Token": token },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function message(text, cls = "") {
+  const el = document.createElement("div");
+  el.className = `msg ${cls}`;
+  el.textContent = text;
+  $("messages").prepend(el);
+  setTimeout(() => el.remove(), 12000);
+}
+
+function busy(button, on, label) {
+  button.disabled = on;
+  if (on) { button.dataset.label = button.textContent; button.textContent = label; }
+  else if (button.dataset.label) button.textContent = button.dataset.label;
+}
+
+// ── setup ────────────────────────────────────────────────────────────────────
+
+async function init() {
+  const cfg = await api("/api/config");
+
+  $("endpoint").innerHTML = cfg.endpoints
+    .map((e) => `<option value="${e.url}">${e.label}</option>`).join("");
+  $("country").value = cfg.default_country;
+  $("kind").innerHTML = cfg.kinds
+    .map((k) => `<option value="${k.id}" data-target="${k.target}">${k.label}</option>`).join("");
+  $("target").innerHTML = cfg.targets
+    .map((t) => `<option value="${t}">${t}</option>`).join("");
+
+  renderSeedStatus(cfg.seeds);
+  syncTarget();
+  refreshQuery();
+}
+
+function renderSeedStatus(seeds) {
+  lastSeeds = seeds;
+  for (const [target, s] of Object.entries(seeds.output.targets)) {
+    existingNames[target] = new Set(s.names);
+  }
+  $("outputDir").textContent = seeds.output.dir;
+  $("outputStatus").innerHTML = storeLines(seeds.output);
+  $("backendStatus").innerHTML = storeLines(seeds.backend, seeds.output);
+
+  const sql = seeds.sql;
+  $("sqlStatus").innerHTML = sql.exists
+    ? `<span class="ok">${sql.path}</span> — ${(sql.bytes / 1024).toFixed(0)} kB, generated ${sql.modified}`
+    : `<span class="warn">${sql.path} not generated yet</span>`;
+}
+
+// One line per table. When a comparison store is given (output vs backend),
+// also show how many names one side has that the other does not.
+function storeLines(store, compare) {
+  return Object.entries(store.targets).map(([target, s]) => {
+    let extra = "";
+    if (compare) {
+      const known = new Set(s.names);
+      const pending = compare.targets[target].names.filter((n) => !known.has(n)).length;
+      extra = pending ? ` · <span class="warn">${pending} in output not here yet</span>` : "";
+    }
+    return `<div><strong>${target}</strong>: ${s.total} entries, ` +
+      `<span class="${s.with_coords === s.total ? "ok" : "warn"}">${s.with_coords} with coordinates</span>${extra}</div>`;
+  }).join("");
+}
+
+async function refreshStatus() {
+  renderSeedStatus((await api("/api/config")).seeds);
+}
+
+function syncTarget() {
+  const option = $("kind").selectedOptions[0];
+  if (option) $("target").value = option.dataset.target;
+}
+
+// ── area resolution ──────────────────────────────────────────────────────────
+
+async function resolveArea() {
+  const button = $("resolveBtn");
+  busy(button, true, "Resolving…");
+  try {
+    const { candidates } = await api("/api/resolve-area", {
+      endpoint: $("endpoint").value, name: $("areaName").value, country: $("country").value,
+    });
+    $("areaResult").classList.remove("hide");
+    $("areaResult").innerHTML =
+      `<div class="muted" style="font-size:12px;margin-bottom:6px">Pick the matching boundary:</div>` +
+      candidates.map((c) => `
+        <button class="ghost" style="text-align:left;margin-bottom:6px" data-area="${c.area_id}">
+          ${c.name} · <span class="muted">admin_level ${c.admin_level} · relation ${c.relation_id}</span>
+        </button>`).join("");
+    $("areaResult").querySelectorAll("[data-area]").forEach((b) =>
+      b.addEventListener("click", () => { $("areaId").value = b.dataset.area; selectionChanged(); }));
+    // One match is unambiguous — save the click.
+    if (candidates.length === 1) { $("areaId").value = candidates[0].area_id; selectionChanged(); }
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+// ── query ────────────────────────────────────────────────────────────────────
+
+/**
+ * Any change to the selection invalidates a hand-edited query — the textarea
+ * would otherwise keep describing the previous selection while the controls
+ * say something else. Drop back to generated mode and say so, rather than
+ * silently leaving a stale query armed behind the Run button.
+ */
+function selectionChanged() {
+  if ($("rawMode").checked) {
+    $("rawMode").checked = false;
+    $("query").readOnly = true;
+    message("Hand-edited query discarded — the selection above it changed.", "warn");
+  }
+  refreshQuery();
+}
+
+async function refreshQuery() {
+  if ($("rawMode").checked) return;   // never clobber a hand-edited query
+  const areaId = $("areaId").value.trim();
+  if (!areaId) { $("query").value = "// Resolve an area first."; return; }
+  try {
+    const { query } = await api("/api/build-query", {
+      kind: $("kind").value, area_id: areaId, timeout: $("timeout").value,
+    });
+    $("query").value = query;
+  } catch (e) {
+    $("query").value = `// ${e.message}`;
+  }
+}
+
+async function runQuery() {
+  const button = $("runBtn");
+  busy(button, true, "Querying Overpass…");
+  try {
+    const payload = {
+      endpoint: $("endpoint").value, kind: $("kind").value,
+      area_id: $("areaId").value.trim() || 0, timeout: $("timeout").value,
+      cyrillic_only: $("cyrillicOnly").checked,
+    };
+    if ($("rawMode").checked) payload.raw = $("query").value;
+    const data = await api("/api/run-query", payload);
+
+    rows = data.rows;
+    selected = new Set(rows.map((r) => r.name));
+    renderRows();
+    message(`Overpass returned ${rows.length} distinct names.`, "ok");
+    // A server started before the filter existed returns no `dropped` key and
+    // silently ignores cyrillic_only — the toggle would appear to do nothing.
+    // Say so, rather than throwing on a missing property.
+    if (!Array.isArray(data.dropped)) {
+      message("This page is talking to an older seed builder process, which does not "
+        + "support the Cyrillic filter — restart the tool (Ctrl+C, run app.py again) "
+        + "and open the new URL it prints.", "err");
+      return;
+    }
+
+    // Never let the filter shrink the result count silently — say what went and
+    // name a few, so a wrongly-dropped row is visible rather than inferred.
+    if (data.dropped.length) {
+      const shown = data.dropped.slice(0, 12).join(", ");
+      const more = data.dropped.length > 12 ? `, … and ${data.dropped.length - 12} more` : "";
+      message(`Filtered out ${data.dropped.length} Latin-script name${data.dropped.length === 1 ? "" : "s"}: ${shown}${more}`, "warn");
+    }
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+// ── results ──────────────────────────────────────────────────────────────────
+
+function renderRows() {
+  const empty = rows.length === 0;
+  $("resultsEmpty").classList.toggle("hide", !empty);
+  $("resultsBody").classList.toggle("hide", empty);
+  if (empty) return;
+
+  const needle = $("filter").value.trim().toLowerCase();
+  const visible = needle ? rows.filter((r) => r.name.toLowerCase().includes(needle)) : rows;
+
+  $("rows").innerHTML = visible.map((r) => `
+    <tr>
+      <td><input type="checkbox" data-name="${encodeURIComponent(r.name)}" ${selected.has(r.name) ? "checked" : ""}></td>
+      <td>${escapeHtml(r.name)}</td>
+      <td class="num">${r.lat.toFixed(5)}</td>
+      <td class="num">${r.lng.toFixed(5)}</td>
+      <td class="num muted">${r.parts}</td>
+    </tr>`).join("");
+
+  $("rows").querySelectorAll("input[type=checkbox]").forEach((box) =>
+    box.addEventListener("change", () => {
+      const name = decodeURIComponent(box.dataset.name);
+      box.checked ? selected.add(name) : selected.delete(name);
+      updateStats();
+    }));
+
+  updateStats();
+}
+
+function updateStats() {
+  $("statTotal").textContent = rows.length;
+  $("statSelected").textContent = selected.size;
+  const known = existingNames[$("target").value];
+  $("statNew").textContent = known && known.size
+    ? rows.filter((r) => !known.has(r.name)).length : "—";
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ── merge + npm ──────────────────────────────────────────────────────────────
+
+async function merge() {
+  const button = $("mergeBtn");
+  const chosen = rows.filter((r) => selected.has(r.name));
+  if (chosen.length === 0) { message("Nothing selected.", "warn"); return; }
+
+  busy(button, true, "Merging…");
+  try {
+    const report = await api("/api/merge", {
+      target: $("target").value, rows: chosen, overwrite_coords: $("overwrite").checked,
+    });
+    $("mergeCard").classList.remove("hide");
+    $("mergeReport").innerHTML = `
+      <div class="msg"><strong>${report.file}</strong> now holds ${report.total} entries
+      (${report.without_coords} still without coordinates).</div>
+      <div class="stat">
+        <div><span class="ok">${report.added.length}</span><small>added</small></div>
+        <div><span class="ok">${report.enriched.length}</span><small>coords filled in</small></div>
+        <div><span class="warn">${report.updated.length}</span><small>coords overwritten</small></div>
+        <div><span class="muted">${report.unchanged}</span><small>unchanged</small></div>
+      </div>
+      ${sample("Added", report.added)}${sample("Coordinates filled in", report.enriched)}`;
+    message(`Merged into ${report.file}. Regenerate seed.sql to apply.`, "ok");
+    await refreshStatus();
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+function sample(title, names) {
+  if (names.length === 0) return "";
+  const shown = names.slice(0, 40).map(escapeHtml).join(", ");
+  const more = names.length > 40 ? ` … and ${names.length - 40} more` : "";
+  return `<div style="margin-top:10px"><div class="muted" style="font-size:12px">${title}</div><div>${shown}${more}</div></div>`;
+}
+
+function showCommands(steps) {
+  $("cmdOut").classList.remove("hide");
+  $("cmdOut").textContent = steps
+    .map((s) => `$ ${s.command}  (exit ${s.exit_code})\n\n${s.output}`).join("\n\n");
+}
+
+async function generateSql() {
+  const button = $("genBtn");
+  busy(button, true, "Generating…");
+  try {
+    const result = await api("/api/generate-sql", {});
+    showCommands([result]);
+    message(result.exit_code === 0
+      ? `Generated ${result.sql.path}.` : "Generating seed.sql failed — see output.",
+      result.exit_code === 0 ? "ok" : "err");
+    await refreshStatus();
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function apply(button, remote) {
+  if (remote && !confirm(
+      "Apply output/seed.sql to the REMOTE production D1 database?\n\nThis writes to live data.")) return;
+
+  busy(button, true, "Applying…");
+  try {
+    const result = await api("/api/apply", { remote });
+    showCommands(result.steps);
+    message(result.exit_code === 0
+      ? `Applied output/seed.sql to the ${remote ? "remote" : "local"} database.`
+      : `Applying to ${remote ? "remote" : "local"} D1 failed — see output.`,
+      result.exit_code === 0 ? "ok" : "err");
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function revealOutput() {
+  try {
+    const { path } = await api("/api/reveal-output", {});
+    message(`Opened ${path}.`, "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+async function wipeOutput() {
+  const button = $("wipeBtn");
+  // Deleting the working set is cheap to redo but silent to lose, and the
+  // counts are the only warning you get that it held something you wanted.
+  const counts = Object.entries(lastSeeds?.output?.targets ?? {})
+    .map(([target, s]) => `${s.total} ${target}`).join(", ");
+  if (!confirm(`Delete output/regions.json, output/streets.json and output/seed.sql?`
+      + (counts ? `\n\nCurrently holding ${counts}.` : "")
+      + `\n\nbackend/seeds/ is not touched.`)) return;
+
+  busy(button, true, "Wiping…");
+  try {
+    const { removed, seeds } = await api("/api/wipe-output", {});
+    renderSeedStatus(seeds);
+    $("cmdOut").classList.add("hide");
+    message(removed.length ? `Deleted ${removed.join(", ")}.` : "output/ was already empty.",
+            removed.length ? "ok" : "warn");
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function promote() {
+  const button = $("promoteBtn");
+  busy(button, true, "Merging…");
+  try {
+    const { reports } = await api("/api/promote", {
+      overwrite_coords: $("promoteOverwrite").checked,
+    });
+    $("mergeCard").classList.remove("hide");
+    $("mergeReport").innerHTML = reports.map((r) => `
+      <div class="msg"><strong>${r.file}</strong> now holds ${r.total} entries
+      (${r.without_coords} still without coordinates).</div>
+      <div class="stat">
+        <div><span class="ok">${r.added.length}</span><small>added</small></div>
+        <div><span class="ok">${r.enriched.length}</span><small>coords filled in</small></div>
+        <div><span class="warn">${r.updated.length}</span><small>coords overwritten</small></div>
+        <div><span class="muted">${r.unchanged}</span><small>unchanged</small></div>
+      </div>
+      ${sample("Added", r.added)}${sample("Coordinates filled in", r.enriched)}`).join("");
+    const added = reports.reduce((n, r) => n + r.added.length, 0);
+    message(`Promoted to backend/seeds — ${added} new name${added === 1 ? "" : "s"}. `
+      + "Review the git diff before committing.", "ok");
+    await refreshStatus();
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+// ── wiring ───────────────────────────────────────────────────────────────────
+
+$("resolveBtn").addEventListener("click", resolveArea);
+$("runBtn").addEventListener("click", runQuery);
+$("mergeBtn").addEventListener("click", merge);
+$("kind").addEventListener("change", () => { syncTarget(); selectionChanged(); updateStats(); });
+$("target").addEventListener("change", updateStats);
+$("areaId").addEventListener("change", selectionChanged);
+$("timeout").addEventListener("change", selectionChanged);
+$("country").addEventListener("change", selectionChanged);
+// #endpoint is deliberately not wired here: it decides where the query is sent,
+// not what it says. Switching mirrors mid-edit — the usual response to a rate
+// limit — must not throw the query away.
+$("filter").addEventListener("input", renderRows);
+$("rawMode").addEventListener("change", (e) => {
+  $("query").readOnly = !e.target.checked;
+  if (!e.target.checked) refreshQuery();
+});
+$("selectAll").addEventListener("click", () => { selected = new Set(rows.map((r) => r.name)); renderRows(); });
+$("selectNone").addEventListener("click", () => { selected.clear(); renderRows(); });
+$("genBtn").addEventListener("click", generateSql);
+$("applyLocal").addEventListener("click", (e) => apply(e.currentTarget, false));
+$("applyRemote").addEventListener("click", (e) => apply(e.currentTarget, true));
+$("promoteBtn").addEventListener("click", promote);
+$("wipeBtn").addEventListener("click", wipeOutput);
+$("revealBtn").addEventListener("click", revealOutput);
+
+init().catch((e) => message(`Failed to load: ${e.message}`, "err"));
+</script>
+</body>
+</html>

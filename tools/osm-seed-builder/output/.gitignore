@@ -1,0 +1,5 @@
+# The tool's working set: extractions land here, seed.sql is generated here,
+# and D1 is applied from here. Only backend/seeds/ is checked in — get data
+# there with the "Merge into backend/seeds" button.
+*
+!.gitignore

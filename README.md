@@ -104,6 +104,8 @@ CityShield/
 │   ├── test/                 Vitest suite (runs against local D1)
 │   └── spikes/               Phase 0 de-risking spikes + RESULTS.md
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
+├── tools/
+│   └── osm-seed-builder/     Local UI that builds the seed data from Overpass
 ├── backend_deprecated/       Old pre-Cloudflare stack — do not use (see DEPRECATED.md)
 ├── PLAN.MD                   Cloudflare migration plan (design spec)
 ├── TODO.md                   Migration checklist / status
@@ -132,6 +134,17 @@ npm install
 npm run db:local     # apply D1 migrations + generate & load the seed data
 npm run dev          # wrangler dev — serves the Worker on http://localhost:8787
 ```
+
+The region and street reference data comes from OpenStreetMap. To add or refresh
+it, run the seed builder and follow
+[tools/osm-seed-builder/README.md](tools/osm-seed-builder/README.md):
+
+```sh
+python tools/osm-seed-builder/app.py
+```
+
+It builds into its own gitignored `output/` directory and applies to D1 from
+there; `backend/seeds/` changes only when you press its dedicated merge button.
 
 Local secrets go in `backend/.dev.vars` (copy `backend/.dev.vars.example`); config
 and non-secret vars live in [backend/wrangler.jsonc](backend/wrangler.jsonc).
