@@ -20,9 +20,9 @@ export interface IdListingOptions {
   parsePage: (html: string) => string[] | null;
   parseMessage: (html: string) => { title: string; content: string } | null;
   /** Injectable for tests; defaults to fetchPage. */
-  fetchImpl?: (url: string) => Promise<Response>;
+  fetchImpl?: (url: string, headers?: Record<string, string>, deadline?: number) => Promise<Response>;
   /** Injectable for tests; defaults to processOutageMessage. */
-  processImpl?: (env: Env, tag: string, category: string, title: string, content: string, msgRef: string) => Promise<boolean>;
+  processImpl?: (env: Env, tag: string, category: string, title: string, content: string, msgRef: string, deadline?: number) => Promise<boolean>;
 }
 
 export async function crawlIdListing(env: Env, deadline: number, opts: IdListingOptions): Promise<void> {
@@ -31,10 +31,16 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
   const processImpl = opts.processImpl ?? processOutageMessage;
 
   const storedId = await getLastId(env, category);
+  if (storedId === null) {
+    // Treating an unreadable cursor as 0 would reprocess — and re-notify —
+    // messages already delivered. Wait for the next tick instead.
+    console.error(`[${tag}] Could not read the stored cursor. Skipping this tick.`);
+    return;
+  }
 
   let listingHtml: string;
   try {
-    listingHtml = await (await fetchImpl(opts.listingUrl)).text();
+    listingHtml = await (await fetchImpl(opts.listingUrl, undefined, deadline)).text();
   } catch (e) {
     console.error(`[${tag}] Failed to fetch listing page: ${e}. Stopping.`);
     return;
@@ -82,11 +88,11 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
 
     let submitted = false;
     try {
-      const message = opts.parseMessage(await (await fetchImpl(url)).text());
+      const message = opts.parseMessage(await (await fetchImpl(url, undefined, deadline)).text());
       if (message === null) {
         console.warn(`[${tag}] Could not parse message content (id=${id}).`);
       } else {
-        submitted = await processImpl(env, tag, category, message.title, message.content, `id=${id}`);
+        submitted = await processImpl(env, tag, category, message.title, message.content, `id=${id}`, deadline);
       }
     } catch (e) {
       console.error(`[${tag}] Failed to process message (id=${id}): ${e}.`);

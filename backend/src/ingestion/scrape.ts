@@ -3,6 +3,7 @@
 // get_text(" ", strip=True) / get_text(strip=True) semantics.
 
 import * as cheerio from "cheerio";
+import { abortIn, expired, sleepWithin } from "../shared/deadline";
 
 // Structural node type for the text walker (cheerio's DOM node types live in
 // domhandler; this is the minimal shape we touch).
@@ -23,30 +24,58 @@ export const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Per-attempt socket timeout; the caller's deadline can shorten it further. */
+const ATTEMPT_TIMEOUT_MS = 15_000;
+const MAX_ATTEMPTS = 3;
+
+class HttpError extends Error {
+  constructor(readonly status: number, url: string) {
+    super(`HTTP ${status} for ${url}`);
+    this.name = "HttpError";
+  }
+  /** A 404 will still be a 404 in six seconds; only transient statuses retry. */
+  get retryable(): boolean {
+    return RETRY_STATUS.has(this.status);
+  }
+}
 
 /**
  * Fetch a page with retries (GETs are idempotent, so retrying 429/5xx is
  * safe — port of the requests Session retry adapter). Throws on failure.
+ *
+ * Every attempt is capped by both its own timeout and the caller's remaining
+ * budget, and a retry that cannot fit in the budget is skipped rather than
+ * slept through: an unbudgeted worst case here was ~92 s (4 attempts × 20 s
+ * plus 12 s of backoff), three times the cron's entire wall clock.
  */
-export async function fetchPage(url: string, headers?: Record<string, string>): Promise<Response> {
+export async function fetchPage(
+  url: string, headers?: Record<string, string>, deadline?: number,
+): Promise<Response> {
   let lastError: unknown;
-  for (let attempt = 0; attempt <= 3; attempt++) {
-    if (attempt > 0) await sleep(2000 * attempt); // 0s, 2s, 4s, 6s
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (expired(deadline, 500)) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error(`No time budget left to fetch ${url}`);
+    }
     try {
       const res = await fetch(url, {
         headers: headers ?? DEFAULT_HEADERS,
-        signal: AbortSignal.timeout(20_000),
+        signal: abortIn(ATTEMPT_TIMEOUT_MS, deadline),
       });
-      if (RETRY_STATUS.has(res.status)) {
-        lastError = new Error(`HTTP ${res.status}`);
-        continue;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-      return res;
+      if (res.ok) return res;
+      // A permanent answer (404, 403, 410) used to cost three pointless
+      // retries plus their backoff before surfacing.
+      const httpError = new HttpError(res.status, url);
+      if (!httpError.retryable) throw httpError;
+      lastError = httpError;
     } catch (e) {
+      if (e instanceof HttpError && !e.retryable) throw e;
       lastError = e;
     }
+    // Linear backoff (2 s, 4 s), skipped when it would not fit the budget.
+    if (attempt < MAX_ATTEMPTS && !(await sleepWithin(2000 * attempt, deadline))) break;
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }

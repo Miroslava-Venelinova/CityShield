@@ -14,6 +14,7 @@ import DistanceOp from "jsts/org/locationtech/jts/operation/distance/DistanceOp.
 import { bestMatch, POLYGON_RESOLVE_THRESHOLD } from "../core/fuzzy";
 import { getStreets } from "../db/queries";
 import type { Env } from "../env";
+import { abortIn, expired, sleepWithin } from "../shared/deadline";
 
 const factory = new GeometryFactory();
 
@@ -60,34 +61,45 @@ export function clearOverpassCache(): void {
   overpassCache.clear();
 }
 
-export async function fetchStreetWays(env: Env, streetNames: string[]): Promise<WaysByName> {
+// Server-side and client-side caps. The old pair (25 s server / 30 s client,
+// plus a 15 s pause before the single retry) added up to 75 s — more than twice
+// the cron's entire wall clock, so a slow Overpass guaranteed a mid-flight kill.
+const OVERPASS_QUERY_TIMEOUT_S = 12;
+const OVERPASS_FETCH_TIMEOUT_MS = 15_000;
+const OVERPASS_RETRY_PAUSE_MS = 5_000;
+
+export async function fetchStreetWays(
+  env: Env, streetNames: string[], deadline?: number,
+): Promise<WaysByName> {
   const cacheKey = [...streetNames].sort().join("|");
   const cached = overpassCache.get(cacheKey);
   if (cached) return cached;
 
   const pattern = streetNames.map(escapeOverpassRegex).join("|");
   const query =
-    `[out:json][timeout:25];` +
+    `[out:json][timeout:${OVERPASS_QUERY_TIMEOUT_S}];` +
     `area["name"="Варна"]["boundary"="administrative"]->.a;` +
     `way(area.a)["highway"]["name"~"^(${pattern})$"];` +
     `out geom;`;
 
   let data: OverpassResponse | undefined;
   for (let attempt = 1; ; attempt++) {
+    if (expired(deadline, 1_000)) throw new Error("No time budget left for Overpass");
     const res = await fetch(env.OVERPASS_URL, {
       method: "POST",
       headers: OVERPASS_HEADERS,
       body: "data=" + encodeURIComponent(query),
-      signal: AbortSignal.timeout(30_000),
+      signal: abortIn(OVERPASS_FETCH_TIMEOUT_MS, deadline),
     });
     if (res.ok) {
       data = await res.json();
       break;
     }
     // Overpass rate-limits aggressive retries (429) — a retry needs a real
-    // pause (slot freeing). One retry; the cron's deadline guard is upstream.
-    if (attempt === 2) throw new Error(`Overpass HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    await new Promise((resolve) => setTimeout(resolve, 15_000));
+    // pause for a slot to free up. One retry, and only if it fits the budget:
+    // a polygon is an enhancement, never worth losing the message over.
+    if (attempt === 2 || !(await sleepWithin(OVERPASS_RETRY_PAUSE_MS, deadline)))
+      throw new Error(`Overpass HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
   }
 
   const byName = groupWaysByName(data ?? {});
@@ -209,11 +221,28 @@ function samplesAlongRing(ring: any, step: number): any[] {
   return samples;
 }
 
-function streetTouchesRing(ring: any, streetGeom: any, step: number, tolerance = 1.0, minRun = 5): boolean {
-  const samples = samplesAlongRing(ring, step);
+/**
+ * Whether a run of ring samples longer than `minRun` stays within `tolerance`
+ * of the street.
+ *
+ * Takes pre-built sample points rather than the ring: samples used to be
+ * recomputed (and re-wrapped into JSTS Points) once per street per candidate
+ * polygon, which multiplied the most CPU-heavy loop in the Worker by the street
+ * count for no gain. This is the code the 10 ms free-plan budget is tightest
+ * against (PLAN.MD §1.9).
+ */
+function streetTouchesSamples(
+  samples: any[], streetGeom: any, step: number, tolerance = 1.0, minRun = 5,
+): boolean {
+  // Cheap envelope reject before any distance work: a street whose bounding
+  // box is nowhere near this polygon cannot bound it.
+  const streetEnv = streetGeom.getEnvelopeInternal();
   let run = 0;
-  for (const c of samples) {
-    if (DistanceOp.distance(factory.createPoint(c), streetGeom) <= tolerance) {
+  for (const point of samples) {
+    const c = point.getCoordinate();
+    const nearBox = c.x >= streetEnv.getMinX() - tolerance && c.x <= streetEnv.getMaxX() + tolerance
+      && c.y >= streetEnv.getMinY() - tolerance && c.y <= streetEnv.getMaxY() + tolerance;
+    if (nearBox && DistanceOp.distance(point, streetGeom) <= tolerance) {
       run += step;
       if (run > minRun) return true;
     } else {
@@ -302,10 +331,14 @@ export function buildBlockPolygon(
 
   // 5. Keep polygons bounded by ≥2 distinct streets; best = (touchCount, area).
   const candidates: Array<{ poly: any; touched: number }> = [];
+  const extendedGeoms = [...extended.values()];
   for (const poly of rawPolygons) {
+    // Sample (and wrap into Points) once per polygon, then reuse across streets.
+    const samples = samplesAlongRing(poly.getExteriorRing(), sampleStep)
+      .map((c) => factory.createPoint(c));
     let touched = 0;
-    for (const geom of extended.values()) {
-      if (streetTouchesRing(poly.getExteriorRing(), geom, sampleStep)) touched++;
+    for (const geom of extendedGeoms) {
+      if (streetTouchesSamples(samples, geom, sampleStep)) touched++;
     }
     if (touched >= 2) candidates.push({ poly, touched });
   }
@@ -340,7 +373,9 @@ export function buildBlockPolygon(
  * `similarity_threshold` of streets_to_geojson) and build the block polygon.
  * Any failure → null, never throws (port of build_polygons' catch-all).
  */
-export async function buildPolygonForStreets(env: Env, rawStreetNames: string[]): Promise<BlockPolygonResult["polygon"]> {
+export async function buildPolygonForStreets(
+  env: Env, rawStreetNames: string[], deadline?: number,
+): Promise<BlockPolygonResult["polygon"]> {
   try {
     const streets = await getStreets(env);
     const resolved: string[] = [];
@@ -353,7 +388,7 @@ export async function buildPolygonForStreets(env: Env, rawStreetNames: string[])
       return null;
     }
 
-    const ways = await fetchStreetWays(env, resolved);
+    const ways = await fetchStreetWays(env, resolved, deadline);
     const result = buildBlockPolygon(ways, resolved);
     if (!result.polygon) console.warn(`[polygon] no polygon: ${result.reason}`);
     return result.polygon;

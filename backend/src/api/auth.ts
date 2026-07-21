@@ -23,6 +23,9 @@ const loginSchema = z.object({
   password: z.string(),
 });
 
+/** Budget for the one outbound Nominatim call behind PUT /location. */
+const LOCATION_BUDGET_MS = 10_000;
+
 // Mirrors UpdateLocationRequest.cs [Range] annotations.
 const locationSchema = z.object({
   latitude: z.number().min(-90).max(90),
@@ -146,8 +149,10 @@ export const authRoutes = new Hono<AppEnv>()
     if (!user) return c.text("User does not exist", 404);
 
     // Reverse-geocode, then fuzzy-match region (and street) — port of
-    // AuthService.UpdateLocationAsync. Geocoding failure just means no match.
-    const address = await reverseGeocode(c.env, latitude, longitude);
+    // AuthService.UpdateLocationAsync. Geocoding failure (including a Nominatim
+    // that never answers) just means no region/street match; the coordinates
+    // are still saved.
+    const address = await reverseGeocode(c.env, latitude, longitude, Date.now() + LOCATION_BUDGET_MS);
 
     const region = address.regionName
       ? bestMatch(address.regionName, await q.getRegions(c.env), (r) => r.name, SIMILARITY_THRESHOLD)

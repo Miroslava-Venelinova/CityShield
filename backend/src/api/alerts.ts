@@ -13,6 +13,11 @@ import { requireAuth, requireIngestKey } from "./middleware";
 const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const RECENT_LIMIT = 100;
 
+// Enrichment on this route makes throttled Nominatim calls, so it gets an
+// explicit budget rather than leaning on Cloudflare's request timeout: past it,
+// locations resolve without coordinates and the alert is still stored.
+const SUBMIT_BUDGET_MS = 20_000;
+
 // /recent is the same payload for every authenticated caller, so one cached
 // copy serves all of them. Without this, D1 rows read scale with clients ×
 // poll rate (100 rows a poll); with it they scale with time only, which is
@@ -70,7 +75,9 @@ export const alertRoutes = new Hono<AppEnv>()
 
     // Persist BEFORE notifications go out: if the store fails the scraper
     // gets a 500 and can safely re-submit, because no push has been sent yet.
-    const alertId = await storeAlert(c.env, category, title, content, startTime, endTime, locations);
+    const deadline = Date.now() + SUBMIT_BUDGET_MS;
+    const alertId = await storeAlert(
+      c.env, category, title, content, startTime, endTime, locations, deadline);
 
     // Never fail the request once the alert is stored: a non-2xx here would
     // make the scraper re-submit a message whose pushes already went out.

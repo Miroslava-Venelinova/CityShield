@@ -26,7 +26,7 @@ async function messageId(msg: VtMessage): Promise<string> {
 export async function run(env: Env, deadline: number): Promise<void> {
   let pageHtml: string;
   try {
-    pageHtml = await (await fetchPage(env.VT_URL)).text();
+    pageHtml = await (await fetchPage(env.VT_URL, undefined, deadline)).text();
   } catch (e) {
     console.error(`[VT] Failed to fetch page: ${e}. Stopping.`);
     return;
@@ -46,7 +46,14 @@ export async function run(env: Env, deadline: number): Promise<void> {
     return;
   }
 
-  const seenIds = new Set(await getSeenIds(env, CATEGORY));
+  const storedSeen = await getSeenIds(env, CATEGORY);
+  if (storedSeen === null) {
+    // An unreadable seen set looks like "nothing processed yet", which would
+    // re-notify the whole visible accordion. Wait for the next tick.
+    console.error("[VT] Could not read seen ids. Skipping this tick.");
+    return;
+  }
+  const seenIds = new Set(storedSeen);
   let processed = 0;
 
   for (const msg of rawMessages) {
@@ -56,7 +63,8 @@ export async function run(env: Env, deadline: number): Promise<void> {
     if (seenIds.has(id)) continue;
 
     processed++;
-    const parsed = await aiParse(env, VT_AI_PROMPT, `${msg.header}\n${msg.body}`, VT_JSON_SCHEMA, vtAiSchema);
+    const parsed = await aiParse(
+      env, VT_AI_PROMPT, `${msg.header}\n${msg.body}`, VT_JSON_SCHEMA, vtAiSchema, deadline);
     if (parsed === null) continue; // AI failure — retried next tick
 
     const markSeen = async () => {
@@ -85,7 +93,7 @@ export async function run(env: Env, deadline: number): Promise<void> {
       end_time: null,
       city_wide: true,
       bus_lines: parsed.bus_lines,
-    }, `id=${id}`);
+    }, `id=${id}`, deadline);
     if (submitted) await markSeen();
   }
 }

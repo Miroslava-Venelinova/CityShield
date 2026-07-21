@@ -1,7 +1,13 @@
 // crawl_state repository on D1 — port of data/postgres/state_repository.py.
 // Two shapes: a numeric cursor (vik, heating) and a seen-id set (vt, epro;
-// JSON array capped at MAX_SEEN_IDS). All functions return safe
-// defaults on error so a database hiccup never crashes a source run.
+// JSON array capped at MAX_SEEN_IDS).
+//
+// Read failures return null, distinct from "no row yet" (0 / []). The
+// distinction is load-bearing: a lost cursor read that degrades to 0, or a lost
+// seen-id read that degrades to [], makes every already-processed message look
+// new — and the source re-ingests and re-push-notifies messages users were
+// alerted about hours ago. A source that cannot read its state must skip the
+// tick instead, since the next tick costs at most five minutes of latency.
 
 import type { Env } from "../env";
 
@@ -29,7 +35,8 @@ export async function hasStateRow(env: Env, source: string): Promise<boolean> {
   }
 }
 
-export async function getLastId(env: Env, source: string): Promise<number> {
+/** Cursor value, 0 when there is no row yet, or null when the read failed. */
+export async function getLastId(env: Env, source: string): Promise<number | null> {
   try {
     const row = await env.DB.prepare("SELECT last_id FROM crawl_state WHERE source = ?")
       .bind(source).first<{ last_id: number }>();
@@ -40,7 +47,7 @@ export async function getLastId(env: Env, source: string): Promise<number> {
     return row.last_id;
   } catch (e) {
     console.error(`[state] getLastId(${source}) failed: ${e}`);
-    return 0;
+    return null;
   }
 }
 
@@ -55,7 +62,8 @@ export async function writeLastId(env: Env, source: string, lastId: number): Pro
   }
 }
 
-export async function getSeenIds(env: Env, source: string): Promise<string[]> {
+/** Seen ids, [] when there is no row yet, or null when the read failed. */
+export async function getSeenIds(env: Env, source: string): Promise<string[] | null> {
   try {
     const row = await env.DB.prepare("SELECT seen_ids FROM crawl_state WHERE source = ?")
       .bind(source).first<{ seen_ids: string }>();
@@ -67,7 +75,7 @@ export async function getSeenIds(env: Env, source: string): Promise<string[]> {
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
   } catch (e) {
     console.error(`[state] getSeenIds(${source}) failed: ${e}`);
-    return [];
+    return null;
   }
 }
 
@@ -90,6 +98,12 @@ export async function addSeenIds(env: Env, source: string, ids: string[]): Promi
     // Read-merge-write: each source has a single writer (one cron tick at a
     // time), so this is not racy in practice.
     const existing = await getSeenIds(env, source);
+    if (existing === null) {
+      // Writing a merge onto a failed read would drop every id already stored,
+      // re-opening the whole seen set for reprocessing.
+      console.error(`[state] addSeenIds(${source}) aborted — could not read existing ids.`);
+      return;
+    }
     const merged = mergeSeenIds(existing, ids);
     if (merged.length === existing.length && merged.every((v, i) => v === existing[i])) return;
     await env.DB.prepare(

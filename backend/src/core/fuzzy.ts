@@ -18,13 +18,43 @@ export function trigrams(text: string): Set<string> {
   return grams;
 }
 
-export function similarity(a: string, b: string): number {
-  const ta = trigrams(a);
-  const tb = trigrams(b);
+function jaccard(ta: Set<string>, tb: Set<string>): number {
   if (ta.size === 0 && tb.size === 0) return 0;
+  // Iterate the smaller set — the lookups are what cost.
+  const [small, large] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
   let shared = 0;
-  for (const g of ta) if (tb.has(g)) shared++;
+  for (const g of small) if (large.has(g)) shared++;
   return shared / (ta.size + tb.size - shared);
+}
+
+export function similarity(a: string, b: string): number {
+  return jaccard(trigrams(a), trigrams(b));
+}
+
+/**
+ * Trigram sets for a candidate list, memoized against the array identity.
+ *
+ * The street list is ~3,000 rows held in a module-scope cache that only turns
+ * over every 6 hours (db/queries.ts), while alert targeting calls bestMatch
+ * several times per alert. Without this, each call re-tokenized every candidate
+ * name — the dominant cost in the matcher, against a 10 ms CPU budget. The
+ * WeakMap keys on the cached array, so a ref-cache refresh drops the memo with
+ * the rows it describes.
+ */
+const candidateGrams = new WeakMap<object, Map<string, Set<string>>>();
+
+function gramsFor(candidates: readonly unknown[], name: string): Set<string> {
+  let memo = candidateGrams.get(candidates as object);
+  if (!memo) {
+    memo = new Map();
+    candidateGrams.set(candidates as object, memo);
+  }
+  let grams = memo.get(name);
+  if (!grams) {
+    grams = trigrams(name);
+    memo.set(name, grams);
+  }
+  return grams;
 }
 
 /**
@@ -37,10 +67,15 @@ export function bestMatch<T>(
   getName: (candidate: T) => string,
   threshold: number = SIMILARITY_THRESHOLD,
 ): T | null {
+  // Hoisted out of the loop: the query was previously re-tokenized once per
+  // candidate, i.e. thousands of times per call.
+  const queryGrams = trigrams(name);
+  if (queryGrams.size === 0) return null;
+
   let best: T | null = null;
   let bestScore = threshold;
   for (const candidate of candidates) {
-    const score = similarity(name, getName(candidate));
+    const score = jaccard(queryGrams, gramsFor(candidates, getName(candidate)));
     if (score >= bestScore) {
       best = candidate;
       bestScore = score;

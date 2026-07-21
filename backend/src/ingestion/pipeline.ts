@@ -7,8 +7,13 @@ import { sendUsersNotification, storeAlert } from "../core/alert-service";
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
 import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../shared/schemas";
+import { expired } from "../shared/deadline";
 import { aiParse } from "./ai";
 import { buildPolygonForStreets } from "./polygon";
+
+// Overpass round-trip plus the JSTS pipeline; below this there is no point
+// starting, and the remaining budget is better spent storing the alert.
+const POLYGON_MIN_BUDGET_MS = 6_000;
 
 /**
  * Store + notify — the direct-call replacement for submit_to_api. Returns
@@ -23,11 +28,13 @@ export async function ingestAlert(
   content: string,
   processed: ProcessedData,
   msgRef: string,
+  deadline?: number,
 ): Promise<boolean> {
   let alertId: string;
   try {
     alertId = await storeAlert(
-      env, category, title, content, processed.start_time, processed.end_time, processed.locations);
+      env, category, title, content, processed.start_time, processed.end_time,
+      processed.locations, deadline);
   } catch (e) {
     console.error(`[${tag}] Failed to store alert for ${msgRef}: ${e}`);
     return false;
@@ -73,9 +80,11 @@ export async function processOutageMessage(
   title: string,
   content: string,
   msgRef: string,
+  deadline?: number,
 ): Promise<boolean> {
   const msgContent = `${title}\n${content}`;
-  const aiOutput = await aiParse(env, OUTAGE_AI_PROMPT, msgContent, OUTAGE_JSON_SCHEMA, outageAiSchema);
+  const aiOutput = await aiParse(
+    env, OUTAGE_AI_PROMPT, msgContent, OUTAGE_JSON_SCHEMA, outageAiSchema, deadline);
   if (aiOutput === null) {
     console.error(`[${tag}] AI parsing failed (${msgRef}).`);
     return false;
@@ -88,9 +97,15 @@ export async function processOutageMessage(
   // the message over a polygon (port of build_polygons).
   for (const location of processed.locations) {
     if (!location.is_polygon) continue;
-    const polygon = await buildPolygonForStreets(env, location.sublocations);
+    // A polygon is an enhancement; out of budget just means no polygon, and
+    // the store+notify below still has to happen for this message.
+    if (expired(deadline, POLYGON_MIN_BUDGET_MS)) {
+      console.warn(`[${tag}] Skipping polygon build for ${msgRef} — low on time budget.`);
+      continue;
+    }
+    const polygon = await buildPolygonForStreets(env, location.sublocations, deadline);
     location.polygon_geojson = polygon ?? undefined;
   }
 
-  return ingestAlert(env, tag, category, title, content, processed, msgRef);
+  return ingestAlert(env, tag, category, title, content, processed, msgRef, deadline);
 }

@@ -26,17 +26,26 @@ async function entryId(period: string, text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
 }
 
-async function fetchVarnaEntries(env: Env): Promise<EproEntry[] | null> {
-  let areas: Array<Record<string, unknown>>;
+async function fetchVarnaEntries(env: Env, deadline?: number): Promise<EproEntry[] | null> {
+  let areas: unknown;
   try {
-    const res = await fetchPage(env.EPRO_URL, { ...DEFAULT_HEADERS, "X-Requested-With": "XMLHttpRequest" });
+    const res = await fetchPage(
+      env.EPRO_URL, { ...DEFAULT_HEADERS, "X-Requested-With": "XMLHttpRequest" }, deadline);
     areas = await res.json();
   } catch (e) {
     console.error(`[EPRO] Failed to fetch interruptions endpoint: ${e}.`);
     return null;
   }
 
-  const area = areas.find((a) => a.area_name === env.EPRO_AREA_NAME);
+  // The endpoint is undocumented and could return anything; an unexpected shape
+  // must read as "nothing to do", not throw out of the source runner.
+  if (!Array.isArray(areas)) {
+    console.error("[EPRO] Interruptions endpoint did not return an array.");
+    return null;
+  }
+
+  const area = (areas as Array<Record<string, unknown>>)
+    .find((a) => a && typeof a === "object" && a.area_name === env.EPRO_AREA_NAME);
   if (!area) {
     console.error(`[EPRO] Area '${env.EPRO_AREA_NAME}' not found in endpoint response.`);
     return null;
@@ -56,7 +65,7 @@ async function fetchVarnaEntries(env: Env): Promise<EproEntry[] | null> {
 }
 
 export async function run(env: Env, deadline: number): Promise<void> {
-  const entries = await fetchVarnaEntries(env);
+  const entries = await fetchVarnaEntries(env, deadline);
   if (entries === null) return;
 
   // First run ever: mark everything currently visible as seen without
@@ -76,7 +85,14 @@ export async function run(env: Env, deadline: number): Promise<void> {
   }
   if (entries.length === 0) return;
 
-  const seenIds = new Set(await getSeenIds(env, CATEGORY));
+  const storedSeen = await getSeenIds(env, CATEGORY);
+  if (storedSeen === null) {
+    // An unreadable seen set looks like "nothing processed yet", which would
+    // re-notify every active interruption. Wait for the next tick.
+    console.error("[EPRO] Could not read seen ids. Skipping this tick.");
+    return;
+  }
+  const seenIds = new Set(storedSeen);
   let processed = 0;
 
   for (const entry of entries) {
@@ -92,7 +108,7 @@ export async function run(env: Env, deadline: number): Promise<void> {
 
     const content = period ? `${period}\n${text}` : text;
     processed++;
-    if (await processOutageMessage(env, TAG, CATEGORY, TITLE, content, `id=${id}`)) {
+    if (await processOutageMessage(env, TAG, CATEGORY, TITLE, content, `id=${id}`, deadline)) {
       seenIds.add(id);
       await addSeenIds(env, CATEGORY, [id]);
     }

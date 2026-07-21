@@ -7,6 +7,7 @@
 // polling intervals.
 
 import type { Env } from "../env";
+import { withTimeout } from "../shared/deadline";
 import { TICK_MINUTES, isDue } from "./schedule";
 import * as epro from "./sources/epro";
 import * as heating from "./sources/heating";
@@ -42,25 +43,38 @@ export async function runIngestion(env: Env): Promise<void> {
       console.warn(`[runner] Deadline reached before '${source.name}' — it runs when next due.`);
       break;
     }
+    const startedAt = Date.now();
     try {
-      await source.run(env, deadline);
+      // Belt-and-braces on top of the deadlines threaded into the source: a
+      // source that somehow blocks past the budget must not take the remaining
+      // sources down with it, since workerd kills the whole invocation at ~30 s.
+      await withTimeout(source.run(env, deadline), deadline - startedAt, undefined, `source '${source.name}'`);
     } catch (e) {
-      console.error(`[runner] Source '${source.name}' failed: ${e}`);
+      console.error(`[runner] Source '${source.name}' failed after ${Date.now() - startedAt} ms: ${e}`);
     }
   }
 }
 
 /**
  * Daily cron (30 3 * * *): §1.6 stale-token cleanup + §1.10 retention jobs.
+ *
+ * Each job is independent, so one failure must not skip the rest — retention
+ * deletions that silently stop running are how a 500 MB D1 fills up.
  */
 export async function runDailyCleanup(env: Env): Promise<void> {
   const cutoff = (days: number) => new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
-  const tokens = await env.DB.prepare("DELETE FROM device_tokens WHERE last_seen_at < ?")
-    .bind(cutoff(60)).run();
-  const alerts = await env.DB.prepare("DELETE FROM alerts WHERE created_on_utc < ?")
-    .bind(cutoff(90)).run();
-  const geocache = await env.DB.prepare("DELETE FROM geocode_cache WHERE resolved_at < ?")
-    .bind(cutoff(180)).run();
-  console.log(`[cleanup] removed ${tokens.meta.changes} stale token(s), `
-    + `${alerts.meta.changes} old alert(s), ${geocache.meta.changes} geocode cache row(s)`);
+  const jobs: Array<{ label: string; sql: string; cutoffDays: number }> = [
+    { label: "stale token(s)", sql: "DELETE FROM device_tokens WHERE last_seen_at < ?", cutoffDays: 60 },
+    { label: "old alert(s)", sql: "DELETE FROM alerts WHERE created_on_utc < ?", cutoffDays: 90 },
+    { label: "geocode cache row(s)", sql: "DELETE FROM geocode_cache WHERE resolved_at < ?", cutoffDays: 180 },
+  ];
+
+  for (const job of jobs) {
+    try {
+      const { meta } = await env.DB.prepare(job.sql).bind(cutoff(job.cutoffDays)).run();
+      console.log(`[cleanup] removed ${meta.changes} ${job.label}`);
+    } catch (e) {
+      console.error(`[cleanup] failed to remove ${job.label}: ${e}`);
+    }
+  }
 }

@@ -96,29 +96,50 @@ export async function getDeviceTokenMetadata(env: Env, userId: string) {
 
 interface RefCache { rows: NamedRow[]; loadedAt: number; }
 const REF_TTL_MS = 6 * 60 * 60 * 1000;
-let regionsCache: RefCache | null = null;
-let streetsCache: RefCache | null = null;
 
-async function loadRef(env: Env, sql: string, cache: RefCache | null): Promise<RefCache> {
-  if (cache && Date.now() - cache.loadedAt < REF_TTL_MS) return cache;
-  const { results } = await env.DB.prepare(sql).all<NamedRow>();
-  return { rows: results, loadedAt: Date.now() };
+interface RefSlot {
+  cache: RefCache | null;
+  /** In-flight load, so concurrent callers on a cold isolate share one read. */
+  pending: Promise<NamedRow[]> | null;
 }
 
-export async function getRegions(env: Env): Promise<NamedRow[]> {
-  regionsCache = await loadRef(env, "SELECT id, region_name AS name FROM regions", regionsCache);
-  return regionsCache.rows;
+const regionsRef: RefSlot = { cache: null, pending: null };
+const streetsRef: RefSlot = { cache: null, pending: null };
+
+/**
+ * Reference rows are stable, small, and read on nearly every alert path, so
+ * they live in module scope for 6 hours (§1.3). The single-flight guard matters
+ * on a cold isolate: the streets table is ~3,000 rows, and without it a burst
+ * of concurrent requests each paid for its own full-table read.
+ */
+function loadRef(env: Env, slot: RefSlot, sql: string): Promise<NamedRow[]> {
+  if (slot.cache && Date.now() - slot.cache.loadedAt < REF_TTL_MS)
+    return Promise.resolve(slot.cache.rows);
+  if (slot.pending) return slot.pending;
+
+  slot.pending = env.DB.prepare(sql).all<NamedRow>()
+    .then(({ results }) => {
+      slot.cache = { rows: results, loadedAt: Date.now() };
+      return results;
+    })
+    .finally(() => { slot.pending = null; });
+  return slot.pending;
 }
 
-export async function getStreets(env: Env): Promise<NamedRow[]> {
-  streetsCache = await loadRef(env, "SELECT id, street_name AS name FROM streets", streetsCache);
-  return streetsCache.rows;
+export function getRegions(env: Env): Promise<NamedRow[]> {
+  return loadRef(env, regionsRef, "SELECT id, region_name AS name FROM regions");
+}
+
+export function getStreets(env: Env): Promise<NamedRow[]> {
+  return loadRef(env, streetsRef, "SELECT id, street_name AS name FROM streets");
 }
 
 /** Test hook: drop the module-scope reference caches. */
 export function clearRefCaches(): void {
-  regionsCache = null;
-  streetsCache = null;
+  regionsRef.cache = null;
+  regionsRef.pending = null;
+  streetsRef.cache = null;
+  streetsRef.pending = null;
 }
 
 // ── device tokens ─────────────────────────────────────────────────────────────
@@ -185,7 +206,22 @@ export async function upsertPreference(env: Env, userId: string, category: strin
 
 // ── alert targeting (user-id queries; only ids are materialized) ─────────────
 
+// D1 rejects a statement with more than 100 bound parameters, and the free plan
+// allows only 50 queries per invocation — so a `WHERE x IN (?, ?, …)` over a
+// targeted audience is bounded on both sides. Anything that can exceed 100 keys
+// is therefore either chunked (below) or rewritten to filter in memory against
+// a table small enough to read whole; see getDisabledUserIds / getTokensForUsers.
+const MAX_BOUND_PARAMS = 100;
+
 const inList = (n: number) => Array.from({ length: n }, () => "?").join(", ");
+
+/** Split keys into groups that fit under D1's bound-parameter ceiling. */
+function chunkKeys<T>(keys: readonly T[], reservedParams = 0): T[][] {
+  const size = MAX_BOUND_PARAMS - reservedParams;
+  const chunks: T[][] = [];
+  for (let i = 0; i < keys.length; i += size) chunks.push(keys.slice(i, i + size));
+  return chunks;
+}
 
 async function idColumn(stmt: D1PreparedStatement): Promise<string[]> {
   const { results } = await stmt.all<{ user_id: string }>();
@@ -194,27 +230,6 @@ async function idColumn(stmt: D1PreparedStatement): Promise<string[]> {
 
 export function getUserIdsByRegion(env: Env, regionId: number) {
   return idColumn(env.DB.prepare("SELECT user_id FROM users WHERE region_id = ?").bind(regionId));
-}
-
-/**
- * Users in the region who are either on the named street or have no street set:
- * a NULL street_id means "somewhere in this region", so those users must not be
- * excluded by a street-level alert — only users on a *different* street are.
- */
-export function getUserIdsByRegionAndStreet(env: Env, regionId: number, streetId: number) {
-  return idColumn(env.DB.prepare(
-    "SELECT user_id FROM users WHERE region_id = ? AND (street_id = ? OR street_id IS NULL)")
-    .bind(regionId, streetId));
-}
-
-/**
- * Region-agnostic street lookup: street_name is globally unique (0001_init.sql),
- * so a street-only alert can still find its subscribers when the region name
- * was missing or unrecognizable.
- */
-export function getUserIdsByStreet(env: Env, streetId: number) {
-  return idColumn(env.DB.prepare(
-    "SELECT user_id FROM users WHERE street_id = ?").bind(streetId));
 }
 
 export function getAllUserIds(env: Env) {
@@ -237,31 +252,90 @@ export async function getUsersInBBox(
   return results;
 }
 
+/**
+ * Bus-line subscriptions for the given users.
+ *
+ * Only users with a non-empty subscription list can be filtered OUT by a
+ * bus-line alert (an empty list means "no filter"), so the query reads just
+ * those rows and the caller treats anyone absent as unfiltered. That keeps this
+ * off the bound-parameter ceiling on the path that needs it most: bus-line
+ * alerts are city-wide, so `userIds` there is the entire user base.
+ */
 export async function getBusLineSubscriptions(
   env: Env, userIds: string[],
 ): Promise<Array<{ user_id: string; subscribed_bus_lines: string }>> {
   if (userIds.length === 0) return [];
+  const wanted = new Set(userIds);
   const { results } = await env.DB.prepare(
-    `SELECT user_id, subscribed_bus_lines FROM users WHERE user_id IN (${inList(userIds.length)})`,
-  ).bind(...userIds).all<{ user_id: string; subscribed_bus_lines: string }>();
-  return results;
+    `SELECT user_id, subscribed_bus_lines FROM users
+     WHERE subscribed_bus_lines NOT IN ('[]', '')`,
+  ).all<{ user_id: string; subscribed_bus_lines: string }>();
+  return results.filter((r) => wanted.has(r.user_id));
 }
 
-/** Users among `userIds` who explicitly DISABLED the category (opt-out model). */
+/**
+ * Users among `userIds` who explicitly DISABLED the category (opt-out model).
+ *
+ * Preferences are stored as opt-outs only (migration 0004), so the whole
+ * disabled set for one category is small — far smaller than the audience being
+ * filtered. Reading it in one query and intersecting in memory costs a single
+ * D1 query regardless of audience size, where an IN list would have needed one
+ * per 100 users and broken outright past that.
+ */
 export async function getDisabledUserIds(env: Env, userIds: string[], category: string): Promise<string[]> {
   if (userIds.length === 0) return [];
-  return idColumn(env.DB.prepare(
+  const wanted = new Set(userIds);
+  const disabled = await idColumn(env.DB.prepare(
     `SELECT user_id FROM user_notification_preferences
-     WHERE category = ? AND is_enabled = 0 AND user_id IN (${inList(userIds.length)})`,
-  ).bind(category, ...userIds));
+     WHERE category = ? AND is_enabled = 0`,
+  ).bind(category));
+  return disabled.filter((id) => wanted.has(id));
 }
 
+/**
+ * Device tokens for the given users. Chunked under the bound-parameter ceiling
+ * for targeted alerts; a broadcast (audience at or above the whole token table's
+ * natural size) reads the table once instead.
+ */
 export async function getTokensForUsers(env: Env, userIds: string[]): Promise<string[]> {
   if (userIds.length === 0) return [];
+
+  if (userIds.length > MAX_BOUND_PARAMS) {
+    const wanted = new Set(userIds);
+    const { results } = await env.DB.prepare(
+      "SELECT user_id, token FROM device_tokens",
+    ).all<{ user_id: string; token: string }>();
+    return results.filter((r) => wanted.has(r.user_id)).map((r) => r.token);
+  }
+
   const { results } = await env.DB.prepare(
     `SELECT token FROM device_tokens WHERE user_id IN (${inList(userIds.length)})`,
   ).bind(...userIds).all<{ token: string }>();
   return results.map((r) => r.token);
+}
+
+/**
+ * Users on any of the given streets, in one query — street-level targeting used
+ * to issue a separate query per named street, which multiplied D1 usage against
+ * the free plan's 50-queries-per-invocation cap for no benefit.
+ */
+export async function getUserIdsByStreets(
+  env: Env, streetIds: number[], regionId: number | null,
+): Promise<string[]> {
+  if (streetIds.length === 0) return [];
+  const ids = new Set<string>();
+  // A boulevard can run through several regions — when a region matched too,
+  // pairing the two stays the narrower (and safer) targeting. A NULL street_id
+  // means "somewhere in this region", so those users stay included.
+  for (const chunk of chunkKeys(streetIds, regionId === null ? 0 : 1)) {
+    const sql = regionId === null
+      ? `SELECT user_id FROM users WHERE street_id IN (${inList(chunk.length)})`
+      : `SELECT user_id FROM users WHERE region_id = ?
+         AND (street_id IN (${inList(chunk.length)}) OR street_id IS NULL)`;
+    const binds = regionId === null ? chunk : [regionId, ...chunk];
+    for (const id of await idColumn(env.DB.prepare(sql).bind(...binds))) ids.add(id);
+  }
+  return [...ids];
 }
 
 // ── alerts ────────────────────────────────────────────────────────────────────

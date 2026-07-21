@@ -6,9 +6,12 @@
 // ≥1,100 ms spacing between uncached calls within one invocation.
 
 import type { Env } from "../env";
+import { abortIn, msLeft } from "../shared/deadline";
 
 // Nominatim ToS require a descriptive User-Agent.
 const USER_AGENT = "CityShieldAPI/1.0";
+
+const REQUEST_TIMEOUT_MS = 8_000;
 
 export interface ReverseAddress {
   regionName: string | null;
@@ -34,10 +37,31 @@ export interface GeoPoint {
 let lastNominatimCallAt = 0;
 const MIN_SPACING_MS = 1_100;
 
-async function throttleNominatim(): Promise<void> {
-  const wait = lastNominatimCallAt + MIN_SPACING_MS - Date.now();
-  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-  lastNominatimCallAt = Date.now();
+// Serializing tail. Reading a shared timestamp was only correct while callers
+// were strictly sequential: two concurrent geocodes both saw the same
+// `lastNominatimCallAt`, waited the same interval, and then fired
+// simultaneously — exactly the 1 rps breach the throttle exists to prevent.
+// Chaining the waits makes the spacing hold under concurrency too.
+let throttleChain: Promise<void> = Promise.resolve();
+
+/**
+ * Reserve the next Nominatim slot. Resolves false when the wait would not fit
+ * inside the caller's budget — a skipped geocode (alert stored without
+ * coordinates) is strictly better than sleeping into a mid-flight kill.
+ */
+function reserveNominatimSlot(deadline?: number): Promise<boolean> {
+  const result = throttleChain.then(async () => {
+    const wait = Math.max(0, lastNominatimCallAt + MIN_SPACING_MS - Date.now());
+    // Needs room for the throttle wait AND the request that follows it.
+    if (msLeft(deadline) < wait + 1_000) return false;
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastNominatimCallAt = Date.now();
+    return true;
+  });
+  // The chain must not stall on a failed link, and must not surface unhandled
+  // rejections to whoever happens to be next in line.
+  throttleChain = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 /**
@@ -45,7 +69,7 @@ async function throttleNominatim(): Promise<void> {
  * alerts for the same unresolvable name don't hammer Nominatim).
  * Never throws — returns null on any failure.
  */
-export async function geocode(env: Env, query: string): Promise<GeoPoint | null> {
+export async function geocode(env: Env, query: string, deadline?: number): Promise<GeoPoint | null> {
   if (!query.trim()) return null;
 
   try {
@@ -55,11 +79,14 @@ export async function geocode(env: Env, query: string): Promise<GeoPoint | null>
       ? { lat: cached.lat, lng: cached.lng }
       : null;
 
-    await throttleNominatim();
+    if (!(await reserveNominatimSlot(deadline))) {
+      console.warn(`Skipping uncached geocode of '${query}' — not enough time budget left.`);
+      return null;
+    }
     const url = `${env.NOMINATIM_URL}/search?format=json&limit=1&countrycodes=bg&q=${encodeURIComponent(query)}`;
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(10_000),
+      signal: abortIn(REQUEST_TIMEOUT_MS, deadline),
     });
     if (!res.ok) {
       console.warn(`Nominatim returned ${res.status} for '${query}'`);
@@ -93,13 +120,15 @@ export function buildGeocodeQuery(name: string): string {
 }
 
 /** Never throws — geocoding failure degrades to "no region/street matched". */
-export async function reverseGeocode(env: Env, lat: number, lon: number): Promise<ReverseAddress> {
+export async function reverseGeocode(
+  env: Env, lat: number, lon: number, deadline?: number,
+): Promise<ReverseAddress> {
   const none: ReverseAddress = { regionName: null, streetName: null };
   try {
     const url = `${env.NOMINATIM_URL}/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1`;
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(10_000),
+      signal: abortIn(REQUEST_TIMEOUT_MS, deadline),
     });
     if (!res.ok) {
       console.warn(`Nominatim reverse returned ${res.status} for (${lat}, ${lon})`);

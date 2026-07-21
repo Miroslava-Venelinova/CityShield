@@ -106,21 +106,14 @@ async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
   // a street, and street_name is globally unique, so an unmatched region must
   // not discard an otherwise perfectly good street match.
   if (sublocations.length > 0) {
-    const ids = new Set<string>();
     const streets = await q.getStreets(env);
-    let matchedAnyStreet = false;
+    const streetIds = new Set<number>();
     for (const streetName of sublocations) {
       const street = bestMatch(streetName, streets, (s) => s.name, SIMILARITY_THRESHOLD);
-      if (!street) continue;
-      matchedAnyStreet = true;
-      // A boulevard can run through several regions — when we do have a region,
-      // pairing the two stays the narrower (and safer) targeting.
-      const matched = region
-        ? await q.getUserIdsByRegionAndStreet(env, region.id, street.id)
-        : await q.getUserIdsByStreet(env, street.id);
-      for (const id of matched) ids.add(id);
+      if (street) streetIds.add(street.id);
     }
-    if (matchedAnyStreet) return [...ids];
+    // All matched streets resolve in one query rather than one query each.
+    if (streetIds.size > 0) return q.getUserIdsByStreets(env, [...streetIds], region?.id ?? null);
     // None of the named streets exist in our table — the street detail is
     // unusable, so fall through to region-wide rather than notifying nobody.
   }
@@ -193,17 +186,19 @@ export async function sendUsersNotification(
   const lines = [...new Set(
     (busLines ?? []).map(normalizeBusLine).filter((l): l is string => l !== null))];
   if (lines.length > 0 && userIds.length > 0) {
-    const subscriptions = await q.getBusLineSubscriptions(env, [...new Set(userIds)]);
-    userIds = subscriptions
-      .filter((u) => {
-        let subscribed: string[] = [];
-        try {
-          const parsed = JSON.parse(u.subscribed_bus_lines);
-          if (Array.isArray(parsed)) subscribed = parsed.filter((x): x is string => typeof x === "string");
-        } catch { /* corrupt JSON → treat as no filter */ }
-        return subscribed.length === 0 || subscribed.some((l) => lines.includes(l));
-      })
-      .map((u) => u.user_id);
+    const affected = new Set(lines);
+    // Only users who actually picked lines are returned; everyone else has no
+    // filter and stays in the audience.
+    const excluded = new Set<string>();
+    for (const u of await q.getBusLineSubscriptions(env, [...new Set(userIds)])) {
+      let subscribed: string[] = [];
+      try {
+        const parsed = JSON.parse(u.subscribed_bus_lines);
+        if (Array.isArray(parsed)) subscribed = parsed.filter((x): x is string => typeof x === "string");
+      } catch { /* corrupt JSON → treat as no filter */ }
+      if (subscribed.length > 0 && !subscribed.some((l) => affected.has(l))) excluded.add(u.user_id);
+    }
+    userIds = userIds.filter((id) => !excluded.has(id));
   }
 
   // Debug/monitoring accounts receive every alert regardless of location.
@@ -252,8 +247,9 @@ export async function storeAlert(
   startTime: string | null,
   endTime: string | null,
   locations: unknown,
+  deadline?: number,
 ): Promise<string> {
-  const enriched = await enrichLocations(env, locations);
+  const enriched = await enrichLocations(env, locations, deadline);
   const id = crypto.randomUUID();
   await q.insertAlert(env, {
     id,
@@ -306,7 +302,9 @@ function deserializeLocations(row: q.AlertRow): AlertLocationDTO[] {
  * canonical name via Nominatim. Never throws — an alert without coordinates
  * is still worth storing.
  */
-async function enrichLocations(env: Env, locations: unknown): Promise<AlertLocationDTO[]> {
+async function enrichLocations(
+  env: Env, locations: unknown, deadline?: number,
+): Promise<AlertLocationDTO[]> {
   const result: AlertLocationDTO[] = [];
   if (!Array.isArray(locations)) return result;
 
@@ -335,7 +333,7 @@ async function enrichLocations(env: Env, locations: unknown): Promise<AlertLocat
       }
     } else {
       dto.is_polygon = false; // polygon was requested but not built
-      const point = await resolveCoordinates(env, dto);
+      const point = await resolveCoordinates(env, dto, deadline);
       if (point) {
         dto.lat = point.lat;
         dto.lng = point.lng;
@@ -362,20 +360,24 @@ function stripLocationPrefix(name: string): string {
  * our own DB first (trigram fuzzy match), then ask Nominatim. Street-level
  * pin when a street is listed, otherwise district/locality-level.
  */
-async function resolveCoordinates(env: Env, dto: AlertLocationDTO) {
+async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: number) {
   // 1. Street-level: first sublocation that geocodes wins
-  for (const raw of dto.sublocations.slice(0, 3)) {
-    const street = bestMatch(raw, await q.getStreets(env), (s) => s.name, SIMILARITY_THRESHOLD)?.name
-      ?? stripLocationPrefix(raw);
-    const point = await geocode(env, buildGeocodeQuery(street));
-    if (point) return point;
+  const candidates = dto.sublocations.slice(0, 3);
+  if (candidates.length > 0) {
+    const streets = await q.getStreets(env); // hoisted: constant across the loop
+    for (const raw of candidates) {
+      const street = bestMatch(raw, streets, (s) => s.name, SIMILARITY_THRESHOLD)?.name
+        ?? stripLocationPrefix(raw);
+      const point = await geocode(env, buildGeocodeQuery(street), deadline);
+      if (point) return point;
+    }
   }
 
   // 2. District / locality level
   if (dto.location_name.trim()) {
     const region = bestMatch(dto.location_name, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD)?.name
       ?? stripLocationPrefix(dto.location_name);
-    return geocode(env, buildGeocodeQuery(region));
+    return geocode(env, buildGeocodeQuery(region), deadline);
   }
 
   return null;
