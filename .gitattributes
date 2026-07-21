@@ -1,0 +1,13 @@
+# The repo is developed on Windows (core.autocrlf=true) but the Android build
+# runs inside a Linux container. A CRLF shebang resolves to `/bin/sh\r`, which
+# does not exist, so a checked-out `gradlew` fails with a bare "not found".
+# Pin every file the container executes to LF regardless of platform.
+*.sh            text eol=lf
+gradlew         text eol=lf
+Dockerfile      text eol=lf
+Makefile        text eol=lf
+docker-compose.yml text eol=lf
+
+# Windows-side counterparts stay CRLF.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
