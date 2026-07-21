@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { app } from "../src/api/app";
 
 let ipCounter = 0;
@@ -18,7 +18,13 @@ export function freshIp(): string {
 export async function api(path: string, init?: RequestInit, ip?: string): Promise<Response> {
   const headers = new Headers(init?.headers);
   headers.set("CF-Connecting-IP", ip ?? freshIp());
-  return app.request(path, { ...init, headers }, env);
+  // A real ExecutionContext, because routes use waitUntil for work that must
+  // outlive the response (mail sends). Without one, `c.executionCtx` throws;
+  // waiting on it afterwards also makes that background work deterministic.
+  const ctx = createExecutionContext();
+  const res = await app.request(path, { ...init, headers }, env, ctx);
+  await waitOnExecutionContext(ctx);
+  return res;
 }
 
 export function jsonInit(method: string, body: unknown, token?: string): RequestInit {

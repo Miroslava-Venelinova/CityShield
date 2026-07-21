@@ -9,19 +9,44 @@ export interface RegisterRequest { email: string; password: string; }
 export interface LoginResponse   { token: string; }
 
 export interface UserDTO {
-  email:        string;
-  latitude:     number | null;
-  longitude:    number | null;
-  hasLocation:  boolean;
-  regionName:   string | null;
-  streetName:   string | null;
-  createdOnUTC: string;
-  updatedOnUTC: string;
+  email:         string;
+  latitude:      number | null;
+  longitude:     number | null;
+  hasLocation:   boolean;
+  regionName:    string | null;
+  streetName:    string | null;
+  /** False until the address is confirmed via the mailed link. */
+  emailVerified: boolean;
+  createdOnUTC:  string;
+  updatedOnUTC:  string;
 }
 
 export interface UpdateLocationRequest {
   latitude:  number;
   longitude: number;
+}
+
+/** Everything GET /api/auth/me/export returns — GDPR Art. 20 portability. */
+export interface DataExportDTO {
+  profile: {
+    email:              string;
+    emailVerified:      boolean;
+    latitude:           number | null;
+    longitude:          number | null;
+    regionName:         string | null;
+    streetName:         string | null;
+    receivesAllAlerts:  boolean;
+    subscribedBusLines: string[];
+    createdOnUTC:       string;
+    updatedOnUTC:       string;
+  };
+  notificationPreferences: {category: string; isEnabled: boolean}[];
+  devices: {
+    platform:   string | null;
+    deviceName: string | null;
+    createdAt:  string;
+    lastSeenAt: string;
+  }[];
 }
 
 export interface RegisterTokenRequest {
@@ -138,9 +163,36 @@ export const authApi = {
   me: (authToken: string): Promise<UserDTO> =>
     request<UserDTO>('/api/auth/me', {method: 'GET'}, authToken),
 
+  /** Re-send the confirmation link. Always succeeds, even if already verified. */
+  resendVerification: (authToken: string): Promise<void> =>
+    request<void>('/api/auth/verify/resend', {method: 'POST'}, authToken),
+
+  /**
+   * Start a password reset. Deliberately returns 204 whether or not the address
+   * is registered, so the caller cannot use it to test for accounts — screens
+   * must show the same "check your inbox" message either way.
+   */
+  forgotPassword: (email: string): Promise<void> =>
+    request<void>('/api/auth/password/forgot',
+      {method: 'POST', body: JSON.stringify({email})}),
+
   updateLocation: (body: UpdateLocationRequest, authToken: string): Promise<void> =>
     request<void>('/api/auth/location',
       {method: 'PUT', body: JSON.stringify(body)}, authToken),
+
+  // ── GDPR (PLAN.MD §1.10 / §2.3) ────────────────────────────────────────────
+
+  /** Art. 17 erasure. Cascades to device tokens and preferences server-side. */
+  deleteAccount: (authToken: string): Promise<void> =>
+    request<void>('/api/auth/me', {method: 'DELETE'}, authToken),
+
+  /** Art. 20 portability: every stored personal datum as JSON. */
+  exportData: (authToken: string): Promise<DataExportDTO> =>
+    request<DataExportDTO>('/api/auth/me/export', {method: 'GET'}, authToken),
+
+  /** Withdraw location consent: clears lat/lng + region/street. */
+  clearLocation: (authToken: string): Promise<void> =>
+    request<void>('/api/auth/location', {method: 'DELETE'}, authToken),
 };
 
 // ── Device tokens ─────────────────────────────────────────────────────────────

@@ -13,6 +13,8 @@ export interface UserRow {
   street_id: number | null;
   receives_all_alerts: number;
   subscribed_bus_lines: string;
+  /** NULL until the address is confirmed via a mailed link (migration 0006). */
+  email_verified_at: string | null;
   created_on_utc: string;
   updated_on_utc: string;
 }
@@ -86,6 +88,29 @@ export async function clearUserLocation(env: Env, userId: string) {
     `UPDATE users SET latitude = NULL, longitude = NULL, region_id = NULL, street_id = NULL,
      updated_on_utc = ? WHERE user_id = ?`,
   ).bind(nowIso(), userId).run();
+}
+
+/** Confirmed control of the address (migration 0006). Idempotent. */
+export async function markEmailVerified(env: Env, userId: string) {
+  const now = nowIso();
+  await env.DB.prepare(
+    `UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?), updated_on_utc = ?
+     WHERE user_id = ?`,
+  ).bind(now, now, userId).run();
+}
+
+/**
+ * Set a new password hash.
+ *
+ * Existing JWTs stay valid — they carry no version we could bump, and checking
+ * one would cost a DB read on every authenticated request. The exposure is
+ * bounded by JWT_EXPIRE_MINUTES (60), which is the tradeoff PLAN.MD §1.4 already
+ * accepted for logout.
+ */
+export async function updateUserPassword(env: Env, userId: string, passwordHash: string) {
+  await env.DB.prepare(
+    "UPDATE users SET password_hash = ?, updated_on_utc = ? WHERE user_id = ?",
+  ).bind(passwordHash, nowIso(), userId).run();
 }
 
 export async function getDeviceTokenMetadata(env: Env, userId: string) {

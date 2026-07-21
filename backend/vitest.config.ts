@@ -33,6 +33,8 @@ export default defineWorkersProject(async () => {
               RL_REGISTER_IP: { simple: { limit: 5, period: 60 } },
               RL_GEOCODE_USER: { simple: { limit: 5, period: 60 } },
               RL_API_IP: { simple: { limit: 120, period: 60 } },
+              RL_EMAIL_IP: { simple: { limit: 5, period: 60 } },
+              RL_EMAIL_ADDR: { simple: { limit: 2, period: 60 } },
             },
             bindings: {
               TEST_MIGRATIONS: migrations,

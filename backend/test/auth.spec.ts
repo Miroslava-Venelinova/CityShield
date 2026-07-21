@@ -135,6 +135,7 @@ describe("GET /api/auth/me", () => {
       hasLocation: false,
       regionName: null,
       streetName: null,
+      emailVerified: false,
       createdOnUTC: dto.createdOnUTC,
       updatedOnUTC: dto.updatedOnUTC,
     });

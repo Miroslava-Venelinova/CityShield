@@ -150,16 +150,40 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
       raw push tokens deliberately excluded), `DELETE /api/auth/location` (consent
       withdrawal) — tested + live-smoked
 - [x] `/privacy` — bilingual (BG/EN) policy page served by the Worker covering the §2.5
-      checklist; **operator must review the controller-identity/contact wording**
-      (currently cityshield.varna@gmail.com) before the Play Store release
+      checklist; controller contact confirmed as cityshield.varna@gmail.com
+      (2026-07-21) — revisit only if a dedicated domain address is set up
 - [x] Retention jobs in the daily cron: tokens 60 d, alerts 90 d, geocode cache 180 d
 - [x] CI rewrite: `worker` job (typecheck + vitest + dry-run deploy) replaces the
       pytest/dotnet jobs; `app` job kept; `deploy` job on main gated on the
       `CLOUDFLARE_API_TOKEN` repo secret
-- [ ] Frontend: "Delete account" screen (Play Store requirement) + "clear location"
-      action + link to `/privacy` + `CITYSHIELD_API_URL` for release builds
-- [ ] Paperwork (§2.2): download Cloudflare DPA copy, accept Google DPT in Firebase
-      console, Play Data Safety form
+- [x] Frontend: Profile → "Privacy & Data" section — delete account (two-step confirm,
+      Play Store requirement), export data (share sheet), clear location, `/privacy`
+      link; Nominatim consent copy in the location-picker modal;
+      `CITYSHIELD_API_URL` enforced at bundle time by config.ts
+- [x] Written record in [COMPLIANCE.md](COMPLIANCE.md): Play Data Safety answers,
+      DPIA + DPO "not required" reasoning (§2.5), Art. 33/34 breach runbook
+- [ ] Paperwork (§2.2), operator actions: download Cloudflare DPA copy, accept Google
+      DPT in Firebase console, submit the Play Data Safety form per COMPLIANCE.md §1
+
+## Phase 4b — email verification & password reset (beyond PLAN.MD; added 2026-07-21)
+
+- [x] Migration 0006: `users.email_verified_at` + `auth_tokens` (hashed, single-use,
+      purpose-scoped, cascading with the user)
+- [x] Worker: verification link on signup + `POST /api/auth/verify/resend`,
+      `GET /api/auth/verify`; `POST /api/auth/password/forgot` (always 204, no
+      enumeration) + `GET|POST /api/auth/password/reset` (browser form, redeems on POST);
+      `emailVerified` in `/me` and the GDPR export; expired tokens swept by the daily cron
+- [x] Bilingual message composition + `RL_EMAIL_IP` 5/min, `RL_EMAIL_ADDR` 2/min
+- [x] App: "Forgot your password?" on the login screen, unverified badge + resend row
+      in Profile
+- [ ] **Delivery is MOCKED** — `src/core/mailer.ts` logs each link instead of sending it,
+      so no user can receive one. Everything else in this phase works end-to-end
+- [ ] **Decision parked: mail provider, which follows from "do we register a domain?"**
+      A gmail.com sender fails DMARC alignment through any provider and lands in spam.
+      With a domain → Resend; without → Brevo from a validated single address. See
+      [SETUP.md](SETUP.md) §5. No processor is engaged and none is listed in `/privacy`
+      until this is settled — COMPLIANCE.md §5 lists what to update when it is
+- [ ] Enforcement stays soft (login works unverified). Revisit only if signup spam appears
 
 ## Deploy & remote provisioning (blocks the Phase 3 milestone and Phase 5)
 

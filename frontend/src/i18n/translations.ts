@@ -52,6 +52,16 @@ const en = {
   'login.errRequired': 'Please enter both email and password.',
   'login.failedTitle': 'Login Failed',
   'login.failedMsg': 'Invalid credentials.',
+  'login.forgotLink': 'Forgot your password?',
+  'login.forgotTitle': 'Reset password',
+  'login.forgotNeedEmail': 'Enter your email address first, then tap again.',
+  'login.forgotConfirm': 'Send a password reset link to {email}?',
+  'login.forgotSend': 'Send link',
+  'login.forgotSentTitle': 'Check your inbox',
+  // Deliberately says nothing about whether the address is registered.
+  'login.forgotSentMsg':
+    'If an account exists for that address, a reset link is on its way. It is ' +
+    'valid for one hour — check your spam folder if you do not see it.',
 
   // ── Register screen ──
   'register.headerTitle': 'Create Account',
@@ -76,7 +86,9 @@ const en = {
   'register.errTooShort': 'Password must be at least 8 characters.',
   'register.createdTitle': 'Account created',
   'register.createdMsg':
-    'Sign in and then set your location to start receiving alerts.',
+    'We sent a confirmation link to your email — open it so you can reset your ' +
+    'password later if you need to. Sign in and set your location to start ' +
+    'receiving alerts.',
   'register.failedTitle': 'Registration Failed',
   'register.failedMsg': 'Something went wrong.',
 
@@ -220,6 +232,59 @@ const en = {
   'profile.modalPin': 'Pin',
   'profile.modalNoPin': 'No pin placed yet — tap the map',
   'profile.modalConfirm': 'Set Location',
+  // Consent copy for the one third-country-ish transfer we make (PLAN.MD §2.2):
+  // the coordinates leave for OSMF's Nominatim, so say so before the user taps.
+  'profile.modalConsent':
+    'By confirming, you consent to your coordinates being sent to ' +
+    'OpenStreetMap’s Nominatim service to determine your district and street. ' +
+    'The request carries no account identifier. Your location is stored only ' +
+    'to match alerts to your area, and you can clear it at any time.',
+  'profile.modalConsentLink': 'OpenStreetMap privacy policy',
+
+  // ── Privacy & data (GDPR, PLAN.MD §1.10) ──
+  'profile.sectionPrivacy': 'Privacy & Data',
+
+  'profile.privacyPolicy': 'Privacy Policy',
+  'profile.privacyPolicySub': 'What we store, why, and your rights',
+  'profile.privacyPolicyFailed': 'Could not open the privacy policy.',
+
+  'profile.exportData': 'Export My Data',
+  'profile.exportDataSub': 'Download everything we store about you (JSON)',
+  'profile.exportTitle': 'CityShield data export',
+  'profile.exportFailed': 'Export Failed',
+
+  'profile.clearLocation': 'Clear My Location',
+  'profile.clearLocationSub': 'Withdraw location consent and stop local alerts',
+  'profile.clearLocationConfirm':
+    'Your coordinates, district and street will be deleted. You will keep ' +
+    'receiving city-wide alerts only.',
+  'profile.clearLocationDone': 'Location cleared',
+  'profile.clearLocationDoneMsg': 'Your stored location has been deleted.',
+  'profile.clearLocationFailed': 'Could not clear location',
+
+  'profile.deleteAccount': 'Delete My Account',
+  'profile.deleteAccountSub': 'Permanently erase your account and all data',
+  'profile.deleteConfirm1':
+    'This deletes your account, location, notification settings and devices. ' +
+    'It cannot be undone.',
+  'profile.deleteConfirm2Title': 'Delete permanently?',
+  'profile.deleteConfirm2':
+    'Last chance — your data will be erased immediately.',
+  'profile.deleteContinue': 'Continue',
+  'profile.deleteConfirmBtn': 'Delete',
+  'profile.deleteDone': 'Account deleted',
+  'profile.deleteDoneMsg': 'Your account and all associated data are gone.',
+  'profile.deleteFailed': 'Could not delete account',
+
+  // ── Email verification ──
+  'profile.emailStatus': 'Email status',
+  'profile.emailVerified': 'Confirmed',
+  'profile.verifyPending': 'Confirm Your Email',
+  'profile.verifyPendingSub': 'Tap to send the confirmation link again',
+  'profile.verifySentTitle': 'Check your inbox',
+  'profile.verifySentMsg':
+    'If your address still needs confirming, a link is on its way. It is valid ' +
+    'for 24 hours — check your spam folder if you do not see it.',
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -272,6 +337,15 @@ const bg: Record<TranslationKey, string> = {
   'login.errRequired': 'Моля, въведете имейл и парола.',
   'login.failedTitle': 'Неуспешен вход',
   'login.failedMsg': 'Невалидни данни за вход.',
+  'login.forgotLink': 'Забравена парола?',
+  'login.forgotTitle': 'Нова парола',
+  'login.forgotNeedEmail': 'Първо въведете имейл адреса си, след което докоснете отново.',
+  'login.forgotConfirm': 'Да изпратим ли връзка за нова парола до {email}?',
+  'login.forgotSend': 'Изпрати връзка',
+  'login.forgotSentTitle': 'Проверете пощата си',
+  'login.forgotSentMsg':
+    'Ако има профил с този адрес, изпратихме връзка за нова парола. Валидна е ' +
+    'един час — проверете и папката със спам, ако не я виждате.',
 
   // ── Екран за регистрация ──
   'register.headerTitle': 'Създаване на акаунт',
@@ -296,7 +370,9 @@ const bg: Record<TranslationKey, string> = {
   'register.errTooShort': 'Паролата трябва да е поне 8 символа.',
   'register.createdTitle': 'Акаунтът е създаден',
   'register.createdMsg':
-    'Влезте и след това задайте локацията си, за да получавате сигнали.',
+    'Изпратихме връзка за потвърждение на имейла ви — отворете я, за да можете ' +
+    'по-късно да възстановите паролата си. Влезте и задайте локацията си, за да ' +
+    'получавате сигнали.',
   'register.failedTitle': 'Неуспешна регистрация',
   'register.failedMsg': 'Нещо се обърка.',
 
@@ -444,6 +520,57 @@ const bg: Record<TranslationKey, string> = {
   'profile.modalPin': 'Карфица',
   'profile.modalNoPin': 'Все още няма карфица — докоснете картата',
   'profile.modalConfirm': 'Задай локация',
+  'profile.modalConsent':
+    'С потвърждаването се съгласявате координатите ви да бъдат изпратени до ' +
+    'услугата Nominatim на OpenStreetMap, за да се определят районът и улицата ви. ' +
+    'Заявката не съдържа идентификатор на профила ви. Локацията се съхранява само ' +
+    'за да получавате сигнали за вашия район и можете да я изтриете по всяко време.',
+  'profile.modalConsentLink': 'Политика за поверителност на OpenStreetMap',
+
+  // ── Поверителност и данни (GDPR) ──
+  'profile.sectionPrivacy': 'Поверителност и данни',
+
+  'profile.privacyPolicy': 'Политика за поверителност',
+  'profile.privacyPolicySub': 'Какво съхраняваме, защо и какви са правата ви',
+  'profile.privacyPolicyFailed': 'Политиката за поверителност не можа да се отвори.',
+
+  'profile.exportData': 'Експорт на моите данни',
+  'profile.exportDataSub': 'Изтеглете всичко, което съхраняваме за вас (JSON)',
+  'profile.exportTitle': 'Експорт на данни от CityShield',
+  'profile.exportFailed': 'Неуспешен експорт',
+
+  'profile.clearLocation': 'Изтриване на локацията',
+  'profile.clearLocationSub': 'Оттегляне на съгласието и спиране на местните сигнали',
+  'profile.clearLocationConfirm':
+    'Координатите, районът и улицата ви ще бъдат изтрити. Ще продължите да ' +
+    'получавате само сигнали за целия град.',
+  'profile.clearLocationDone': 'Локацията е изтрита',
+  'profile.clearLocationDoneMsg': 'Съхранената ви локация беше изтрита.',
+  'profile.clearLocationFailed': 'Локацията не можа да бъде изтрита',
+
+  'profile.deleteAccount': 'Изтриване на профила',
+  'profile.deleteAccountSub': 'Окончателно изтриване на профила и всички данни',
+  'profile.deleteConfirm1':
+    'Това изтрива профила, локацията, настройките за известия и устройствата ви. ' +
+    'Действието е необратимо.',
+  'profile.deleteConfirm2Title': 'Окончателно изтриване?',
+  'profile.deleteConfirm2':
+    'Последна възможност — данните ви ще бъдат изтрити незабавно.',
+  'profile.deleteContinue': 'Продължи',
+  'profile.deleteConfirmBtn': 'Изтрий',
+  'profile.deleteDone': 'Профилът е изтрит',
+  'profile.deleteDoneMsg': 'Профилът ви и всички свързани данни са премахнати.',
+  'profile.deleteFailed': 'Профилът не можа да бъде изтрит',
+
+  // ── Потвърждаване на имейл ──
+  'profile.emailStatus': 'Състояние на имейла',
+  'profile.emailVerified': 'Потвърден',
+  'profile.verifyPending': 'Потвърдете имейла си',
+  'profile.verifyPendingSub': 'Докоснете, за да изпратим връзката отново',
+  'profile.verifySentTitle': 'Проверете пощата си',
+  'profile.verifySentMsg':
+    'Ако адресът ви все още не е потвърден, изпратихме връзка. Валидна е 24 часа — ' +
+    'проверете и папката със спам, ако не я виждате.',
 };
 
 export const translations = {en, bg};

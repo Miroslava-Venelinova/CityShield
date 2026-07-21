@@ -30,11 +30,30 @@ a real account is genuinely required, but the free plan is enough for everything
   template, scoped to your account.
 - Add it to the GitHub repo as secret `CLOUDFLARE_API_TOKEN`.
 
-## 4. Phase 4 (privacy policy) — two decisions from you
+## 4. Phase 4 (privacy policy) — decided
 
-- **Controller identity + contact email** to publish in the privacy policy (GDPR requires a real
-  contact; a dedicated address like privacy@… or a personal one — your call).
-- Confirm the policy languages (plan says Bulgarian + English).
+- Controller contact published in the policy: **cityshield.varna@gmail.com** (confirmed 2026-07-21).
+- Policy languages: Bulgarian + English, both served at `/privacy`.
+
+## 5. Email verification & password reset — decision parked
+
+Both flows are built and tested, but **delivery is mocked**: the Worker composes each
+message and logs its link instead of sending it (`backend/src/core/mailer.ts`). Nobody
+can receive a verification or reset link until a provider is wired up.
+
+Parked because the provider choice follows a prior decision — whether to register a
+domain:
+
+- Sending as `cityshield.varna@gmail.com` through any third party fails SPF/DKIM
+  alignment (gmail.com does not authorize them), so those links land in spam often
+  enough to matter for a password reset. A domain is the only real fix.
+- **With a domain** (~$10/yr at Cloudflare Registrar, which would also give the API and
+  the Play listing a real URL): Resend is the better fit — transactional-only, no
+  free-tier branding.
+- **Without one**: Brevo can send from a validated single address, accepting the spam
+  risk and its free-tier branding.
+
+Nothing is needed from you until that call is made.
 
 ## Not needed from you
 

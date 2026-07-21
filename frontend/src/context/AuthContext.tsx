@@ -6,11 +6,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {authApi, tokensApi} from '../services/api';
 
 interface AuthContextType {
-  token:       string | null;
-  hasLocation: boolean | null;   // null = not yet loaded
-  regionName:  string | null;
-  streetName:  string | null;
-  isLoading:   boolean;
+  token:         string | null;
+  hasLocation:   boolean | null;   // null = not yet loaded
+  regionName:    string | null;
+  streetName:    string | null;
+  emailVerified: boolean | null;   // null = not yet loaded
+  isLoading:     boolean;
   login:       (token: string) => Promise<void>;
   logout:      (fcmToken?: string) => Promise<void>;
   setHasLocation: (value: boolean) => void;
@@ -22,6 +23,7 @@ const AuthContext = createContext<AuthContextType>({
   hasLocation:    null,
   regionName:     null,
   streetName:     null,
+  emailVerified:  null,
   isLoading:      true,
   login:          async () => {},
   logout:         async () => {},
@@ -34,6 +36,7 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
   const [hasLocation, setHasLocation] = useState<boolean | null>(null);
   const [regionName,  setRegionName]  = useState<string | null>(null);
   const [streetName,  setStreetName]  = useState<string | null>(null);
+  const [emailVerified, setEmailVerified] = useState<boolean | null>(null);
   const [isLoading,   setIsLoading]   = useState(true);
 
   useEffect(() => {
@@ -59,10 +62,14 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
       setHasLocation(user.hasLocation);
       setRegionName(user.regionName);
       setStreetName(user.streetName);
+      setEmailVerified(user.emailVerified);
     } catch {
       setHasLocation(false);
       setRegionName(null);
       setStreetName(null);
+      // Unknown, not unverified — a failed profile fetch must not make the app
+      // nag a user whose address is fine.
+      setEmailVerified(null);
     }
   }
 
@@ -82,6 +89,7 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
     setHasLocation(null);
     setRegionName(null);
     setStreetName(null);
+    setEmailVerified(null);
   };
 
   const refreshProfile = useCallback(async () => {
@@ -90,7 +98,7 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
 
   return (
     <AuthContext.Provider value={{
-      token, hasLocation, regionName, streetName, isLoading,
+      token, hasLocation, regionName, streetName, emailVerified, isLoading,
       login, logout, setHasLocation, refreshProfile,
     }}>
       {children}

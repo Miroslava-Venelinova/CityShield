@@ -67,6 +67,10 @@ export async function runDailyCleanup(env: Env): Promise<void> {
     { label: "stale token(s)", sql: "DELETE FROM device_tokens WHERE last_seen_at < ?", cutoffDays: 60 },
     { label: "old alert(s)", sql: "DELETE FROM alerts WHERE created_on_utc < ?", cutoffDays: 90 },
     { label: "geocode cache row(s)", sql: "DELETE FROM geocode_cache WHERE resolved_at < ?", cutoffDays: 180 },
+    // Verification/reset links (migration 0006). They stop working at
+    // expires_at; the row is kept a day longer only so an "already used" click
+    // still lands on a sensible page rather than looking unknown.
+    { label: "expired auth token(s)", sql: "DELETE FROM auth_tokens WHERE expires_at < ?", cutoffDays: 1 },
   ];
 
   for (const job of jobs) {

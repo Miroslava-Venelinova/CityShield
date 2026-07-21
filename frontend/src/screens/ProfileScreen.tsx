@@ -3,12 +3,13 @@ import React, {useState, useEffect} from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   StatusBar, Alert, Switch, Platform, PermissionsAndroid,
-  ActivityIndicator, Modal,
+  ActivityIndicator, Modal, Linking, Share,
 } from 'react-native';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
 import {TranslationKey} from '../i18n/translations';
 import {tokensApi, authApi} from '../services/api';
+import {API_BASE_URL} from '../config';
 import {errorMessageKey} from '../services/errors';
 import {getFCMToken, registerTokenRefreshHandler} from '../services/fcm';
 import {colors, spacing, radius, font} from '../theme';
@@ -19,6 +20,11 @@ import LocationPickerMap from '../components/LocationPickerMap';
 //   npm install react-native-geolocation-service
 //   Then import Geolocation from 'react-native-geolocation-service'
 //   and add ACCESS_FINE_LOCATION to AndroidManifest.xml
+
+// The policy is served by the Worker itself (PLAN.MD §1.10), so it always
+// matches the API the app is pointed at — dev, staging or production.
+const PRIVACY_POLICY_URL = `${API_BASE_URL}/privacy`;
+const OSM_PRIVACY_URL = 'https://osmfoundation.org/wiki/Privacy_Policy';
 
 // ── JWT decode ────────────────────────────────────────────────────────────────
 const EMAIL_CLAIM =
@@ -67,7 +73,8 @@ async function requestNotificationPermission(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
-  const {token, hasLocation, regionName, streetName, setHasLocation, logout, refreshProfile} = useAuth();
+  const {token, hasLocation, regionName, streetName, emailVerified,
+         setHasLocation, logout, refreshProfile} = useAuth();
   const {language, setLanguage, t} = useI18n();
 
   const [alertsEnabled,    setAlertsEnabled]    = useState(false);
@@ -78,6 +85,11 @@ export default function ProfileScreen() {
   const [coordModalVisible, setCoordModalVisible] = useState(false);
   const [pickedCoords, setPickedCoords] =
     useState<{lat: number; lon: number} | null>(null);
+  // One flag for the whole privacy section: export, clear-location and delete
+  // all hit the same account and must not run concurrently.
+  const [privacyBusy, setPrivacyBusy] = useState<
+    'export' | 'clear' | 'delete' | null>(null);
+  const [resendBusy, setResendBusy] = useState(false);
 
   const payload = token ? decodeJwt(token) : {};
   const email   = payload[EMAIL_CLAIM] ?? payload['email'] ?? 'Unknown';
@@ -101,6 +113,8 @@ export default function ProfileScreen() {
         setAlertsEnabled(granted);
       }
       await refreshFcmToken();
+      // Picks up a verification that happened in the browser since last load.
+      await refreshProfile();
     })();
 
     const unsubRefresh = registerTokenRefreshHandler(async newToken => {
@@ -164,6 +178,110 @@ export default function ProfileScreen() {
       {text: t('common.cancel'), style: 'cancel'},
       {text: t('profile.signOut'), style: 'destructive',
        onPress: () => logout(fcmToken ?? undefined)},
+    ]);
+  };
+
+  const handleResendVerification = async () => {
+    if (!token || resendBusy) return;
+    setResendBusy(true);
+    try {
+      await authApi.resendVerification(token);
+      Alert.alert(t('profile.verifySentTitle'), t('profile.verifySentMsg'));
+    } catch (err: unknown) {
+      Alert.alert(t('common.error'), t(errorMessageKey(err)));
+    } finally {
+      setResendBusy(false);
+    }
+  };
+
+  // ── GDPR actions (PLAN.MD §1.10 / §2.3) ───────────────────────────────────
+
+  const handleOpenPrivacyPolicy = async () => {
+    try {
+      await Linking.openURL(PRIVACY_POLICY_URL);
+    } catch {
+      Alert.alert(t('common.error'), t('profile.privacyPolicyFailed'));
+    }
+  };
+
+  // Art. 20 portability. The export is small (one profile + a handful of
+  // preferences and devices), so handing it to the share sheet as text lets
+  // the user route it anywhere without a filesystem dependency.
+  const handleExportData = async () => {
+    if (!token || privacyBusy) return;
+    setPrivacyBusy('export');
+    try {
+      const data = await authApi.exportData(token);
+      await Share.share({
+        title: t('profile.exportTitle'),
+        message: JSON.stringify(data, null, 2),
+      });
+    } catch (err: unknown) {
+      Alert.alert(t('profile.exportFailed'), t(errorMessageKey(err)));
+    } finally {
+      setPrivacyBusy(null);
+    }
+  };
+
+  // Withdrawing location consent (Art. 7(3)) must be as easy as giving it,
+  // hence a single confirm rather than the two-step the deletion flow uses.
+  const handleClearLocation = () => {
+    Alert.alert(t('profile.clearLocation'), t('profile.clearLocationConfirm'), [
+      {text: t('common.cancel'), style: 'cancel'},
+      {
+        text: t('profile.clearLocation'),
+        style: 'destructive',
+        onPress: async () => {
+          if (!token) return;
+          setPrivacyBusy('clear');
+          try {
+            await authApi.clearLocation(token);
+            setHasLocation(false);
+            await refreshProfile();
+            Alert.alert(t('profile.clearLocationDone'),
+              t('profile.clearLocationDoneMsg'));
+          } catch (err: unknown) {
+            Alert.alert(t('profile.clearLocationFailed'), t(errorMessageKey(err)));
+          } finally {
+            setPrivacyBusy(null);
+          }
+        },
+      },
+    ]);
+  };
+
+  // Art. 17 erasure — also a Google Play requirement for accounts created
+  // in-app. Two confirmations because it is immediate and irreversible.
+  const handleDeleteAccount = () => {
+    Alert.alert(t('profile.deleteAccount'), t('profile.deleteConfirm1'), [
+      {text: t('common.cancel'), style: 'cancel'},
+      {
+        text: t('profile.deleteContinue'),
+        style: 'destructive',
+        onPress: () =>
+          Alert.alert(t('profile.deleteConfirm2Title'), t('profile.deleteConfirm2'), [
+            {text: t('common.cancel'), style: 'cancel'},
+            {
+              text: t('profile.deleteConfirmBtn'),
+              style: 'destructive',
+              onPress: async () => {
+                if (!token) return;
+                setPrivacyBusy('delete');
+                try {
+                  await authApi.deleteAccount(token);
+                  Alert.alert(t('profile.deleteDone'), t('profile.deleteDoneMsg'));
+                  // The account is gone, so the token can no longer unregister
+                  // this device — logout() without one just clears local state.
+                  await logout();
+                } catch (err: unknown) {
+                  Alert.alert(t('profile.deleteFailed'), t(errorMessageKey(err)));
+                } finally {
+                  setPrivacyBusy(null);
+                }
+              },
+            },
+          ]),
+      },
     ]);
   };
 
@@ -355,9 +473,79 @@ export default function ProfileScreen() {
         <Section title={t('profile.sectionAbout')}>
           <Row icon="mail" label={t('profile.email')} value={email} />
           <Divider />
+          {/* `null` means the profile fetch failed — say nothing rather than
+              accusing a verified address of being unverified. */}
+          {emailVerified === false ? (
+            <>
+              <ActionRow
+                icon="check"
+                label={t('profile.verifyPending')}
+                sub={t('profile.verifyPendingSub')}
+                loading={resendBusy}
+                disabled={resendBusy}
+                onPress={handleResendVerification}
+              />
+              <Divider />
+            </>
+          ) : emailVerified === true ? (
+            <>
+              <View style={styles.infoRow}>
+                <RowIcon name="check" />
+                <View style={styles.infoTextGroup}>
+                  <Text style={styles.infoLabel}>{t('profile.emailStatus')}</Text>
+                  <Text style={[styles.infoValue, {color: colors.success}]}>
+                    {t('profile.emailVerified')}
+                  </Text>
+                </View>
+              </View>
+              <Divider />
+            </>
+          ) : null}
           <Row icon="shield" label="CityShield" value="v1.0.0" />
           <Divider />
           <Row icon="map" label={t('profile.mapData')} value="© OpenStreetMap" />
+        </Section>
+
+        {/* ── Privacy & data (GDPR, §1.10) ── */}
+        <Section title={t('profile.sectionPrivacy')}>
+          <ActionRow
+            icon="shield"
+            label={t('profile.privacyPolicy')}
+            sub={t('profile.privacyPolicySub')}
+            onPress={handleOpenPrivacyPolicy}
+          />
+          <Divider />
+          <ActionRow
+            icon="inbox"
+            label={t('profile.exportData')}
+            sub={t('profile.exportDataSub')}
+            loading={privacyBusy === 'export'}
+            disabled={privacyBusy !== null}
+            onPress={handleExportData}
+          />
+          {hasLocation && (
+            <>
+              <Divider />
+              <ActionRow
+                icon="map-pin"
+                label={t('profile.clearLocation')}
+                sub={t('profile.clearLocationSub')}
+                loading={privacyBusy === 'clear'}
+                disabled={privacyBusy !== null}
+                onPress={handleClearLocation}
+              />
+            </>
+          )}
+          <Divider />
+          <ActionRow
+            icon="trash"
+            label={t('profile.deleteAccount')}
+            sub={t('profile.deleteAccountSub')}
+            loading={privacyBusy === 'delete'}
+            disabled={privacyBusy !== null}
+            danger
+            onPress={handleDeleteAccount}
+          />
         </Section>
 
         {/* ── Logout ── */}
@@ -400,6 +588,18 @@ export default function ProfileScreen() {
                 : t('profile.modalNoPin')}
             </Text>
 
+            {/* Location is collected on consent (§2.1), and the coordinates
+                leave for OSMF's Nominatim — both are disclosed here, before
+                the user can confirm. */}
+            <Text style={styles.consentText}>
+              {t('profile.modalConsent')}{' '}
+              <Text
+                style={styles.consentLink}
+                onPress={() => Linking.openURL(OSM_PRIVACY_URL).catch(() => {})}>
+                {t('profile.modalConsentLink')}
+              </Text>
+            </Text>
+
             <View style={styles.modalBtns}>
               <TouchableOpacity
                 style={styles.modalCancelBtn}
@@ -439,6 +639,32 @@ function LanguageRow({label, selected, onPress}: {
       <RowIcon name="globe" />
       <Text style={row.label}>{label}</Text>
       {selected && <Icon name="check" size={18} color={colors.primary} />}
+    </TouchableOpacity>
+  );
+}
+
+/** Tappable row with a subtitle and a trailing chevron / spinner. */
+function ActionRow({icon, label, sub, onPress, loading = false, disabled = false, danger = false}: {
+  icon: IconName; label: string; sub: string; onPress: () => void;
+  loading?: boolean; disabled?: boolean; danger?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.actionRow, disabled && !loading && {opacity: 0.5}]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}>
+      <View style={row.iconWrap}>
+        <Icon name={icon} size={17}
+          color={danger ? colors.danger : colors.textSecondary} />
+      </View>
+      <View style={styles.actionText}>
+        <Text style={[styles.actionLabel, danger && {color: colors.danger}]}>{label}</Text>
+        <Text style={styles.actionSub}>{sub}</Text>
+      </View>
+      {loading
+        ? <ActivityIndicator size="small" color={colors.primaryLight} />
+        : <Icon name="chevron-right" size={18} color={colors.textMuted} />}
     </TouchableOpacity>
   );
 }
@@ -543,8 +769,12 @@ const styles = StyleSheet.create({
   modalTitleRow: {flexDirection: 'row', alignItems: 'center', gap: spacing.sm},
   modalTitle:    {color: colors.textPrimary, fontSize: font.sizes.xl, fontWeight: font.weights.bold},
   modalSub:      {color: colors.textSecondary, fontSize: font.sizes.sm, lineHeight: font.lineHeights.sm},
-  mapWrap:       {height: 320, borderRadius: radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: colors.border},
+  // 260 rather than 320: the consent block below it has to fit on small
+  // phones without the card scrolling (the map swallows nested scrolls).
+  mapWrap:       {height: 260, borderRadius: radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: colors.border},
   map:           {flex: 1},
+  consentText:   {color: colors.textMuted, fontSize: font.sizes.xs, lineHeight: font.lineHeights.sm},
+  consentLink:   {color: colors.primary, textDecorationLine: 'underline'},
   coordHint:     {backgroundColor: `${colors.primary}15`, borderRadius: radius.md, padding: spacing.sm, color: colors.textMuted, fontSize: font.sizes.xs, borderLeftWidth: 3, borderLeftColor: colors.primary},
   modalBtns:     {flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs},
   modalCancelBtn:{flex: 1, height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center'},

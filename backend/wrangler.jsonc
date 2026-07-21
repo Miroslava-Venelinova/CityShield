@@ -34,7 +34,13 @@
     { "name": "RL_GEOCODE_USER", "namespace_id": "1004", "simple": { "limit": 5, "period": 60 } },
     // Blanket backstop so no authenticated route can be used to burn the
     // 100k req/day free-plan budget.
-    { "name": "RL_API_IP", "namespace_id": "1005", "simple": { "limit": 120, "period": 60 } }
+    { "name": "RL_API_IP", "namespace_id": "1005", "simple": { "limit": 120, "period": 60 } },
+    // Mail-sending routes (/password/forgot, /verify/resend). Two keys again:
+    // per-IP stops one host mailbombing many addresses, per-address stops many
+    // hosts mailbombing one. Tight, because every allowed call sends real mail
+    // against a 300/day provider quota.
+    { "name": "RL_EMAIL_IP", "namespace_id": "1006", "simple": { "limit": 5, "period": 60 } },
+    { "name": "RL_EMAIL_ADDR", "namespace_id": "1007", "simple": { "limit": 2, "period": 60 } }
   ],
   "vars": {
     // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes
@@ -54,4 +60,5 @@
     "JWT_EXPIRE_MINUTES": "60"
   }
   // Secrets (wrangler secret put / .dev.vars): JWT_KEY, INGEST_API_KEY, FCM_SERVICE_ACCOUNT
+  // Mail delivery is mocked for now (src/core/mailer.ts) — no provider config here yet.
 }

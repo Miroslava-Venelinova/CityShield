@@ -33,6 +33,7 @@ export default function LoginScreen({navigation}: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = async () => {
@@ -50,6 +51,38 @@ export default function LoginScreen({navigation}: Props) {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Reuses whatever is already typed in the email field — asking for it twice
+  // on a screen that has the box right there would be busywork.
+  const handleForgotPassword = () => {
+    const address = email.trim();
+    if (!address) {
+      Alert.alert(t('login.forgotTitle'), t('login.forgotNeedEmail'));
+      return;
+    }
+    Alert.alert(t('login.forgotTitle'), t('login.forgotConfirm').replace('{email}', address), [
+      {text: t('common.cancel'), style: 'cancel'},
+      {
+        text: t('login.forgotSend'),
+        onPress: async () => {
+          setResetting(true);
+          try {
+            await authApi.forgotPassword(address);
+          } catch (err: unknown) {
+            // Only transport/limiter failures can land here — the endpoint
+            // answers 204 even for addresses that do not exist.
+            Alert.alert(t('common.error'), t(errorMessageKey(err)));
+            return;
+          } finally {
+            setResetting(false);
+          }
+          // Same wording regardless of whether an account existed, so this
+          // screen cannot be used to find out which addresses are registered.
+          Alert.alert(t('login.forgotSentTitle'), t('login.forgotSentMsg'));
+        },
+      },
+    ]);
   };
 
   return (
@@ -128,6 +161,17 @@ export default function LoginScreen({navigation}: Props) {
             ) : (
               <Text style={styles.primaryBtnText}>{t('login.signIn')}</Text>
             )}
+          </TouchableOpacity>
+
+          {/* Forgot password */}
+          <TouchableOpacity
+            style={styles.forgotBtn}
+            onPress={handleForgotPassword}
+            disabled={resetting}
+            activeOpacity={0.7}>
+            {resetting
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Text style={styles.forgotText}>{t('login.forgotLink')}</Text>}
           </TouchableOpacity>
 
           {/* Divider */}
@@ -249,6 +293,13 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: font.sizes.md,
     fontWeight: font.weights.semibold,
+  },
+
+  forgotBtn: {alignSelf: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.sm},
+  forgotText: {
+    color: colors.primary,
+    fontSize: font.sizes.sm,
+    fontWeight: font.weights.medium,
   },
 
   // Divider

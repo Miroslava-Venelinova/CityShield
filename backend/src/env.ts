@@ -10,6 +10,9 @@ export interface Env {
   RL_REGISTER_IP?: RateLimit;
   RL_GEOCODE_USER?: RateLimit;
   RL_API_IP?: RateLimit;
+  /** Mail-sending routes, keyed per IP and per address (see api/auth.ts). */
+  RL_EMAIL_IP?: RateLimit;
+  RL_EMAIL_ADDR?: RateLimit;
 
   // vars (wrangler.jsonc)
   AI_MODEL: string;
@@ -31,6 +34,8 @@ export interface Env {
   JWT_KEY: string;
   INGEST_API_KEY: string;
   FCM_SERVICE_ACCOUNT?: string;
+  // NOTE: mail delivery is mocked (core/mailer.ts) — no provider credentials
+  // yet, by decision. Whatever provider we settle on adds its key here.
 }
 
 /**
