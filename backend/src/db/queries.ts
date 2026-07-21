@@ -25,6 +25,9 @@ export interface UserWithNamesRow extends UserRow {
 export interface NamedRow {
   id: number;
   name: string;
+  /** Seeded centroid (migration 0005); NULL for names seeded without one. */
+  lat: number | null;
+  lng: number | null;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -127,11 +130,11 @@ function loadRef(env: Env, slot: RefSlot, sql: string): Promise<NamedRow[]> {
 }
 
 export function getRegions(env: Env): Promise<NamedRow[]> {
-  return loadRef(env, regionsRef, "SELECT id, region_name AS name FROM regions");
+  return loadRef(env, regionsRef, "SELECT id, region_name AS name, lat, lng FROM regions");
 }
 
 export function getStreets(env: Env): Promise<NamedRow[]> {
-  return loadRef(env, streetsRef, "SELECT id, street_name AS name FROM streets");
+  return loadRef(env, streetsRef, "SELECT id, street_name AS name, lat, lng FROM streets");
 }
 
 /** Test hook: drop the module-scope reference caches. */

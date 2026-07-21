@@ -377,6 +377,68 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
       .bind(id2).first<{ locations_json: string }>();
     expect(JSON.parse(row2!.locations_json)[0].lat).toBeCloseTo(43.2141);
   });
+
+  // Migration 0005 + tools/osm-seed-builder: a matched reference row that
+  // carries its own centroid must not reach Nominatim at all. No interceptor is
+  // registered in these tests, and fetchMock has net connect disabled, so any
+  // outbound call throws and the assertions below fail.
+  it("pins a seeded street centroid without calling Nominatim", async () => {
+    await env.DB.prepare("UPDATE streets SET lat = 43.1953, lng = 27.9021 WHERE street_name = 'Дубровник'").run();
+    clearRefCaches(); // the row was cached without coordinates by an earlier read
+
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "Аспарухово", sublocations: ["ул. Дубровник"], is_polygon: false }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.1953);
+    expect(loc.lng).toBeCloseTo(27.9021);
+
+    // Nothing was geocoded, so nothing was cached.
+    const cache = await env.DB.prepare("SELECT COUNT(*) AS n FROM geocode_cache").first<{ n: number }>();
+    expect(cache!.n).toBe(0);
+  });
+
+  it("falls back to the region centroid when no street is listed", async () => {
+    await env.DB.prepare("UPDATE regions SET lat = 43.1741, lng = 27.9147 WHERE region_name = 'Аспарухово'").run();
+    clearRefCaches();
+
+    const sub = await submit(basePayload({
+      processed_data: { locations: [{ location_name: "кв. Аспарухово", sublocations: [], is_polygon: false }] },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.1741);
+    expect(loc.lng).toBeCloseTo(27.9147);
+  });
+
+  it("still geocodes a street whose seeded row has no coordinates", async () => {
+    // The pre-0005 state: names are known, coordinates are not.
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(200, JSON.stringify([{ lat: "43.2000", lon: "27.9000" }]),
+        { headers: { "Content-Type": "application/json" } });
+
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "Аспарухово", sublocations: ["Розова долина"], is_polygon: false }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    expect(JSON.parse(row!.locations_json)[0].lat).toBeCloseTo(43.2);
+    fetchMock.assertNoPendingInterceptors();
+  });
 });
 
 describe("FCM send + stale-token cleanup", () => {

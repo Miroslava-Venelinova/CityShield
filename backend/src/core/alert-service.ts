@@ -4,7 +4,7 @@
 
 import * as q from "../db/queries";
 import { bestMatch, SIMILARITY_THRESHOLD } from "./fuzzy";
-import { buildGeocodeQuery, geocode } from "./geocoding";
+import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
 import { pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
 import { type PushNotification, sendPushToTokens } from "./fcm";
@@ -356,6 +356,19 @@ function stripLocationPrefix(name: string): string {
 }
 
 /**
+ * The seeded centroid for a matched reference row, when it has one.
+ *
+ * Reference rows carry coordinates since migration 0005, so a name we already
+ * recognize needs no network call at all — which keeps Nominatim's 1,100 ms
+ * throttle and 8 s timeout off the ingest deadline budget on the common path.
+ * A row seeded before the coordinates existed returns null and falls through
+ * to Nominatim exactly as before.
+ */
+function seededPoint(row: q.NamedRow | null): GeoPoint | null {
+  return row && row.lat !== null && row.lng !== null ? { lat: row.lat, lng: row.lng } : null;
+}
+
+/**
  * Geocoding strategy (ResolveCoordinatesAsync): canonicalize names against
  * our own DB first (trigram fuzzy match), then ask Nominatim. Street-level
  * pin when a street is listed, otherwise district/locality-level.
@@ -366,18 +379,22 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
   if (candidates.length > 0) {
     const streets = await q.getStreets(env); // hoisted: constant across the loop
     for (const raw of candidates) {
-      const street = bestMatch(raw, streets, (s) => s.name, SIMILARITY_THRESHOLD)?.name
-        ?? stripLocationPrefix(raw);
-      const point = await geocode(env, buildGeocodeQuery(street), deadline);
+      const match = bestMatch(raw, streets, (s) => s.name, SIMILARITY_THRESHOLD);
+      const seeded = seededPoint(match);
+      if (seeded) return seeded;
+
+      const point = await geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(raw)), deadline);
       if (point) return point;
     }
   }
 
   // 2. District / locality level
   if (dto.location_name.trim()) {
-    const region = bestMatch(dto.location_name, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD)?.name
-      ?? stripLocationPrefix(dto.location_name);
-    return geocode(env, buildGeocodeQuery(region), deadline);
+    const match = bestMatch(dto.location_name, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD);
+    const seeded = seededPoint(match);
+    if (seeded) return seeded;
+
+    return geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(dto.location_name)), deadline);
   }
 
   return null;
