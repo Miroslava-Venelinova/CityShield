@@ -3,6 +3,7 @@
   "name": "cityshield",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
+  "workers_dev": true,
   "observability": { "enabled": true },
   // Ingest tick + daily cleanup (§1.7 / §1.10).
   "triggers": { "crons": ["*/5 * * * *", "30 3 * * *"] },
@@ -10,9 +11,8 @@
     {
       "binding": "DB",
       "database_name": "cityshield-db",
-      // Placeholder until `npx wrangler d1 create cityshield-db --location=weur` (§3.3);
-      // local dev and tests don't need the real id.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // Created via `npx wrangler d1 create cityshield-db --location=weur` (§3.3).
+      "database_id": "328dbb32-8d9e-4475-a062-873af96c7390",
       "migrations_dir": "migrations"
     }
   ],
