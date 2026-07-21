@@ -71,6 +71,14 @@ STREET_HIGHWAYS = (
     "living_street|pedestrian|road"
 )
 
+# The classes the line above deliberately leaves out. Most named ways in these
+# classes are not addresses (parking aisles, forest tracks, "McDrive"), but a
+# minority are: whole residential streets in Варна are tagged `service`, and
+# alerts do name them. Offered as a separate extraction kind rather than folded
+# into the default, because it roughly triples the noise the matcher scores
+# against — extract it, then deselect by eye.
+MINOR_HIGHWAYS = "service|track|path|footway|steps|raceway"
+
 # Each kind is (label, default target table, Overpass statements). The
 # statements run against `.searchArea`, bound by the query template below.
 KINDS = {
@@ -78,6 +86,11 @@ KINDS = {
         "label": "Streets",
         "target": "streets",
         "statements": [f'way["highway"~"^({STREET_HIGHWAYS})$"]["name"](area.searchArea);'],
+    },
+    "streets_minor": {
+        "label": "Streets — minor classes only (service, track, path…)",
+        "target": "streets",
+        "statements": [f'way["highway"~"^({MINOR_HIGHWAYS})$"]["name"](area.searchArea);'],
     },
     "neighbourhoods": {
         "label": "Neighbourhoods / quarters",

@@ -31,7 +31,7 @@ browser. Standard library only — no `pip install`. Python 3.11+.
    shows each with its `admin_level`, so you can pick the province (4), the city
    (8) or a district (9). Area ids are never hardcoded; the presets in
    `presets.json` are just prefilled search terms.
-2. **Pick what to extract.** Streets, neighbourhoods/quarters, cities/towns/villages,
+2. **Pick what to extract.** Streets, minor street classes, neighbourhoods/quarters, cities/towns/villages,
    or administrative boundaries. The query is built live and shown greyed out.
    Tick *Edit the query by hand* to take it over — changing the country, area or
    kind afterwards regenerates it and discards your edits, with a warning, since
@@ -192,6 +192,27 @@ The UI carries this table too, under the area field.
 
 **Pick 4** to cover a whole province — the scope the current seed data was built
 at. **Pick 8** for a single city.
+
+## Which highway classes count as a street
+
+**Streets** covers `motorway`, `trunk`, `primary`, `secondary`, `tertiary`,
+`unclassified`, `residential`, `living_street`, `pedestrian`, `road` — what a
+person would give as an address.
+
+**Streets — minor classes only** covers what that leaves out: `service`,
+`track`, `path`, `footway`, `steps`, `raceway`. It is a separate kind rather
+than a checkbox because it is mostly noise (parking aisles, forest tracks,
+`McDrive`) and every extra name is something the fuzzy matcher scores against on
+every lookup — but it is *not* only noise. Of 134 names in the pre-OSM seed data
+that the default extraction misses, 115 are real Varna streets tagged in a minor
+class: `Акад. Игор Курчатов` and `Обръщач Почивка` are `service`, `Артемида` and
+`Гергина` are `track`, `алея Изток` is `footway`. Extract this kind, deselect
+by eye, and merge the survivors.
+
+Nothing in the pipeline drops a name for lacking coordinates — the merge stores
+`lat`/`lng` as `null` and the row still seeds. The one geometric drop is an
+element Overpass returns with no `center` at all, which did not happen once
+across the Варна province extract.
 
 ## The Cyrillic filter
 
