@@ -56,7 +56,7 @@ export async function runIngestion(env: Env): Promise<void> {
 }
 
 /**
- * Daily cron (30 3 * * *): §1.6 stale-token cleanup + §1.10 retention jobs.
+ * Daily cron (30 3 * * *): §1.10 retention jobs.
  *
  * Each job is independent, so one failure must not skip the rest — retention
  * deletions that silently stop running are how a 500 MB D1 fills up.
@@ -64,7 +64,6 @@ export async function runIngestion(env: Env): Promise<void> {
 export async function runDailyCleanup(env: Env): Promise<void> {
   const cutoff = (days: number) => new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
   const jobs: Array<{ label: string; sql: string; cutoffDays: number }> = [
-    { label: "stale token(s)", sql: "DELETE FROM device_tokens WHERE last_seen_at < ?", cutoffDays: 60 },
     { label: "old alert(s)", sql: "DELETE FROM alerts WHERE created_on_utc < ?", cutoffDays: 90 },
     { label: "geocode cache row(s)", sql: "DELETE FROM geocode_cache WHERE resolved_at < ?", cutoffDays: 180 },
     // Verification/reset links (migration 0006). They stop working at

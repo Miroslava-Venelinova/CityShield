@@ -8,7 +8,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  getBusLineSubscriptions, getDisabledUserIds, getTokensForUsers, getUserIdsByStreets,
+  getBusLineSubscriptions, getDisabledUserIds, getUserIdsByStreets,
 } from "../src/db/queries";
 
 /** Comfortably past D1's 100-bound-parameter ceiling. */
@@ -27,30 +27,9 @@ beforeEach(async () => {
                           created_on_utc, updated_on_utc)
        VALUES (?, ?, 'x', ?, ?, ?)`,
     ).bind(id, `scale-${i}-${id}@example.com`, "[]", now, now)));
-
-  await env.DB.batch(userIds.map((id, i) =>
-    env.DB.prepare(
-      "INSERT INTO device_tokens (user_id, token, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
-    ).bind(id, `token-${i}-${id}`, now, now)));
 });
 
 describe("targeting queries past D1's bound-parameter ceiling", () => {
-  it("returns every device token for an audience larger than 100", async () => {
-    const tokens = await getTokensForUsers(env, userIds);
-    expect(tokens).toHaveLength(USER_COUNT);
-  });
-
-  it("returns only the requested users' tokens, not the whole table", async () => {
-    const subset = userIds.slice(0, 5);
-    const tokens = await getTokensForUsers(env, subset);
-    expect(tokens).toHaveLength(5);
-
-    // The large-audience path reads the table and filters in memory; prove it
-    // still filters rather than returning everyone.
-    const large = await getTokensForUsers(env, userIds.slice(0, USER_COUNT - 10));
-    expect(large).toHaveLength(USER_COUNT - 10);
-  });
-
   it("finds category opt-outs within a large audience", async () => {
     const optedOut = userIds.slice(0, 3);
     const now = new Date().toISOString();

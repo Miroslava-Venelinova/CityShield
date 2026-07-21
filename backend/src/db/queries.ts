@@ -113,13 +113,6 @@ export async function updateUserPassword(env: Env, userId: string, passwordHash:
   ).bind(passwordHash, nowIso(), userId).run();
 }
 
-export async function getDeviceTokenMetadata(env: Env, userId: string) {
-  const { results } = await env.DB.prepare(
-    "SELECT platform, device_name, created_at, last_seen_at FROM device_tokens WHERE user_id = ?",
-  ).bind(userId).all<{ platform: string | null; device_name: string | null; created_at: string; last_seen_at: string }>();
-  return results;
-}
-
 // ── reference tables (module-scope cache, §1.3) ───────────────────────────────
 
 interface RefCache { rows: NamedRow[]; loadedAt: number; }
@@ -168,31 +161,6 @@ export function clearRefCaches(): void {
   regionsRef.pending = null;
   streetsRef.cache = null;
   streetsRef.pending = null;
-}
-
-// ── device tokens ─────────────────────────────────────────────────────────────
-
-export async function upsertDeviceToken(
-  env: Env, userId: string, token: string,
-  platform: string | null, deviceName: string | null,
-) {
-  const now = nowIso();
-  // Port of FcmTokenService.UpsertTokenAsync: an existing row is re-owned by
-  // the caller and refreshed; platform/deviceName only overwrite when provided.
-  await env.DB.prepare(
-    `INSERT INTO device_tokens (user_id, token, platform, device_name, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(token) DO UPDATE SET
-       user_id = excluded.user_id,
-       last_seen_at = excluded.last_seen_at,
-       platform = COALESCE(excluded.platform, device_tokens.platform),
-       device_name = COALESCE(excluded.device_name, device_tokens.device_name)`,
-  ).bind(userId, token, platform, deviceName, now, now).run();
-}
-
-export async function deleteDeviceToken(env: Env, userId: string, token: string) {
-  await env.DB.prepare("DELETE FROM device_tokens WHERE user_id = ? AND token = ?")
-    .bind(userId, token).run();
 }
 
 // ── notification preferences ──────────────────────────────────────────────────
@@ -318,28 +286,6 @@ export async function getDisabledUserIds(env: Env, userIds: string[], category: 
      WHERE category = ? AND is_enabled = 0`,
   ).bind(category));
   return disabled.filter((id) => wanted.has(id));
-}
-
-/**
- * Device tokens for the given users. Chunked under the bound-parameter ceiling
- * for targeted alerts; a broadcast (audience at or above the whole token table's
- * natural size) reads the table once instead.
- */
-export async function getTokensForUsers(env: Env, userIds: string[]): Promise<string[]> {
-  if (userIds.length === 0) return [];
-
-  if (userIds.length > MAX_BOUND_PARAMS) {
-    const wanted = new Set(userIds);
-    const { results } = await env.DB.prepare(
-      "SELECT user_id, token FROM device_tokens",
-    ).all<{ user_id: string; token: string }>();
-    return results.filter((r) => wanted.has(r.user_id)).map((r) => r.token);
-  }
-
-  const { results } = await env.DB.prepare(
-    `SELECT token FROM device_tokens WHERE user_id IN (${inList(userIds.length)})`,
-  ).bind(...userIds).all<{ token: string }>();
-  return results.map((r) => r.token);
 }
 
 /**

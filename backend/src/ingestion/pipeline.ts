@@ -44,7 +44,7 @@ export async function ingestAlert(
     await sendUsersNotification(
       env, processed.locations, title, content, category,
       processed.start_time, processed.end_time, processed.city_wide,
-      processed.bus_lines ?? null, env.SELF_URL);
+      processed.bus_lines ?? null);
   } catch (e) {
     console.error(`[${tag}] Notification dispatch failed for alert ${alertId}; the alert is stored. ${e}`);
   }

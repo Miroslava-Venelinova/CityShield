@@ -2,6 +2,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {IconName} from '../components/icons';
 import type {TranslationKey} from '../i18n/translations';
+import {alertsApi} from './api';
 
 const STORAGE_KEY = 'cityshield_notifications';
 const MAX_ITEMS   = 10;
@@ -11,9 +12,8 @@ export type NotificationCategory =
 
 export interface StoredNotification {
   id:         string;
-  /** FCM messageId when available — dedups the background-handler +
-   *  cold-start-tap double delivery of the same message. */
-  messageId?: string;
+  /** Server-side alert id — dedups repeated feed syncs of the same alert. */
+  sourceId?:  string;
   title:      string;
   body:       string;
   category:   NotificationCategory;
@@ -44,8 +44,8 @@ export async function addNotification(
   payload: Omit<StoredNotification, 'id' | 'receivedAt' | 'read'>,
 ): Promise<StoredNotification | null> {
   const existing = await loadNotifications();
-  if (payload.messageId && existing.some(n => n.messageId === payload.messageId)) {
-    return null; // same FCM message already persisted by another handler
+  if (payload.sourceId && existing.some(n => n.sourceId === payload.sourceId)) {
+    return null; // this alert is already in the list
   }
   const newItem: StoredNotification = {
     ...payload,
@@ -56,6 +56,42 @@ export async function addNotification(
   const updated = [newItem, ...existing].slice(0, MAX_ITEMS);
   await persist(updated);
   return newItem;
+}
+
+/**
+ * Rebuilds the list from the server's recent-alerts feed.
+ *
+ * Pushes are not persisted as they arrive: OneSignal has no headless Android
+ * hook equivalent to Firebase's setBackgroundMessageHandler, so the feed is the
+ * source of truth. It is also the more accurate one — it holds alerts that
+ * arrived while the app was killed, and survives a reinstall.
+ *
+ * Local `read` flags are preserved across syncs, and never throws: a failed
+ * sync just leaves the previously stored list in place.
+ */
+export async function syncFromRecentAlerts(authToken: string): Promise<StoredNotification[]> {
+  const existing = await loadNotifications();
+  try {
+    const alerts = await alertsApi.getRecent(authToken);
+    const readIds = new Set(existing.filter(n => n.read).map(n => n.sourceId));
+
+    const synced: StoredNotification[] = alerts.slice(0, MAX_ITEMS).map(alert => ({
+      id:         makeId(),
+      sourceId:   alert.id,
+      title:      alert.original_message.title,
+      body:       alert.original_message.content ?? alert.original_message.body ?? '',
+      category:   (alert.source as NotificationCategory) ?? 'general',
+      startTime:  alert.processed_data.start_time,
+      endTime:    alert.processed_data.end_time,
+      receivedAt: alert.created_at,
+      read:       readIds.has(alert.id),
+    }));
+
+    await persist(synced);
+    return synced;
+  } catch {
+    return existing;
+  }
 }
 
 export async function markAsRead(id: string): Promise<void> {

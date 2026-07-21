@@ -2,6 +2,8 @@
 # via `wrangler secret put` (PLAN.MD §3.3).
 JWT_KEY=dev-only-key-change-me-0123456789-0123456789-01234567
 INGEST_API_KEY=dev-only-ingest-key
-# FCM_SERVICE_ACCOUNT={"type":"service_account",...}   # needed from Phase 2 on
+# OneSignal REST API key (dashboard → Settings → Keys & IDs). Without it, pushes
+# are skipped with a warning instead of failing the request.
+# ONESIGNAL_API_KEY=os_v2_app_...
 # No mail credentials: verification/reset delivery is mocked (src/core/mailer.ts),
 # which logs each link instead of sending it.

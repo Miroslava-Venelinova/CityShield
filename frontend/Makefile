@@ -37,7 +37,7 @@ install-host:
 	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 uninstall:
-	@PKG=$$(python3 -c "import json; d=json.load(open('android/app/google-services.json')); print(d['client'][0]['client_info']['android_client_info']['package_name'])" 2>/dev/null || echo "com.cityshieldscaffold"); \
+	@PKG=$${PACKAGE_NAME:-com.cityshield.fcmtest}; \
 	echo "Uninstalling $$PKG..."; \
 	adb uninstall $$PKG || echo "(not installed, continuing)"
 

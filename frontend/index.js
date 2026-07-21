@@ -1,12 +1,13 @@
 // ─── index.js ─────────────────────────────────────────────────────────────────
 // Order matters: gesture handler and screens must be patched before anything
-// renders. Background FCM handler must be registered before the app mounts.
+// renders, and OneSignal must be initialized before the app mounts so a
+// notification tap that cold-starts the app still reaches its click listener.
 import 'react-native-gesture-handler';
 import {enableScreens} from 'react-native-screens';
-import {registerBackgroundHandler} from './src/services/fcm';
+import {initPush} from './src/services/push';
 
 enableScreens();
-registerBackgroundHandler();
+initPush();
 
 import {AppRegistry} from 'react-native';
 import App from './App';

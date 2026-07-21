@@ -97,9 +97,10 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
 - [x] `core/geo.ts` — bbox + ray-cast point-in-polygon (boundary=inside), vertex-average centroid
 - [x] `core/geocoding.ts` — forward geocode w/ D1 `geocode_cache` (misses cached too),
       Varna-anchored BuildQuery, ≥1.1 s spacing between uncached Nominatim calls
-- [x] `core/fcm.ts` — OAuth2 via WebCrypto RS256, FCM HTTP v1 per-token send, stale-token
-      deletion (UNREGISTERED/SENDER_ID_MISMATCH only), >30-token chaining via
-      `/internal/push-batch` (fresh subrequest budget per hop)
+- [x] ~~`core/fcm.ts`~~ → **`core/onesignal.ts`** (2026-07-21): the per-token FCM send and
+      its `/internal/push-batch` chaining were the scaling wall — cost grew per *device*.
+      Replaced by one OneSignal call per 2,000 *users* (`include_aliases.external_id`),
+      with `device_tokens` and `/api/tokens` dropped in migration 0008
 - [x] `core/alert-service.ts` — full AlertService.cs port: store-before-notify, enrichment
       (FeatureCollection→bare geometry, centroid, fuzzy canonicalize + geocode), targeting
       decision tree (polygon/region+street/city-wide, city_wide=false store-only guard,
@@ -107,11 +108,12 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
 - [x] `api/alerts.ts` — `POST submit-data` (X-Api-Key; exact 400 error shapes; notify
       failure never fails the request) + `GET recent` (48 h/100, snake_case DTO)
 - [x] Tests: 19 new (56 total green) — decision-tree guards from the xUnit suite, polygon
-      bbox+ray-cast targeting, geocode cache, FCM send w/ real RS256 signing + stale cleanup
+      bbox+ray-cast targeting, geocode cache, push send + audience chunking at the 2,000 cap
 - [x] `wrangler dev` smoke: submit → real Nominatim pin (43.1799, 27.8972 for Народни
       будители) → recent renders the exact app DTO; wrong X-Api-Key → 401
 - [ ] Milestone: injecting a test alert via curl produces a push on a real device — needs
-      `FCM_SERVICE_ACCOUNT` secret on a deployed Worker + the RN app (user-driven check)
+      `ONESIGNAL_API_KEY` secret + `ONESIGNAL_APP_ID` var on a deployed Worker + the RN app
+      (user-driven check)
 
 ## Phase 3 — ingestion (code complete 2026-07-19)
 
@@ -152,7 +154,8 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
 - [x] `/privacy` — bilingual (BG/EN) policy page served by the Worker covering the §2.5
       checklist; controller contact confirmed as cityshield.varna@gmail.com
       (2026-07-21) — revisit only if a dedicated domain address is set up
-- [x] Retention jobs in the daily cron: tokens 60 d, alerts 90 d, geocode cache 180 d
+- [x] Retention jobs in the daily cron: alerts 90 d, geocode cache 180 d (the 60-day token
+      job went with `device_tokens` in 0008)
 - [x] CI rewrite: `worker` job (typecheck + vitest + dry-run deploy) replaces the
       pytest/dotnet jobs; `app` job kept; `deploy` job on main gated on the
       `CLOUDFLARE_API_TOKEN` repo secret
@@ -189,10 +192,11 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
 
 - [ ] `wrangler d1 create cityshield-db --location=weur` → paste database_id into
       wrangler.jsonc → `npm run db:remote`
-- [ ] Secrets: `JWT_KEY` (≥48 random bytes), `INGEST_API_KEY`, `FCM_SERVICE_ACCOUNT`
-      (JSON at `C:\Users\User\.cityshield\fcm-service-account.json`)
-- [ ] `npx wrangler deploy` → set `SELF_URL` var to the workers.dev URL (push-batch
-      chaining from cron) → `wrangler tail` sanity watch
+- [ ] Secrets: `JWT_KEY` (≥48 random bytes), `INGEST_API_KEY`, `ONESIGNAL_API_KEY`
+      (REST API key from the OneSignal dashboard)
+- [ ] Fill the `ONESIGNAL_APP_ID` var in wrangler.jsonc (currently empty)
+- [ ] `npx wrangler deploy` → set `SELF_URL` var to the workers.dev URL (mailed
+      verification/reset links from cron) → `wrangler tail` sanity watch
 - [ ] GitHub repo secret `CLOUDFLARE_API_TOKEN` for the CI deploy job
 
 ## Phase 5 — cutover
@@ -206,10 +210,12 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
 - [x] ~~`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` for REST~~ — moot; eval ran through
       the logged-in proxy-Worker transport
 - [x] Firebase **service account** JSON key (SETUP.md §2) — received 2026-07-19, validated
-      live (OAuth token exchange OK; FCM v1 validate_only send passes auth/permission, i.e.
-      the messaging role is present). Stored outside the repo at
-      `C:\Users\User\.cityshield\fcm-service-account.json`; becomes the `FCM_SERVICE_ACCOUNT`
-      Worker secret via `wrangler secret put` once the Phase 1 Worker exists
-- [ ] Android client config for the real app package — the provided `google-services.json`
-      is registered to `com.cityshield.fcmtest` (a test app); a config for the real package
-      name is needed before Phase 5 release builds
+      live. Since 2026-07-21 it is no longer a Worker secret: it is uploaded to the
+      **OneSignal** dashboard, which now owns Android delivery
+- [ ] `ONESIGNAL_APP_ID` + `ONESIGNAL_API_KEY` from the OneSignal dashboard
+- [ ] Confirm the OneSignal Android settings carry the FCM service account **and** an
+      Android package name matching the app's `applicationId` — a mismatch means devices
+      subscribe and silently receive nothing
+- [ ] Real app package name — the app still builds as `com.cityshield.fcmtest` (a test
+      package, now set via `PACKAGE_NAME` in `frontend/scripts/build.sh`). Renaming it
+      before the Phase 5 release means re-registering the package in OneSignal too

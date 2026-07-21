@@ -1,12 +1,11 @@
 import { Hono } from "hono";
 import { assertConfig } from "../env";
-import { alertRoutes, internalRoutes } from "./alerts";
+import { alertRoutes } from "./alerts";
 import { authRoutes } from "./auth";
 import type { AppEnv } from "./middleware";
 import { preferenceRoutes } from "./preferences";
 import { privacyRoutes } from "./privacy";
 import { globalRateLimit } from "./rate-limit";
-import { tokenRoutes } from "./tokens";
 
 export const app = new Hono<AppEnv>();
 
@@ -16,16 +15,13 @@ app.use(async (c, next) => {
   await next();
 });
 
-// Per-IP backstop on the public API. Mounted under /api only: /internal is the
-// push-batch self-chaining route (§1.6), which legitimately bursts far above
-// any human rate and is already gated by INGEST_API_KEY.
+// Per-IP backstop on the public API. Mounted under /api only, so the static
+// /privacy pages stay reachable even from an IP that has spent its API budget.
 app.use("/api/*", globalRateLimit);
 
 app.route("/api/auth", authRoutes);
 app.route("/api/alerts", alertRoutes);
-app.route("/api/tokens", tokenRoutes);
 app.route("/api/preferences", preferenceRoutes);
-app.route("/internal", internalRoutes);
 app.route("/privacy", privacyRoutes);
 
 // Uniform 500 without stack traces — parity with the production exception

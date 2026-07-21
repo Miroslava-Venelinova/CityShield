@@ -15,7 +15,7 @@ import {
   preferencesApi, NotificationPreferenceDTO, BusLineSubscriptionDTO,
 } from '../services/api';
 import {
-  loadNotifications, markAsRead, markAllAsRead,
+  loadNotifications, syncFromRecentAlerts, markAsRead, markAllAsRead,
   deleteNotification, StoredNotification, getCategoryMeta, getCategoryLabelKey,
 } from '../services/notifications';
 
@@ -35,9 +35,13 @@ export default function NotificationsScreen() {
   const [linePickerOpen, setLinePickerOpen] = useState(false);
 
   // ── Load inbox ─────────────────────────────────────────────────────────────
+  // Show what's stored first so the list never blanks out, then reconcile with
+  // the server feed — that feed, not the incoming pushes, is what fills this
+  // list (see services/notifications.ts).
   const loadInbox = useCallback(async () => {
     setNotifications(await loadNotifications());
-  }, []);
+    if (token) setNotifications(await syncFromRecentAlerts(token));
+  }, [token]);
 
   // ── Load category preferences ──────────────────────────────────────────────
   const loadPreferences = useCallback(async () => {

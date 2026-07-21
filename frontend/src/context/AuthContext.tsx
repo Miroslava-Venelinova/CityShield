@@ -3,7 +3,8 @@ import React, {
   createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {authApi, setSessionRenewer, tokensApi} from '../services/api';
+import {authApi, setSessionRenewer} from '../services/api';
+import {clearUser, identifyUser} from '../services/push';
 
 const ACCESS_KEY  = 'auth_token';
 const REFRESH_KEY = 'refresh_token';
@@ -16,7 +17,7 @@ interface AuthContextType {
   emailVerified: boolean | null;   // null = not yet loaded
   isLoading:     boolean;
   login:       (token: string, refreshToken: string) => Promise<void>;
-  logout:      (fcmToken?: string) => Promise<void>;
+  logout:      () => Promise<void>;
   setHasLocation: (value: boolean) => void;
   refreshProfile: () => Promise<void>;
 }
@@ -49,6 +50,9 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
 
   /** Wipe the session locally. Dropping `token` sends the navigator to Login. */
   const clearSession = useCallback(async () => {
+    // Unbind this device from the account first, so alerts for a signed-out
+    // user stop arriving even if the rest of the teardown fails.
+    clearUser();
     refreshTokenRef.current = null;
     await AsyncStorage.multiRemove([ACCESS_KEY, REFRESH_KEY]).catch(() => {});
     setToken(null);
@@ -112,6 +116,9 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
   async function fetchProfile(authToken: string) {
     try {
       const user = await authApi.me(authToken);
+      // Bind the device to this account for push targeting. Done on every
+      // profile fetch, not just at login, so a cold start re-establishes it.
+      identifyUser(user.userId);
       setHasLocation(user.hasLocation);
       setRegionName(user.regionName);
       setStreetName(user.streetName);
@@ -136,11 +143,7 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
     await fetchProfile(newToken);
   };
 
-  const logout = async (fcmToken?: string) => {
-    if (token && fcmToken) {
-      try { await tokensApi.unregister({token: fcmToken}, token); }
-      catch { /* best-effort */ }
-    }
+  const logout = async () => {
     // Revoke server-side too, so the 60-day refresh token dies with the session
     // rather than lingering in the database until it expires on its own.
     const refreshToken = refreshTokenRef.current;

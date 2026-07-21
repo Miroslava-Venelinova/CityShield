@@ -5,7 +5,12 @@ APK_FINAL="/app/android/app/build/outputs/apk/debug/app-debug.apk"
 MANIFEST="/app/android/app/src/main/AndroidManifest.xml"
 ROOT_GRADLE="/app/android/build.gradle"
 APP_GRADLE="/app/android/app/build.gradle"
-GOOGLE_SERVICES="/app/android/app/google-services.json"
+
+# The app's Android package name. It used to be read out of google-services.json;
+# push now goes through OneSignal, which carries no per-app file in the build, so
+# it is declared here instead. It must match the package registered in the
+# OneSignal dashboard, or devices subscribe and never receive anything.
+PACKAGE_NAME="${PACKAGE_NAME:-com.cityshield.fcmtest}"
 
 echo ""
 echo "=========================================="
@@ -29,40 +34,12 @@ if [ ! -f /app/android/gradlew ]; then
   echo ">>> Scaffold complete."
 fi
 
-# ── 3. Verify google-services.json exists ─────────────────────────────────────
-if [ ! -f "$GOOGLE_SERVICES" ]; then
-  echo ""
-  echo "ERROR: google-services.json not found at android/app/google-services.json"
-  echo ""
-  echo "  1. Go to https://console.firebase.google.com"
-  echo "  2. Add an Android app (any package name)"
-  echo "  3. Download google-services.json"
-  echo "  4. Place it at android/app/google-services.json"
-  exit 1
-fi
-echo ">>> google-services.json found."
-
-# ── 4. Read the real package name from google-services.json ───────────────────
-# Whatever package name you used when registering the app in Firebase is the
-# one we use — no need to re-register. We patch all Android files to match.
-FIREBASE_PKG=$(python3 -c "
-import json, sys
-data = json.load(open('$GOOGLE_SERVICES'))
-clients = data.get('client', [])
-if not clients:
-    print('ERROR: no client found in google-services.json', file=sys.stderr)
-    sys.exit(1)
-pkg = clients[0]['client_info']['android_client_info']['package_name']
-print(pkg)
-")
-echo ">>> Firebase package name: $FIREBASE_PKG"
-
-# ── 5. Patch Android package name to match Firebase ───────────────────────────
-echo ">>> Patching Android package name to $FIREBASE_PKG..."
+# ── 3. Patch the Android package name onto the scaffold ───────────────────────
+echo ">>> Patching Android package name to $PACKAGE_NAME..."
 python3 << PYEOF
 import os, re, sys
 
-pkg     = "$FIREBASE_PKG"
+pkg     = "$PACKAGE_NAME"
 old_pkg = "com.cityshieldscaffold"
 
 files_to_patch = [
@@ -97,26 +74,23 @@ else:
     print("    -> Already using correct package name, skipping.")
 PYEOF
 
-# ── 6. Patch root build.gradle — Google Services classpath ────────────────────
-echo ">>> Patching root build.gradle..."
-if ! grep -q "google-services" "$ROOT_GRADLE"; then
-  sed -i 's|classpath("com.facebook.react:react-native-gradle-plugin")|classpath("com.facebook.react:react-native-gradle-plugin")\n        classpath("com.google.gms:google-services:4.4.2")|' "$ROOT_GRADLE"
-  echo "    -> Root build.gradle patched."
-else
-  echo "    -> Root build.gradle already patched."
+# ── 4. Strip the Google Services plugin from older scaffolds ──────────────────
+# The OneSignal SDK does its own FCM registration from credentials held in the
+# OneSignal dashboard, so the app needs neither the plugin nor a
+# google-services.json. A container reusing an android/ dir that earlier builds
+# patched would otherwise fail on the missing file.
+echo ">>> Removing obsolete Google Services configuration..."
+if grep -q "google-services" "$ROOT_GRADLE"; then
+  sed -i '/com.google.gms:google-services/d' "$ROOT_GRADLE"
+  echo "    -> Root build.gradle: classpath removed."
 fi
-
-# ── 7. Patch app/build.gradle — apply Google Services plugin ──────────────────
-echo ">>> Patching app/build.gradle..."
-if ! grep -q "com.google.gms.google-services" "$APP_GRADLE"; then
-  echo "" >> "$APP_GRADLE"
-  echo "apply plugin: 'com.google.gms.google-services'" >> "$APP_GRADLE"
-  echo "    -> app/build.gradle patched."
-else
-  echo "    -> app/build.gradle already patched."
+if grep -q "com.google.gms.google-services" "$APP_GRADLE"; then
+  sed -i "/apply plugin: 'com.google.gms.google-services'/d" "$APP_GRADLE"
+  echo "    -> app/build.gradle: plugin removed."
 fi
+rm -f /app/android/app/google-services.json
 
-# ── 8. Write network_security_config.xml ──────────────────────────────────────
+# ── 5. Write network_security_config.xml ──────────────────────────────────────
 echo ">>> Writing network_security_config.xml..."
 mkdir -p /app/android/app/src/main/res/xml
 cat > /app/android/app/src/main/res/xml/network_security_config.xml << 'XMLEOF'
@@ -139,7 +113,7 @@ cat > /app/android/app/src/main/res/xml/network_security_config.xml << 'XMLEOF'
 </network-security-config>
 XMLEOF
 
-# ── 9a. Clean up obsolete react-native-maps configuration ─────────────────────
+# ── 6. Clean up obsolete react-native-maps configuration ──────────────────────
 # The map is now Leaflet + OpenStreetMap inside react-native-webview, so the
 # Google Maps SDK is no longer part of the build. Remove leftovers that older
 # builds may have written.
@@ -151,7 +125,7 @@ if grep -q "REACT_NATIVE_MAPS_PROVIDER" "$GRADLE_PROPS" 2>/dev/null; then
   echo "    -> gradle.properties: removed obsolete REACT_NATIVE_MAPS_PROVIDER flag."
 fi
 
-# ── 9. Patch AndroidManifest.xml ──────────────────────────────────────────────
+# ── 7. Patch AndroidManifest.xml ──────────────────────────────────────────────
 echo ">>> Patching AndroidManifest.xml..."
 python3 << 'PYEOF'
 import xml.etree.ElementTree as ET, sys
@@ -203,7 +177,7 @@ else:
     print("    -> Manifest already patched.")
 PYEOF
 
-# ── 10. Gradle build ──────────────────────────────────────────────────────────
+# ── 8. Gradle build ───────────────────────────────────────────────────────────
 echo ">>> Running Gradle assembleDebug..."
 chmod +x /app/android/gradlew
 cd /app/android

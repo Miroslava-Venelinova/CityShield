@@ -129,6 +129,8 @@ describe("GET /api/auth/me", () => {
     expect(res.status).toBe(200);
     const dto = await res.json() as Record<string, unknown>;
     expect(dto).toEqual({
+      // The app registers this with the push provider as its external_id.
+      userId: expect.any(String),
       email,
       latitude: null,
       longitude: null,

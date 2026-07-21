@@ -154,6 +154,9 @@ export const authRoutes = new Hono<AppEnv>()
     const user = await q.getUserById(c.env, c.get("userId"));
     if (!user) return c.text("User does not exist", 404);
     return c.json({
+      // The app uses this as its OneSignal external_id, so pushes can be
+      // addressed by user rather than by device token.
+      userId: user.user_id,
       email: user.email,
       latitude: user.latitude,
       longitude: user.longitude,
@@ -332,11 +335,12 @@ export const authRoutes = new Hono<AppEnv>()
 
     const preferences = (await q.getPreferenceRows(c.env, user.user_id))
       .map((p) => ({ category: p.category, isEnabled: p.is_enabled === 1 }));
-    const devices = (await q.getDeviceTokenMetadata(c.env, user.user_id))
-      .map((d) => ({ platform: d.platform, deviceName: d.device_name, createdAt: d.created_at, lastSeenAt: d.last_seen_at }));
 
+    // No device section: push delivery moved to OneSignal, which holds the
+    // device registrations keyed by this user_id (see COMPLIANCE.md).
     return c.json({
       profile: {
+        userId: user.user_id,
         email: user.email,
         emailVerified: user.email_verified_at !== null,
         latitude: user.latitude,
@@ -349,7 +353,6 @@ export const authRoutes = new Hono<AppEnv>()
         updatedOnUTC: user.updated_on_utc,
       },
       notificationPreferences: preferences,
-      devices,
     });
   })
 

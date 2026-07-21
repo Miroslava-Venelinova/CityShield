@@ -4,7 +4,6 @@
 
 import { Hono } from "hono";
 import { getRecentAlerts, sendUsersNotification, storeAlert } from "../core/alert-service";
-import { type PushNotification, sendPushToTokens } from "../core/fcm";
 import { KNOWN_CATEGORIES } from "../shared/constants";
 import type { AppEnv } from "./middleware";
 import { requireAuth, requireIngestKey } from "./middleware";
@@ -83,9 +82,8 @@ export const alertRoutes = new Hono<AppEnv>()
     // make the scraper re-submit a message whose pushes already went out.
     let notifiedIds: string[] = [];
     try {
-      const selfUrl = c.env.SELF_URL ?? new URL(c.req.url).origin;
       notifiedIds = await sendUsersNotification(
-        c.env, locations, title, content, category, startTime, endTime, cityWide, busLines, selfUrl);
+        c.env, locations, title, content, category, startTime, endTime, cityWide, busLines);
     } catch (e) {
       console.error(`Notification dispatch failed for alert ${alertId}; the alert is stored. ${e}`);
     }
@@ -110,16 +108,4 @@ export const alertRoutes = new Hono<AppEnv>()
     res.headers.set("Cache-Control", `public, max-age=${FEED_CACHE_TTL_S}`);
     detach(c, caches.default.put(key, res.clone()));
     return res;
-  });
-
-/** Fan-out chain hop (§1.6): each self-invocation gets a fresh 50-subrequest budget. */
-export const internalRoutes = new Hono<AppEnv>()
-  .post("/push-batch", requireIngestKey, async (c) => {
-    const body = await c.req.json().catch(() => null) as
-      { tokens?: unknown; notification?: PushNotification } | null;
-    if (!body || !Array.isArray(body.tokens) || !body.notification)
-      return c.text("Malformed payload", 400);
-    const tokens = body.tokens.filter((t): t is string => typeof t === "string");
-    const selfUrl = c.env.SELF_URL ?? new URL(c.req.url).origin;
-    return c.json(await sendPushToTokens(c.env, tokens, body.notification, selfUrl));
   });

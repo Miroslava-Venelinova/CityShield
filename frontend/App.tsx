@@ -1,36 +1,55 @@
 // ─── App.tsx ──────────────────────────────────────────────────────────────────
 import React, {useEffect} from 'react';
-import {StyleSheet} from 'react-native';
+import {AppState, StyleSheet} from 'react-native';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {ErrorBoundary} from './src/components/ErrorBoundary';
-import {AuthProvider} from './src/context/AuthContext';
+import {AuthProvider, useAuth} from './src/context/AuthContext';
 import {LanguageProvider} from './src/context/LanguageContext';
 import AppNavigator from './src/navigation/AppNavigator';
-import {
-  registerForegroundHandler,
-  handleInitialNotification,
-} from './src/services/fcm';
+import {registerNotificationHandlers} from './src/services/push';
+import {syncFromRecentAlerts} from './src/services/notifications';
 
-export default function App() {
+/**
+ * Keeps the stored notification list in step with the server feed. Renders
+ * nothing; lives inside AuthProvider because it needs the access token.
+ *
+ * A push is only a cue to re-sync — its payload is never persisted directly,
+ * since OneSignal has no headless Android hook for notifications that arrive
+ * while the app is killed. Coming back to the foreground re-syncs for exactly
+ * that case.
+ */
+function PushSync() {
+  const {token} = useAuth();
+
   useEffect(() => {
-    // Show an Alert for messages received while the app is open
-    const unsubscribeForeground = registerForegroundHandler();
+    if (!token) return;
 
-    // Persist the notification that opened the app (cold start), if any
-    handleInitialNotification();
+    const sync = () => { syncFromRecentAlerts(token); };
+    sync();
+
+    const unsubscribeNotifications = registerNotificationHandlers(sync);
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') sync();
+    });
 
     return () => {
-      unsubscribeForeground();
+      unsubscribeNotifications();
+      subscription.remove();
     };
-  }, []);
+  }, [token]);
 
+  return null;
+}
+
+export default function App() {
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>
           <LanguageProvider>
             <AuthProvider>
+              <PushSync />
               <AppNavigator />
             </AuthProvider>
           </LanguageProvider>

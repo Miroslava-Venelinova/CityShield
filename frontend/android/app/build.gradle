@@ -118,4 +118,6 @@ dependencies {
     }
 }
 
-apply plugin: 'com.google.gms.google-services'
+// No google-services plugin: the OneSignal SDK performs its own FCM
+// registration using the service account uploaded to the OneSignal dashboard,
+// so the app carries no Firebase config of its own.

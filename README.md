@@ -46,7 +46,7 @@ Cloudflare's free plan. A React Native app is the client.
 
 The server side is one Worker with two entry points — an HTTP API (`fetch`) and a
 scheduled ingestion pipeline (Cron Triggers) — sharing one D1 database, one
-Workers-AI binding, and one FCM client.
+Workers-AI binding, and one push client.
 
 ```
                         ┌───────────────────────── backend/ (Cloudflare Worker) ─────────────────────────┐
@@ -54,11 +54,11 @@ Workers-AI binding, and one FCM client.
   official sources ───► │  scheduled() every 15 min                        fetch()  (Hono router)         │
   (ViK, ePro, Veolia,   │   scrape (cheerio) → parse (Workers AI, JSON     ┌─────────────────────────┐    │
    VarnaTraffic, API)   │   schema) → geocode (Nominatim) → build polygon  │ /api/auth  /api/alerts   │    │ ◄── React Native app
-                        │   (Overpass + JSTS) → store → match users →      │ /api/tokens /api/prefs   │    │      (frontend/)
-                        │   notify (FCM HTTP v1)                           │ /privacy   /internal     │    │
+                        │   (Overpass + JSTS) → store → match users →      │ /api/prefs  /privacy     │    │      (frontend/)
+                        │   notify (OneSignal)                             │                          │    │
                         │                        │                         └─────────────────────────┘    │
                         │                        └──────────────► Cloudflare D1 (SQLite) ◄────────────────┘
-                        │                                          Workers AI · FCM HTTP v1               │
+                        │                                          Workers AI · OneSignal                 │
                         └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,24 +68,24 @@ Workers-AI binding, and one FCM client.
   geocodes them, and an Overpass + [JSTS](https://github.com/bjornharrtell/jsts)
   pipeline turns the affected streets into a polygon. Crawl state lives in D1.
 - **API** (`backend/src/api/`) — a [Hono](https://hono.dev) router handling JWT
-  auth and user location, alert retrieval for the map/feed, FCM device tokens, and
-  per-category + bus-line notification preferences. It also serves a GDPR data
+  auth and user location, alert retrieval for the map/feed, and per-category +
+  bus-line notification preferences. It also serves a GDPR data
   export / account-deletion flow and the privacy policy.
 - **Core** (`backend/src/core/`) — shared logic: alert store-and-notify, trigram
   fuzzy street matching (a `pg_trgm` port), geometry helpers, the geocoding cache,
-  PBKDF2 passwords, HS256 JWTs, the FCM client (WebCrypto OAuth), and the bus-line
+  PBKDF2 passwords, HS256 JWTs, the OneSignal push client, and the bus-line
   catalog.
 - **Mobile app** (`frontend/`) — a React Native Android app with an
   OpenStreetMap-based incident map (Leaflet in a WebView), an alert feed, a
-  persisted notification inbox, per-category settings, Bulgarian/English UI, and
-  Firebase Cloud Messaging.
+  notification inbox synced from the alert feed, per-category settings,
+  Bulgarian/English UI, and OneSignal push.
 
 ## Technology stack
 
 | Component | Technologies |
 |---|---|
-| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, cheerio, JSTS, Zod, Nominatim & Overpass geocoding, FCM HTTP v1 |
-| Mobile app | React Native 0.85, React 19, React Navigation, Leaflet in a WebView (OpenStreetMap tiles), Firebase Cloud Messaging |
+| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, cheerio, JSTS, Zod, Nominatim & Overpass geocoding, OneSignal |
+| Mobile app | React Native 0.85, React 19, React Navigation, Leaflet in a WebView (OpenStreetMap tiles), OneSignal |
 | Tooling | Wrangler, Vitest (`@cloudflare/vitest-pool-workers`), GitHub Actions |
 
 ## Repository layout
@@ -99,7 +99,7 @@ CityShield/
 │   ├── src/
 │   │   ├── index.ts          Exports { fetch, scheduled }
 │   │   ├── api/              Hono routes (auth, alerts, tokens, preferences, privacy)
-│   │   ├── core/             Alert service, fuzzy match, geo, geocoding, fcm, jwt, password
+│   │   ├── core/             Alert service, fuzzy match, geo, geocoding, onesignal, jwt, password
 │   │   └── ingestion/        Scheduled pipeline + one module per source
 │   ├── test/                 Vitest suite (runs against local D1)
 │   └── spikes/               Phase 0 de-risking spikes + RESULTS.md
@@ -121,7 +121,7 @@ CityShield/
 | [Node.js](https://nodejs.org/) 22+ | Backend & app tooling |
 | A [Cloudflare](https://dash.cloudflare.com) account (free plan) | Backend — D1, Workers AI, deploys |
 | [Android Studio](https://developer.android.com/studio) (or a device) | Mobile app |
-| A [Firebase](https://console.firebase.google.com) project | Push notifications |
+| A [OneSignal](https://onesignal.com) app (free plan) | Push notifications |
 
 See [SETUP.md](SETUP.md) for the exact accounts, secrets, and one-time provisioning
 the operator needs to supply.
@@ -152,7 +152,7 @@ and non-secret vars live in [backend/wrangler.jsonc](backend/wrangler.jsonc).
 ### 2. Run the mobile app
 
 Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a step-by-step guide covering the
-Android emulator/device, Firebase configuration, and what to run after each kind of
+Android emulator/device, OneSignal configuration, and what to run after each kind of
 change. Point the app's `CITYSHIELD_API_URL` at your `wrangler dev` host (or the
 deployed Worker).
 
@@ -174,7 +174,6 @@ All routes are registered in [backend/src/api/app.ts](backend/src/api/app.ts).
 |---|---|
 | `/api/auth` | Registration, login, JWT issuance, `me`, user location (reverse-geocoded + fuzzy region/street match), GDPR export & account deletion |
 | `/api/alerts` | Alert retrieval for the map/feed (`recent`, with coordinates and polygons) and API-key-protected ingestion |
-| `/api/tokens` | FCM device-token registration |
 | `/api/preferences` | Per-category notification settings and bus-line subscriptions |
 | `/privacy` | Published privacy policy (GDPR) |
 
@@ -187,7 +186,7 @@ D1 and secrets must be provisioned first — see [SETUP.md](SETUP.md) and
 ```sh
 cd backend
 npm run db:remote                     # apply migrations + seed the remote D1
-npx wrangler secret put JWT_KEY       # + INGEST_API_KEY, FCM_SERVICE_ACCOUNT
+npx wrangler secret put JWT_KEY       # + INGEST_API_KEY, ONESIGNAL_API_KEY
 npx wrangler deploy
 ```
 

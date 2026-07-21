@@ -1,7 +1,9 @@
 # ── Secrets — never commit ────────────────────────────────
 .env
+# Firebase service-account key. Push now goes through OneSignal, so this is no
+# longer a Worker secret — but the file still exists under backend_deprecated/
+# and is still a live credential.
 fcm.json
-frontend/android/app/google-services.json
 
 # ── Cloudflare Worker backend (backend/) ──────────────────
 # Build/dev artefacts (node_modules, dist, .wrangler, .dev.vars, seed.sql) are

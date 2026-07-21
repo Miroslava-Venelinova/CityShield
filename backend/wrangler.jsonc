@@ -63,8 +63,11 @@
     "NOMINATIM_URL": "https://nominatim.openstreetmap.org",
     "JWT_ISSUER": "CityShield",
     "JWT_AUDIENCE": "CityShield Users",
-    "JWT_EXPIRE_MINUTES": "60"
+    "JWT_EXPIRE_MINUTES": "60",
+    // OneSignal app pushes are sent from. Not a secret — the same id ships
+    // inside the mobile app; the REST API key next to it is the secret.
+    "ONESIGNAL_APP_ID": "2988dfb1-4647-4dc5-b5bb-7c52a3150b5f"
   }
-  // Secrets (wrangler secret put / .dev.vars): JWT_KEY, INGEST_API_KEY, FCM_SERVICE_ACCOUNT
+  // Secrets (wrangler secret put / .dev.vars): JWT_KEY, INGEST_API_KEY, ONESIGNAL_API_KEY
   // Mail delivery is mocked for now (src/core/mailer.ts) — no provider config here yet.
 }

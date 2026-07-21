@@ -9,12 +9,12 @@
 | ASP.NET Core 8 API on a VM/container | **Worker `fetch` handler** (Hono router) |
 | Python asyncio polling loops | **Worker `scheduled` handler** (Cron Triggers) |
 | Python → API over HTTP (`X-Api-Key`) | **Direct function calls** inside one Worker |
-| Firebase Admin SDK | **FCM HTTP v1 API** called directly (WebCrypto OAuth) |
+| Firebase Admin SDK | **OneSignal REST API** (§1.6; originally FCM HTTP v1 direct) |
 | docker-compose + reverse proxy + TLS setup | **`wrangler deploy`** (TLS automatic) |
 
 The React Native app, the Firebase project, and the five data sources stay as they are. The mobile app only needs a new `CITYSHIELD_API_URL` (plus one new screen for GDPR account deletion, see §1.10).
 
-**Why a single Worker:** the ingestion service's only consumer is the API, and the API's fuzzy-matching tables are seeded by the ingestion side. Merging them removes the `ASP_API_URL`/`ASP_API_KEY` HTTP hop, halves the code to maintain, and lets both halves share one D1 database, one geocoding cache, and one FCM client.
+**Why a single Worker:** the ingestion service's only consumer is the API, and the API's fuzzy-matching tables are seeded by the ingestion side. Merging them removes the `ASP_API_URL`/`ASP_API_KEY` HTTP hop, halves the code to maintain, and lets both halves share one D1 database, one geocoding cache, and one push client.
 
 **Verified free-tier numbers this plan is built around** (as of July 2026 — re-check before implementation, links in §3.6):
 
@@ -57,7 +57,7 @@ worker/
 │   │   ├── fuzzy.ts            # pg_trgm-equivalent trigram matching
 │   │   ├── geo.ts              # point-in-polygon, centroid, local projection helpers
 │   │   ├── geocoding.ts        # Nominatim client + D1-backed cache
-│   │   ├── fcm.ts              # FCM HTTP v1 + OAuth2 token via WebCrypto
+│   │   ├── onesignal.ts        # OneSignal REST client (user-addressed push)
 │   │   ├── password.ts         # PBKDF2 hash/verify
 │   │   ├── jwt.ts              # HS256 sign/verify helpers
 │   │   └── bus-lines.ts        # port of BusLineCatalog.cs
@@ -120,7 +120,7 @@ No ORM: D1's prepared-statement API (`env.DB.prepare(...).bind(...)`) with all S
 }
 ```
 
-Secrets (never in `vars`): `JWT_KEY`, `INGEST_API_KEY`, `FCM_SERVICE_ACCOUNT` (the full service-account JSON as one secret — replaces `fcm.json`).
+Secrets (never in `vars`): `JWT_KEY`, `INGEST_API_KEY`, `ONESIGNAL_API_KEY` (the REST API key; the App ID next to it is a plain var, since it ships in the mobile app too).
 
 ### 1.2 D1 schema (`migrations/0001_init.sql`)
 
@@ -146,16 +146,8 @@ CREATE INDEX ix_users_lat_lng ON users(latitude, longitude);
 CREATE TABLE regions ( id INTEGER PRIMARY KEY AUTOINCREMENT, region_name TEXT NOT NULL UNIQUE );
 CREATE TABLE streets ( id INTEGER PRIMARY KEY AUTOINCREMENT, street_name TEXT NOT NULL UNIQUE );
 
-CREATE TABLE device_tokens (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    token        TEXT NOT NULL UNIQUE,
-    platform     TEXT,            -- "ios" | "android" | "web"
-    device_name  TEXT,
-    created_at   TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL
-);
-CREATE INDEX ix_device_tokens_user ON device_tokens(user_id);
+-- device_tokens lived here until migration 0008 dropped it: push moved to
+-- OneSignal, which holds the device registrations keyed by our user_id (§1.6).
 
 CREATE TABLE user_notification_preferences (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,7 +193,7 @@ CREATE TABLE geocode_cache (                     -- replaces the in-memory Nomin
 - `pg_trgm` extension + GIN trigram indexes are **dropped**; fuzzy matching moves to TypeScript (§1.3).
 - `jsonb` → `TEXT` with JSON; `text[]` (`SubscribedBusLines`, `seen_ids`) → JSON-array `TEXT`.
 - `uuid`/`timestamptz` → `TEXT` (uuid string / ISO-8601 with `Z` — `new Date().toISOString()` output sorts correctly lexicographically, which the alert index relies on).
-- `ON DELETE CASCADE` on `device_tokens` and preferences: makes GDPR account deletion (§1.10) a single `DELETE FROM users`. Enable `PRAGMA foreign_keys` semantics by always deleting through `queries.ts` (D1 enforces FKs by default; verify in a test).
+- `ON DELETE CASCADE` on preferences (and, until 0008, `device_tokens`): makes GDPR account deletion (§1.10) a single `DELETE FROM users`. Enable `PRAGMA foreign_keys` semantics by always deleting through `queries.ts` (D1 enforces FKs by default; verify in a test).
 
 Seeding: `seeds/generate-seed.mjs` reads the existing `streets.json` / `regions.json` (copied from [backend/data/postgres/seeding/](backend/data/postgres/seeding/)) and emits `INSERT OR IGNORE` statements → applied with `wrangler d1 execute` (§3.3). The `buses` table is not carried over (already dropped by the seeder).
 
@@ -267,7 +259,7 @@ Direct port of [AlertService.cs](ASP/CityShieldAPI/CityShieldAPI.Core/AlertServi
   3. no locations + `city_wide` true/absent → all user ids.
   4. `bus_lines` present and specific → keep only users whose `subscribed_bus_lines` is empty or overlaps (after `Normalize`).
   5. add `receives_all_alerts` users; dedupe; filter by per-category preference (default enabled when no row).
-- **Push body**: append `(start – end)` time suffix, truncate at 1,000 chars with `…` (FCM 4 KB guard) — port verbatim.
+- **Push body**: append `(start – end)` time suffix, truncate at 1,000 chars with `…` (payload-size guard) — port verbatim.
 - **`getRecentAlerts`**: 48 h / 100 rows / newest first; tolerate corrupt `locations_json` by returning `[]` for that alert.
 
 **Nominatim client (`core/geocoding.ts`):** the singleton in-memory cache + 1 rps `SemaphoreSlim` throttle doesn't survive stateless isolates, so:
@@ -276,18 +268,37 @@ Direct port of [AlertService.cs](ASP/CityShieldAPI/CityShieldAPI.Core/AlertServi
 - Throttle becomes *structural*: geocoding only happens during ingestion of a new alert (a few calls, executed sequentially with ≥1,100 ms spacing between uncached calls) and during `PUT /api/auth/location` (one call). That keeps us inside the Nominatim public-instance policy without shared state. Keep the descriptive `User-Agent: CityShieldAPI/1.0 (contact email)` — required by their ToS.
 - If usage ever grows past hobby scale, move geocoding behind a Durable Object or self-host — noted, not built now.
 
-### 1.6 Push notifications without firebase-admin (`core/fcm.ts`)
+### 1.6 Push notifications via OneSignal (`core/onesignal.ts`)
 
-`firebase-admin` needs Node APIs; call **FCM HTTP v1** directly:
+**Superseded the original FCM HTTP v1 client (2026-07-21).** That design sent one request per
+device token, because FCM v1 has no multicast endpoint, and chained self-invocations through an
+`/internal/push-batch` route to get past the free tier's 50-subrequest ceiling. Fan-out cost grew
+with the *device* count and the chain was serial, so a city-wide alert to N users cost ⌈N/30⌉
+chained Worker invocations against a 100k/day request budget. That was the scaling wall.
 
-1. Parse the `FCM_SERVICE_ACCOUNT` secret (service-account JSON).
-2. Mint an OAuth2 access token: build a JWT (RS256 via `crypto.subtle.importKey`/`sign` over the service account's `private_key`, scope `https://www.googleapis.com/auth/firebase.messaging`), POST to `https://oauth2.googleapis.com/token`. Cache the token in module scope until ~5 min before expiry.
-3. Send per device: `POST https://fcm.googleapis.com/v1/projects/<project_id>/messages:send` with `{message: {token, notification: {title, body}, data}}` — data values all strings (`category`, `startTime`, `endTime`), matching what [frontend/src/services/fcm.ts](frontend/src/services/fcm.ts) expects.
-4. `UNREGISTERED` / `INVALID_ARGUMENT`-for-token responses → collect and delete those `device_tokens` rows (port of the stale-token cleanup in `FcmTokenService.SendToTokensAsync`).
+OneSignal takes a list of *users* per call and fans out on its own infrastructure:
 
-**Fan-out vs the 50-subrequest limit:** HTTP v1 has no multicast — one request per token. An ingest invocation also spends subrequests on scraping/Overpass/Nominatim. Spec: `sendPushToTokens(tokens)` sends up to **30** FCM requests inline; if more remain, it POSTs the remainder to the Worker's own `/internal/push-batch` route (guarded by `INGEST_API_KEY`) — each such self-invocation gets a fresh 50-subrequest budget and chains onward. Ceiling ≈ thousands of devices per alert; fine for the pilot, and the chaining is ~30 lines. (Workers Paid raises the limit to 1,000 if this ever gets ugly.)
+1. `POST https://api.onesignal.com/notifications`, header `Authorization: Key <ONESIGNAL_API_KEY>`.
+2. Body: `{app_id, target_channel: "push", include_aliases: {external_id: [...]}, headings: {en},
+   contents: {en}, data}` — data values all strings (`category`, `startTime`, `endTime`).
+3. `external_id` is our own `user_id`; the app sets it with `OneSignal.login()` on sign-in and
+   clears it with `OneSignal.logout()` on sign-out. Nothing device-specific is stored server-side.
+4. Chunk the audience at `MAX_ALIASES_PER_REQUEST` (2,000, the documented per-call cap) and send
+   chunks concurrently. Cost is ⌈users/2000⌉ subrequests, so a single invocation's budget covers
+   100,000 users — no chaining, and risk #5 in §3 is retired rather than mitigated.
 
-**Daily cleanup cron** (`30 3 * * *`): delete `device_tokens` with `last_seen_at` older than 60 days (port of `StaleTokenCleanupService`) + the retention jobs from §1.10.
+**Targeting stays entirely ours** (§1.5): polygon ray-cast and trigram name matching cannot be
+expressed as OneSignal segment filters, and keeping them here means the provider only ever
+receives the ids of users we already decided to notify — never a location.
+
+**No stale-token handling and no `device_tokens` table** (dropped in migration `0008`). OneSignal
+owns the device registrations and their unsubscribe lifecycle; a 200 response listing unknown
+aliases is normal churn, logged and ignored. The `/api/tokens` routes are gone with it, so the
+daily cleanup cron (`30 3 * * *`) now runs only the §1.10 retention jobs.
+
+**Missing credentials degrade, never fail:** without `ONESIGNAL_API_KEY`/`ONESIGNAL_APP_ID` the
+sender warns and skips, exactly as the FCM client did — a notification failure must never fail a
+request whose alert is already stored.
 
 ### 1.7 Ingestion port (`ingestion/`)
 
@@ -384,7 +395,7 @@ The standalone [overpass.py](backend/data/overpass/overpass.py) region-name expo
 
 - Release builds: `CITYSHIELD_API_URL=https://<worker-url>` (already enforced at bundle time by [config.ts](frontend/src/config.ts); workers.dev URLs are HTTPS, satisfying the cleartext restriction).
 - Add the account-deletion screen/action (§1.10) and a link to `/privacy`.
-- Everything else — auth flow, map, feed, FCM handling, preferences — untouched; §1.4's contract table is the guarantee.
+- Everything else — auth flow, map, feed, preferences — untouched; §1.4's contract table is the guarantee. (Push handling was later swapped to OneSignal, §1.6.)
 
 ### 1.12 Tests and CI
 
@@ -413,7 +424,7 @@ Daily budget at pilot scale (500 users, ~20 scraped messages/day):
 2. **30 s cron wall-clock.** Handled structurally (§1.7: 2 msgs/source/tick, deadline guard, cursor retry). Worst case is delayed, never lost, alerts.
 3. **10 ms CPU on polygon building.** Mitigated in the design (§1.9); measurable via `wrangler tail` CPU metrics; $5/mo escape hatch.
 4. **LLM quality drop vs qwen3.5 on Bulgarian.** Gated by the §4 model eval before cutover; model is a config var.
-5. **50-subrequest fan-out ceiling.** Chained self-invocation (§1.6) removes the hard ceiling.
+5. **50-subrequest fan-out ceiling.** ~~Chained self-invocation~~ — retired: OneSignal fans out per *user*, 2,000 per request, so one invocation covers 100,000 users (§1.6).
 
 ---
 
@@ -427,7 +438,7 @@ CityShield stores real personal data — **email, password hash, precise home lo
 |---|---|---|---|---|
 | Email + password hash | D1 `users` | Account/auth | Contract (Art. 6(1)(b)) | Until account deletion |
 | Precise lat/lng + region/street | D1 `users` | Location-matched alerts | **Consent** (Art. 6(1)(a)) — location is optional and user-initiated | Until changed/deleted |
-| FCM device tokens + device name/platform | D1 `device_tokens` | Push delivery | Contract | 60 days after last seen, or logout/deletion |
+| Push registration (device ↔ `user_id`) | **OneSignal**, not our D1 | Push delivery | Contract | Until logout (`OneSignal.logout()`) or account deletion |
 | Category prefs, bus-line subs | D1 | Feature | Contract | Until account deletion |
 | Request logs (IP, UA) | Workers Logs | Security/debugging | Legitimate interest (Art. 6(1)(f)) | Cloudflare default (~3–7 days); don't log request bodies containing passwords/locations |
 | Alert content | D1 `alerts` | Core service | n/a — public utility announcements, not personal data | 90 days (§1.10) |
@@ -439,7 +450,8 @@ Data-minimization notes: we store no names, no phone numbers, no analytics/track
 | Processor | What they see | Paperwork to do (all free, all self-service) |
 |---|---|---|
 | **Cloudflare** (Workers/D1/AI) | Everything in transit + at rest | Accept the Cloudflare **Data Processing Addendum** (auto-incorporated into the self-serve terms; download a copy). Cloudflare is EU-US **Data Privacy Framework**-certified and offers SCCs. Create the D1 database with `--location=weur` so data-at-rest sits in Western Europe (§3.3). Workers execute at edge locations globally — that's data-in-transit processing covered by the DPA/SCCs; Workers AI inputs are alert texts (not personal data). |
-| **Google / Firebase (FCM)** | Push tokens, notification content | Accept Google's **Data Processing Terms** in the Firebase console; list Google as a processor in the privacy policy. Push content is outage info, not personal data. |
+| **OneSignal** (US) | `user_id` as external id, device push registration, notification content | Accept OneSignal's **DPA** and record its transfer mechanism (DPF or SCCs); list it as a processor in the privacy policy. Never receives location, email or preferences. |
+| **Google / Firebase (FCM)** | The Android delivery channel beneath OneSignal | Accept Google's **Data Processing Terms** in the Firebase console; list Google as a processor. Push content is outage info, not personal data. |
 | **OSM Foundation (Nominatim)** | ⚠️ The user's **precise coordinates** on `PUT /api/auth/location`, and street names during ingest | OSMF's public instance has **no DPA** — this is the one genuinely awkward transfer. Handle it with: (a) explicit disclosure + consent in the location-setting flow ("your coordinates are sent to OpenStreetMap's Nominatim service to determine your district"); (b) the request carries no user identifier and originates from Cloudflare's IP, not the user's — genuinely low-risk pseudonymized processing; (c) link OSMF's privacy policy. If you ever want this fully clean: self-host Nominatim (overkill now) or switch to a commercial EU geocoder with a DPA. Documented decision: keep Nominatim + disclose. |
 | Overpass (kumi.systems) | Street names only | No personal data; nothing needed beyond fair-use compliance. |
 
@@ -456,14 +468,14 @@ Data-minimization notes: we store no names, no phone numbers, no analytics/track
 - TLS everywhere by default (workers.dev / Cloudflare-proxied domain); Android release builds already refuse cleartext.
 - PBKDF2 at max permitted iterations, per-user salt, timing-safe compare, login throttling (§1.4).
 - Secrets only in `wrangler secret` (never in git — `.dev.vars` is gitignored); JWT key ≥ 48 random bytes; rotate by re-`put` + redeploy.
-- Ingest/test endpoint gated by `INGEST_API_KEY`; internal push-batch route gated the same way.
-- Least privilege: create a dedicated Google service account with **only** the "Firebase Cloud Messaging API" role for the `FCM_SERVICE_ACCOUNT` secret (don't reuse the all-powerful default admin SA).
+- Ingest/test endpoint gated by `INGEST_API_KEY`.
+- Least privilege: the Firebase service account uploaded to OneSignal carries **only** the "Firebase Cloud Messaging API" role (not the default admin SA). The `ONESIGNAL_API_KEY` secret can send pushes but cannot read subscriber data.
 - Backups/integrity: D1 Time Travel gives point-in-time restore (7 days on free) — document `wrangler d1 time-travel` in the README ops section.
-- **Breach plan (Art. 33/34):** 72-hour notification to CPDP; the practical prep is: know what's logged (Workers Logs), keep the processor list (§2.2) current, and write a one-paragraph internal runbook: detect → assess scope via logs → notify CPDP via cpdp.bg form → notify affected users via FCM/email if high-risk.
+- **Breach plan (Art. 33/34):** 72-hour notification to CPDP; the practical prep is: know what's logged (Workers Logs), keep the processor list (§2.2) current, and write a one-paragraph internal runbook: detect → assess scope via logs → notify CPDP via cpdp.bg form → notify affected users via push/email if high-risk.
 
 ### 2.5 Privacy policy & terms (ship with the app, §1.10 hosts it at `/privacy`)
 
-Bulgarian + English. Must cover: controller identity + contact email; the inventory table of §2.1 in prose; purposes and lawful bases; processors (Cloudflare, Google FCM, OSMF Nominatim) and transfer safeguards (DPF/SCCs); retention periods; all Art. 15–21 rights + how to exercise them (in-app + email); right to lodge a complaint with CPDP; no automated decision-making with legal effects; no sale of data; cookies — none (API only). Also complete the **Google Play Data Safety form** consistently with this policy (collects: email, precise location, device IDs — all "app functionality", none shared for ads).
+Bulgarian + English. Must cover: controller identity + contact email; the inventory table of §2.1 in prose; purposes and lawful bases; processors (Cloudflare, OneSignal, Google FCM, OSMF Nominatim) and transfer safeguards (DPF/SCCs); retention periods; all Art. 15–21 rights + how to exercise them (in-app + email); right to lodge a complaint with CPDP; no automated decision-making with legal effects; no sale of data; cookies — none (API only). Also complete the **Google Play Data Safety form** consistently with this policy (collects: email, precise location, device IDs — all "app functionality", none shared for ads).
 
 You don't need: a DPO (Art. 37 thresholds not met), a DPIA (no large-scale systematic monitoring — but keep this answer written down with one paragraph of reasoning), or a data-protection officer registration with CPDP (Bulgaria abolished general registration post-GDPR).
 
@@ -472,7 +484,7 @@ You don't need: a DPO (Art. 37 thresholds not met), a DPIA (no large-scale syste
 - **OSM attribution (ODbL):** the app's Leaflet map must show "© OpenStreetMap contributors" (verify it survives in the WebView), and the About screen should credit Nominatim/Overpass. Also mind the **OSM tile usage policy** — if the app gets popular, switch tiles to a provider with a free tier (e.g., Carto) rather than hammering osm.org tiles.
 - **Nominatim usage policy:** ≤1 req/s, descriptive User-Agent, caching — all satisfied by §1.5's design; keep it that way.
 - **Scraped sources:** factual public-safety announcements from official operator/agency pages — facts aren't copyrightable, volumes are trivial (a page every 10 min), and EU's DSM Art. 4 text-and-data-mining exception covers the automated extraction; we don't republish full articles (outage notices are short operational texts). Keep per-source polling ≥10 min, honor robots.txt if any of the four sources adds one, and show the source name in the app (the category labels already do). Risk is low; if a source ever objects, that category gets switched off — no legal exposure worth pre-lawyering.
-- **Firebase terms:** already accepted when the project was created; nothing new.
+- **Firebase terms:** already accepted when the project was created; nothing new. **OneSignal's DPA is new** and must be accepted before release (§2.2).
 
 ---
 
@@ -481,7 +493,7 @@ You don't need: a DPO (Art. 37 thresholds not met), a DPIA (no large-scale syste
 ### 3.1 Accounts
 
 1. **Cloudflare**: dash.cloudflare.com → sign up (free, no credit card for the free plan). Use a team-accessible email, not a personal one. Enable 2FA.
-2. **Firebase**: keep the existing project (the `fcm.json` service account works, but per §2.4 create a fresh minimal-role service account: Google Cloud console → IAM → Service Accounts → create → grant "Firebase Cloud Messaging API Admin" → create JSON key).
+2. **OneSignal**: create the app, and under Android settings upload a minimal-role Firebase service-account JSON (Google Cloud console → IAM → Service Accounts → create → grant "Firebase Cloud Messaging API Admin" → create JSON key) and set the Android package name. Copy the App ID and REST API Key.
 3. No other accounts needed. (No domain required — `cityshield.<account>.workers.dev` is fine for launch. A custom domain later: register/transfer via Cloudflare Registrar ≈ $10/yr, then it's one click to attach to the Worker.)
 
 ### 3.2 Local tooling
@@ -506,7 +518,7 @@ node seeds/generate-seed.mjs && npx wrangler d1 execute cityshield-db --remote -
 # secrets
 openssl rand -base64 48 | npx wrangler secret put JWT_KEY
 openssl rand -hex 32    | npx wrangler secret put INGEST_API_KEY
-npx wrangler secret put FCM_SERVICE_ACCOUNT   # paste the service-account JSON
+npx wrangler secret put ONESIGNAL_API_KEY     # OneSignal REST API key
 ```
 
 Workers AI needs no provisioning — the `ai` binding in `wrangler.jsonc` is enough. Optionally create an AI Gateway named `cityshield` in the dashboard (AI → AI Gateway) for request logging (§1.8).
@@ -545,7 +557,7 @@ Dashboard → My Profile → API Tokens → create token from the "Edit Cloudfla
 
 **Phase 1 — data & API core:** migrations, seeds, fuzzy.ts, auth (register/login/me/location), tokens, preferences, contract tests. *Milestone: RN debug app pointed at `wrangler dev` passes a full manual auth+prefs flow.*
 
-**Phase 2 — alerts read/write path:** alert-service.ts, geocoding + cache, FCM v1 client, `submit-data` + `recent`. *Milestone: injecting a test alert via curl produces a push on a real device and renders on the map.*
+**Phase 2 — alerts read/write path:** alert-service.ts, geocoding + cache, push client, `submit-data` + `recent`. *Milestone: injecting a test alert via curl produces a push on a real device and renders on the map.*
 
 **Phase 3 — ingestion:** scrape.ts + fixtures, ai.ts, polygon.ts, sources, runner. *Milestone: deployed Worker left running for 48 h processes real source messages end-to-end (verify against the sources manually).*
 

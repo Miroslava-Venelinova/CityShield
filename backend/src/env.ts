@@ -29,13 +29,16 @@ export interface Env {
   JWT_ISSUER: string;
   JWT_AUDIENCE: string;
   JWT_EXPIRE_MINUTES: string;
-  /** Public origin of this Worker (for push-batch self-chaining from cron); optional — fetch handlers derive it from the request. */
+  /** Public origin of this Worker, used to build verification/reset links from cron, which has no request to derive one from. */
   SELF_URL?: string;
+  /** OneSignal app the pushes are sent from. Not a secret (it ships in the mobile app too). */
+  ONESIGNAL_APP_ID?: string;
 
   // secrets
   JWT_KEY: string;
   INGEST_API_KEY: string;
-  FCM_SERVICE_ACCOUNT?: string;
+  /** OneSignal REST API key. Optional: missing push config degrades to a warning, never a 500. */
+  ONESIGNAL_API_KEY?: string;
   // NOTE: mail delivery is mocked (core/mailer.ts) — no provider credentials
   // yet, by decision. Whatever provider we settle on adds its key here.
 }

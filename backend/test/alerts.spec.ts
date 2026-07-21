@@ -4,7 +4,7 @@
 import { env, fetchMock } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAlertFeedCache } from "../src/api/alerts";
-import { clearFcmTokenCache } from "../src/core/fcm";
+import { sendPushToUsers } from "../src/core/onesignal";
 import { clearRefCaches } from "../src/db/queries";
 import { api, jsonInit } from "./helpers";
 
@@ -32,7 +32,6 @@ interface TestUser {
   lng?: number;
   receivesAll?: boolean;
   busLines?: string[];
-  fcmToken?: string;
 }
 
 let seq = 0;
@@ -55,11 +54,6 @@ async function createUser(opts: Omit<TestUser, "userId"> = {}): Promise<string> 
   ).bind(userId, `alerts-user-${++seq}@example.com`, opts.lat ?? null, opts.lng ?? null,
     regionId, streetId, opts.receivesAll ? 1 : 0,
     JSON.stringify(opts.busLines ?? []), now, now).run();
-  if (opts.fcmToken) {
-    await env.DB.prepare(
-      `INSERT INTO device_tokens (user_id, token, created_at, last_seen_at) VALUES (?, ?, ?, ?)`,
-    ).bind(userId, opts.fcmToken, now, now).run();
-  }
   return userId;
 }
 
@@ -441,48 +435,55 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
   });
 });
 
-describe("FCM send + stale-token cleanup", () => {
-  it("sends via HTTP v1 and deletes definitively-dead tokens", async () => {
-    clearFcmTokenCache();
+// Push credentials are absent in every other test, which is what keeps them
+// off the network (sendPushToUsers warns and skips). These tests supply them.
+type PushEnv = { ONESIGNAL_APP_ID?: string; ONESIGNAL_API_KEY?: string };
 
-    // Generate a throwaway RSA key so the OAuth JWT can really be signed.
-    const keyPair = await crypto.subtle.generateKey(
-      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-      true, ["sign", "verify"]) as CryptoKeyPair;
-    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey) as ArrayBuffer);
-    let bin = "";
-    for (const b of pkcs8) bin += String.fromCharCode(b);
-    const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(bin)}\n-----END PRIVATE KEY-----\n`;
+function withPushCredentials(): () => void {
+  (env as PushEnv).ONESIGNAL_APP_ID = "test-app-id";
+  (env as PushEnv).ONESIGNAL_API_KEY = "test-api-key";
+  return () => {
+    delete (env as PushEnv).ONESIGNAL_APP_ID;
+    delete (env as PushEnv).ONESIGNAL_API_KEY;
+  };
+}
 
-    (env as { FCM_SERVICE_ACCOUNT?: string }).FCM_SERVICE_ACCOUNT = JSON.stringify({
-      project_id: "test-proj",
-      client_email: "svc@test-proj.iam.gserviceaccount.com",
-      private_key: pem,
-      token_uri: "https://oauth2.googleapis.com/token",
-    });
+interface CapturedBody {
+  app_id: string;
+  include_aliases: { external_id: string[] };
+  headings: { en: string };
+  contents: { en: string };
+  data: Record<string, string>;
+}
 
+/**
+ * Intercepts `times` push sends and records their parsed bodies. Recording
+ * happens in the reply callback, not in a body matcher — undici may run a
+ * matcher more than once per request, which would double-count.
+ */
+function interceptPush(times: number): CapturedBody[] {
+  const captured: CapturedBody[] = [];
+  fetchMock.get("https://api.onesignal.com")
+    .intercept({ path: "/notifications", method: "POST" })
+    .reply((opts) => {
+      captured.push(JSON.parse(String(opts.body)) as CapturedBody);
+      return {
+        statusCode: 200,
+        data: JSON.stringify({ id: "notif-1", recipients: 1 }),
+        responseOptions: { headers: { "Content-Type": "application/json" } },
+      };
+    })
+    .times(times);
+  return captured;
+}
+
+describe("push send", () => {
+  it("addresses users by external_id in a single request", async () => {
+    const restore = withPushCredentials();
     try {
-      fetchMock.get("https://oauth2.googleapis.com")
-        .intercept({ path: "/token", method: "POST" })
-        .reply(200, JSON.stringify({ access_token: "test-access-token", expires_in: 3600 }),
-          { headers: { "Content-Type": "application/json" } });
-
-      // Sends run concurrently — match interceptors on the token in the body
-      // so the 200/404 replies can't race onto the wrong request.
-      const fcm = fetchMock.get("https://fcm.googleapis.com");
-      fcm.intercept({
-        path: "/v1/projects/test-proj/messages:send", method: "POST",
-        body: (b) => String(b).includes("token-alive"),
-      }).reply(200, JSON.stringify({ name: "projects/test-proj/messages/1" }));
-      fcm.intercept({
-        path: "/v1/projects/test-proj/messages:send", method: "POST",
-        body: (b) => String(b).includes("token-dead"),
-      }).reply(404, JSON.stringify({
-        error: { status: "NOT_FOUND", details: [{ errorCode: "UNREGISTERED" }] },
-      }));
-
-      await createUser({ fcmToken: "token-alive" });
-      await createUser({ fcmToken: "token-dead" });
+      const captured = interceptPush(1);
+      const alice = await createUser({ region: "Аспарухово" });
+      const bob = await createUser({ region: "Аспарухово" });
 
       const res = await submit(basePayload({
         processed_data: { locations: [], city_wide: true },
@@ -490,11 +491,61 @@ describe("FCM send + stale-token cleanup", () => {
       expect((await res.json() as SubmitResponse).notified_count).toBe(2);
       fetchMock.assertNoPendingInterceptors();
 
-      const remaining = await env.DB.prepare("SELECT token FROM device_tokens").all();
-      expect(remaining.results.map((r) => (r as any).token)).toEqual(["token-alive"]);
+      // One request, not one per device: this is the whole point of the
+      // provider — fan-out happens on their side, not in the Worker.
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.app_id).toBe("test-app-id");
+      expect([...captured[0]!.include_aliases.external_id].sort())
+        .toEqual([alice, bob].sort());
+      expect(captured[0]!.headings.en).toBe("Авария");
+      expect(captured[0]!.contents.en).toContain("Спиране на водата");
     } finally {
-      delete (env as { FCM_SERVICE_ACCOUNT?: string }).FCM_SERVICE_ACCOUNT;
-      clearFcmTokenCache();
+      restore();
+    }
+  });
+
+  it("does not touch the network when credentials are unset", async () => {
+    // No interceptor and net connect is disabled, so any outbound call throws.
+    await createUser({ region: "Аспарухово" });
+    const res = await submit(basePayload({
+      processed_data: { locations: [], city_wide: true },
+    }));
+    // The alert is still stored and the audience still reported.
+    expect((await res.json() as SubmitResponse).notified_count).toBe(1);
+  });
+});
+
+describe("push chunking", () => {
+  // The migration rests on this: an audience larger than one request's alias
+  // cap must split cleanly, with nobody dropped at the boundary. Driven
+  // directly rather than through D1 so the boundary can be tested at its real
+  // size without seeding thousands of users.
+  it("splits a >2,000-user audience into whole, disjoint chunks", async () => {
+    const restore = withPushCredentials();
+    try {
+      const userIds = Array.from({ length: 2_500 }, (_, i) => `user-${i}`);
+      const captured = interceptPush(2);
+
+      const result = await sendPushToUsers(
+        env, userIds, { title: "t", body: "b", data: { category: "vik" } });
+
+      fetchMock.assertNoPendingInterceptors();
+      expect(captured).toHaveLength(2);
+
+      const chunks = captured.map((c) => c.include_aliases.external_id);
+      expect(chunks.map((c) => c.length).sort((a, b) => a - b)).toEqual([500, 2_000]);
+
+      // Every user appears exactly once across the chunks.
+      const all = chunks.flat();
+      expect(all).toHaveLength(2_500);
+      expect(new Set(all).size).toBe(2_500);
+      expect([...new Set(all)].sort()).toEqual([...userIds].sort());
+
+      // `recipients: 1` per stubbed response — 2 reached, the rest unconfirmed.
+      expect(result.sent).toBe(2);
+      expect(result.failed).toBe(2_498);
+    } finally {
+      restore();
     }
   });
 });

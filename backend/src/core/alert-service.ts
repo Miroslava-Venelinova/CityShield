@@ -7,10 +7,11 @@ import { bestMatch, SIMILARITY_THRESHOLD } from "./fuzzy";
 import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
 import { pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
-import { type PushNotification, sendPushToTokens } from "./fcm";
+import { type PushNotification, sendPushToUsers } from "./onesignal";
 import type { Env } from "../env";
 
-// FCM's total message limit is 4 KB; keep push bodies well under it.
+// Push payloads are size-limited by the provider (and by Android below it);
+// keep bodies well under any of those ceilings.
 const MAX_NOTIFICATION_BODY_LENGTH = 1000;
 
 // Marker color bucket per source category (danger | warning | info).
@@ -140,7 +141,7 @@ async function getUserIdsInPolygonRange(env: Env, polygonJson: Json): Promise<st
 
 /**
  * Port of SendUsersNotificationAsync — same decision tree, returns the
- * notified user ids. `selfUrl` enables >30-token fan-out chaining (§1.6).
+ * notified user ids.
  */
 export async function sendUsersNotification(
   env: Env,
@@ -152,7 +153,6 @@ export async function sendUsersNotification(
   endTime: string | null,
   cityWide: boolean | null,
   busLines: string[] | null,
-  selfUrl?: string,
 ): Promise<string[]> {
   // ── 1. Gather target users ─────────────────────────────────────────────
   let userIds: string[] = [];
@@ -210,8 +210,8 @@ export async function sendUsersNotification(
   const filteredIds = allIds.filter((id) => !disabled.has(id));
   if (filteredIds.length === 0) return filteredIds;
 
-  // ── 3. FCM data payload — all values must be strings ───────────────────
-  const fcmData = {
+  // ── 3. Push data payload — all values must be strings ──────────────────
+  const pushData = {
     category,
     startTime: startTime ?? "",
     endTime: endTime ?? "",
@@ -224,15 +224,16 @@ export async function sendUsersNotification(
       : startTime ? ` (from ${startTime})`
       : ` (until ${endTime})`;
   }
-  // Scraped content is unbounded, but FCM rejects oversized payloads —
+  // Scraped content is unbounded, but oversized payloads are rejected —
   // cap the push body.
   if (fullBody.length > MAX_NOTIFICATION_BODY_LENGTH)
     fullBody = fullBody.slice(0, MAX_NOTIFICATION_BODY_LENGTH - 1) + "…";
 
   // ── 5. Send ────────────────────────────────────────────────────────────
-  const notification: PushNotification = { title, body: fullBody, data: fcmData };
-  const tokens = await q.getTokensForUsers(env, filteredIds);
-  if (tokens.length > 0) await sendPushToTokens(env, tokens, notification, selfUrl);
+  // Users are addressed by id (OneSignal external_id), so there is no device
+  // lookup here — the provider resolves users to devices.
+  const notification: PushNotification = { title, body: fullBody, data: pushData };
+  await sendPushToUsers(env, filteredIds, notification);
 
   return filteredIds;
 }

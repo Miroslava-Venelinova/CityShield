@@ -24,7 +24,7 @@ const POLICY_HTML = `<!doctype html>
 <body>
 
 <h1>Политика за поверителност на CityShield</h1>
-<p><em>Последна редакция: 19 юли 2026 г.</em></p>
+<p><em>Последна редакция: 21 юли 2026 г.</em></p>
 
 <p>CityShield е мобилно приложение, което известява жителите на Варна за аварии
 и прекъсвания (вода, ток, парно, градски транспорт). Администратор на
@@ -36,7 +36,7 @@ const POLICY_HTML = `<!doctype html>
 <tr><th>Данни</th><th>Цел</th><th>Правно основание</th><th>Срок</th></tr>
 <tr><td>Имейл адрес и хеширана парола</td><td>Профил и вход</td><td>Договор (чл. 6(1)(б) ОРЗД)</td><td>До изтриване на профила</td></tr>
 <tr><td>Точни координати + квартал/улица</td><td>Известия за вашия район</td><td>Съгласие (чл. 6(1)(а)) — задавате местоположение само по ваш избор</td><td>До промяна, изчистване или изтриване</td></tr>
-<tr><td>Токени за известия (FCM), вид устройство</td><td>Изпращане на известия</td><td>Договор</td><td>60 дни след последна активност или при изход/изтриване</td></tr>
+<tr><td>Регистрация за известия (при OneSignal, свързана с идентификатора на профила ви)</td><td>Изпращане на известия</td><td>Договор</td><td>До изход от профила или изтриването му</td></tr>
 <tr><td>Настройки за известия и абонаменти за линии</td><td>Функционалност</td><td>Договор</td><td>До изтриване на профила</td></tr>
 <tr><td>Сървърни логове (IP, заявки)</td><td>Сигурност и отстраняване на проблеми</td><td>Легитимен интерес (чл. 6(1)(е))</td><td>Няколко дни (Cloudflare)</td></tr>
 </table>
@@ -47,7 +47,8 @@ const POLICY_HTML = `<!doctype html>
 <h2>Обработващи лични данни</h2>
 <ul>
 <li><strong>Cloudflare</strong> (хостинг, база данни в Западна Европа) — по Споразумение за обработка на данни; сертифициран по EU-US Data Privacy Framework.</li>
-<li><strong>Google Firebase Cloud Messaging</strong> — доставка на известия; по Условията за обработка на данни на Google.</li>
+<li><strong>OneSignal</strong> (САЩ) — доставка на push известия. Получава идентификатора на профила ви и регистрацията на устройството; не получава местоположението ви. По Споразумението за обработка на данни на OneSignal и стандартни договорни клаузи.</li>
+<li><strong>Google Firebase Cloud Messaging</strong> — техническата доставка до устройства с Android, използвана от OneSignal; по Условията за обработка на данни на Google.</li>
 <li><strong>OpenStreetMap Nominatim</strong> — при задаване на местоположение вашите координати се изпращат до услугата Nominatim на OpenStreetMap Foundation, за да се определи кварталът/улицата. Заявката не съдържа ваш идентификатор. Вижте <a href="https://osmfoundation.org/wiki/Privacy_Policy">политиката на OSMF</a>.</li>
 </ul>
 
@@ -68,7 +69,7 @@ const POLICY_HTML = `<!doctype html>
 
 <div class="en">
 <h1>CityShield Privacy Policy (English)</h1>
-<p><em>Last revised: 19 July 2026</em></p>
+<p><em>Last revised: 21 July 2026</em></p>
 
 <p>CityShield is a mobile app that notifies residents of Varna, Bulgaria about
 utility outages (water, power, heating, public transport). The data
@@ -80,7 +81,7 @@ controller is the CityShield operator — contact
 <tr><th>Data</th><th>Purpose</th><th>Lawful basis</th><th>Retention</th></tr>
 <tr><td>Email + hashed password</td><td>Account/sign-in</td><td>Contract (Art. 6(1)(b) GDPR)</td><td>Until account deletion</td></tr>
 <tr><td>Precise coordinates + district/street</td><td>Location-matched alerts</td><td>Consent (Art. 6(1)(a)) — location is optional and user-initiated</td><td>Until changed, cleared or deleted</td></tr>
-<tr><td>Push tokens (FCM), device type</td><td>Notification delivery</td><td>Contract</td><td>60 days after last activity, or on logout/deletion</td></tr>
+<tr><td>Push registration (held by OneSignal, keyed to your account id)</td><td>Notification delivery</td><td>Contract</td><td>Until logout or account deletion</td></tr>
 <tr><td>Notification preferences, bus-line subscriptions</td><td>App functionality</td><td>Contract</td><td>Until account deletion</td></tr>
 <tr><td>Server logs (IP, requests)</td><td>Security/debugging</td><td>Legitimate interest (Art. 6(1)(f))</td><td>A few days (Cloudflare)</td></tr>
 </table>
@@ -90,7 +91,8 @@ public utility announcements, not personal data; kept for 90 days.</p>
 <h2>Processors</h2>
 <ul>
 <li><strong>Cloudflare</strong> (hosting; database at rest in Western Europe) — under its Data Processing Addendum; EU-US Data Privacy Framework certified.</li>
-<li><strong>Google Firebase Cloud Messaging</strong> — push delivery; under Google's Data Processing Terms.</li>
+<li><strong>OneSignal</strong> (USA) — push delivery. Receives your account identifier and your device's push registration; it does not receive your location. Under OneSignal's Data Processing Addendum and standard contractual clauses.</li>
+<li><strong>Google Firebase Cloud Messaging</strong> — the technical delivery channel to Android devices, used by OneSignal; under Google's Data Processing Terms.</li>
 <li><strong>OpenStreetMap Nominatim</strong> — when you set your location, your coordinates are sent to the OpenStreetMap Foundation's Nominatim service to determine your district/street. The request carries no user identifier. See the <a href="https://osmfoundation.org/wiki/Privacy_Policy">OSMF privacy policy</a>.</li>
 </ul>
 

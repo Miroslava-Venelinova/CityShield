@@ -2,17 +2,16 @@
 import React, {useState, useEffect} from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  StatusBar, Alert, Switch, Platform, PermissionsAndroid,
+  StatusBar, Alert, Switch,
   ActivityIndicator, Modal, Linking, Share,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
-import {TranslationKey} from '../i18n/translations';
-import {tokensApi, authApi} from '../services/api';
+import {authApi} from '../services/api';
 import {API_BASE_URL} from '../config';
 import {errorMessageKey} from '../services/errors';
-import {getFCMToken, registerTokenRefreshHandler} from '../services/fcm';
+import {hasPushPermission, requestPushPermission} from '../services/push';
 import {colors, spacing, radius, font} from '../theme';
 import Icon, {IconName} from '../components/icons';
 import LocationPickerMap from '../components/LocationPickerMap';
@@ -54,23 +53,6 @@ function decodeJwt(token: string): Record<string, string> {
   } catch { return {}; }
 }
 
-// ── Request POST_NOTIFICATIONS (Android 13+) ───────────────────────────────────
-async function requestNotificationPermission(
-  t: (key: TranslationKey) => string,
-): Promise<boolean> {
-  if (Platform.OS !== 'android') return true;
-  if ((Platform.Version as number) < 33) return true;
-  const already = await PermissionsAndroid.check(
-    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-  if (already) return true;
-  const result = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-    {title: t('profile.permTitle'),
-     message: t('profile.permMessage'),
-     buttonPositive: t('profile.permAllow'), buttonNegative: t('profile.permDeny')});
-  return result === PermissionsAndroid.RESULTS.GRANTED;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
@@ -79,9 +61,6 @@ export default function ProfileScreen() {
   const {language, setLanguage, t} = useI18n();
 
   const [alertsEnabled,    setAlertsEnabled]    = useState(false);
-  const [fcmToken,         setFcmToken]          = useState<string | null>(null);
-  const [fcmLoading,       setFcmLoading]        = useState(false);
-  const [deviceRegistered, setDeviceRegistered]  = useState(false);
   const [locationLoading,  setLocationLoading]   = useState(false);
   const [coordModalVisible, setCoordModalVisible] = useState(false);
   const [pickedCoords, setPickedCoords] =
@@ -99,55 +78,22 @@ export default function ProfileScreen() {
     ? t('profile.pushEnabled')
     : t('profile.pushTapToEnable');
 
-  const fcmDisplay = fcmToken
-    ? fcmToken.slice(0, 14) + '…' + fcmToken.slice(-6)
-    : '—';
-
   // ── Mount ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      if (Platform.OS !== 'android' || (Platform.Version as number) < 33) {
-        setAlertsEnabled(true);
-      } else {
-        const granted = await PermissionsAndroid.check(
-          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-        setAlertsEnabled(granted);
-      }
-      await refreshFcmToken();
+      setAlertsEnabled(hasPushPermission());
       // Picks up a verification that happened in the browser since last load.
       await refreshProfile();
     })();
-
-    const unsubRefresh = registerTokenRefreshHandler(async newToken => {
-      setFcmToken(newToken);
-      if (token) {
-        try {
-          await tokensApi.register(
-            {token: newToken, platform: Platform.OS,
-             deviceName: `${Platform.OS} Device`}, token);
-        } catch { /* best-effort */ }
-      }
-    });
-
-    return () => { unsubRefresh(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const refreshFcmToken = async () => {
-    setFcmLoading(true);
-    try {
-      const fetched = await getFCMToken();
-      setFcmToken(fetched);
-    } catch {
-      setFcmToken(null);
-    } finally {
-      setFcmLoading(false);
-    }
-  };
-
   const handleAlertsToggle = async (value: boolean) => {
     if (value) {
-      const granted = await requestNotificationPermission(t);
+      // OneSignal drives the Android 13+ POST_NOTIFICATIONS prompt so its SDK
+      // stays in step with the OS permission — there is no separate device
+      // registration step anymore, the subscription is created for us.
+      const granted = await requestPushPermission();
       setAlertsEnabled(granted);
       if (!granted) {
         Alert.alert(t('profile.permDeniedTitle'), t('profile.permDeniedMsg'));
@@ -157,28 +103,11 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleRegisterDevice = async () => {
-    if (!fcmToken || !token) return;
-    setFcmLoading(true);
-    try {
-      await tokensApi.register(
-        {token: fcmToken, platform: Platform.OS,
-         deviceName: `${Platform.OS} Device`}, token);
-      setDeviceRegistered(true);
-      Alert.alert(t('profile.deviceRegisteredTitle'),
-        t('profile.deviceRegisteredMsg'));
-    } catch (err: unknown) {
-      Alert.alert(t('profile.registrationFailed'), t(errorMessageKey(err)));
-    } finally {
-      setFcmLoading(false);
-    }
-  };
-
   const handleLogout = () => {
     Alert.alert(t('profile.signOut'), t('profile.signOutConfirm'), [
       {text: t('common.cancel'), style: 'cancel'},
       {text: t('profile.signOut'), style: 'destructive',
-       onPress: () => logout(fcmToken ?? undefined)},
+       onPress: () => logout()},
     ]);
   };
 
@@ -434,40 +363,6 @@ export default function ProfileScreen() {
             value={alertsEnabled}
             onChange={handleAlertsToggle}
           />
-        </Section>
-
-        {/* ── Device ── */}
-        <Section title={t('profile.sectionDevice')}>
-          <TouchableOpacity
-            style={styles.actionRow}
-            onPress={handleRegisterDevice}
-            activeOpacity={0.7}
-            disabled={deviceRegistered || fcmLoading}>
-            <RowIcon name="smartphone" />
-            <View style={styles.actionText}>
-              <Text style={styles.actionLabel}>
-                {deviceRegistered ? t('profile.deviceRegistered') : t('profile.registerDevice')}
-              </Text>
-              <Text style={styles.actionSub}>
-                {deviceRegistered
-                  ? t('profile.deviceRegisteredSub')
-                  : t('profile.registerDeviceSub')}
-              </Text>
-            </View>
-            {fcmLoading
-              ? <ActivityIndicator size="small" color={colors.primaryLight} />
-              : deviceRegistered
-                ? <Icon name="check" size={18} color={colors.success} />
-                : <Icon name="chevron-right" size={18} color={colors.textMuted} />}
-          </TouchableOpacity>
-          <Divider />
-          <View style={styles.infoRow}>
-            <RowIcon name="key" />
-            <View style={styles.infoTextGroup}>
-              <Text style={styles.infoLabel}>{t('profile.fcmToken')}</Text>
-              <Text style={styles.infoValue} numberOfLines={1}>{fcmDisplay}</Text>
-            </View>
-          </View>
         </Section>
 
         {/* ── Account & About ── */}

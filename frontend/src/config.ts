@@ -24,3 +24,18 @@ if (!__DEV__ && !PROD_API_URL) {
 }
 
 export const API_BASE_URL = __DEV__ ? 'http://10.0.2.2:5276' : PROD_API_URL!;
+
+// OneSignal app id (dashboard → Settings → Keys & IDs). Inlined at bundle time
+// like the API URL above. Not a secret — it identifies the app, and the REST
+// API key that can actually send is backend-only. A release build without it
+// would install fine and then never receive a push, so fail loudly instead.
+const ONESIGNAL_ID = process.env.ONESIGNAL_APP_ID;
+
+if (!__DEV__ && !ONESIGNAL_ID) {
+  throw new Error(
+    'ONESIGNAL_APP_ID was not set when this release bundle was built. ' +
+      'Export it before bundling, e.g. ONESIGNAL_APP_ID=00000000-0000-0000-0000-000000000000',
+  );
+}
+
+export const ONESIGNAL_APP_ID = ONESIGNAL_ID ?? '';

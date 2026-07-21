@@ -6,16 +6,15 @@ import { describe, expect, it } from "vitest";
 import { api, jsonInit, registerAndLogin } from "./helpers";
 
 describe("DELETE /api/auth/me (erasure)", () => {
-  it("deletes the account and cascades to tokens + preferences", async () => {
+  it("deletes the account and cascades to preferences", async () => {
     const { token, email } = await registerAndLogin();
-    await api("/api/tokens", jsonInit("POST", { token: "gdpr-tok" }, token));
     await api("/api/preferences/vik", jsonInit("PUT", { isEnabled: false }, token));
 
     const res = await api("/api/auth/me", { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
     expect(res.status).toBe(204);
 
     expect(await env.DB.prepare("SELECT 1 FROM users WHERE email = ?").bind(email).first()).toBeNull();
-    expect(await env.DB.prepare("SELECT 1 FROM device_tokens WHERE token = 'gdpr-tok'").first()).toBeNull();
+    expect(await env.DB.prepare("SELECT 1 FROM user_notification_preferences").first()).toBeNull();
     // The JWT no longer resolves to a user.
     expect((await api("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })).status).toBe(404);
   });
@@ -26,10 +25,8 @@ describe("DELETE /api/auth/me (erasure)", () => {
 });
 
 describe("GET /api/auth/me/export (portability)", () => {
-  it("returns profile, preferences and device metadata — without raw push tokens", async () => {
+  it("returns profile and preferences", async () => {
     const { token, email } = await registerAndLogin();
-    await api("/api/tokens",
-      jsonInit("POST", { token: "export-tok-secret", platform: "android", deviceName: "Pixel" }, token));
     await api("/api/preferences/heating", jsonInit("PUT", { isEnabled: false }, token));
 
     const res = await api("/api/auth/me/export", { headers: { Authorization: `Bearer ${token}` } });
@@ -39,14 +36,10 @@ describe("GET /api/auth/me/export (portability)", () => {
     expect(body.profile.email).toBe(email);
     expect(body.profile.subscribedBusLines).toEqual([]);
     expect(body.notificationPreferences).toEqual([{ category: "heating", isEnabled: false }]);
-    expect(body.devices).toEqual([{
-      platform: "android",
-      deviceName: "Pixel",
-      createdAt: body.devices[0].createdAt,
-      lastSeenAt: body.devices[0].lastSeenAt,
-    }]);
-    // The raw FCM token must not appear anywhere in the export.
-    expect(JSON.stringify(body)).not.toContain("export-tok-secret");
+    // Device registrations live with the push provider now, keyed by this id,
+    // so the export names the key rather than carrying device rows.
+    expect(body.profile.userId).toEqual(expect.any(String));
+    expect(body.devices).toBeUndefined();
   });
 });
 

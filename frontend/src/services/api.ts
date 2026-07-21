@@ -14,6 +14,8 @@ export interface RegisterRequest { email: string; password: string; }
 export interface LoginResponse   { token: string; refreshToken: string; }
 
 export interface UserDTO {
+  /** Registered with OneSignal as the external id, so pushes address the user. */
+  userId:        string;
   email:         string;
   latitude:      number | null;
   longitude:     number | null;
@@ -34,6 +36,7 @@ export interface UpdateLocationRequest {
 /** Everything GET /api/auth/me/export returns — GDPR Art. 20 portability. */
 export interface DataExportDTO {
   profile: {
+    userId:             string;
     email:              string;
     emailVerified:      boolean;
     latitude:           number | null;
@@ -46,20 +49,8 @@ export interface DataExportDTO {
     updatedOnUTC:       string;
   };
   notificationPreferences: {category: string; isEnabled: boolean}[];
-  devices: {
-    platform:   string | null;
-    deviceName: string | null;
-    createdAt:  string;
-    lastSeenAt: string;
-  }[];
+  // No `devices`: push registrations live with OneSignal, keyed by `userId`.
 }
-
-export interface RegisterTokenRequest {
-  token:       string;
-  platform?:   string;
-  deviceName?: string;
-}
-export interface UnregisterTokenRequest { token: string; }
 
 export interface NotificationPreferenceDTO {
   category:  string;
@@ -263,18 +254,6 @@ export const authApi = {
   /** Withdraw location consent: clears lat/lng + region/street. */
   clearLocation: (authToken: string): Promise<void> =>
     request<void>('/api/auth/location', {method: 'DELETE'}, authToken),
-};
-
-// ── Device tokens ─────────────────────────────────────────────────────────────
-
-export const tokensApi = {
-  register: (body: RegisterTokenRequest, authToken: string): Promise<void> =>
-    request<void>('/api/tokens',
-      {method: 'POST', body: JSON.stringify(body)}, authToken),
-
-  unregister: (body: UnregisterTokenRequest, authToken: string): Promise<void> =>
-    request<void>('/api/tokens',
-      {method: 'DELETE', body: JSON.stringify(body)}, authToken),
 };
 
 // ── Notification preferences ──────────────────────────────────────────────────

@@ -193,22 +193,6 @@ const en = {
   'profile.permDeniedTitle': 'Permission denied',
   'profile.permDeniedMsg':
     'Enable notifications in device Settings to receive alerts.',
-  'profile.permTitle': 'CityShield Notifications',
-  'profile.permMessage':
-    'CityShield needs permission to send you real-time alerts.',
-  'profile.permAllow': 'Allow',
-  'profile.permDeny': 'Deny',
-
-  'profile.sectionDevice': 'Device',
-  'profile.deviceRegistered': 'Device Registered',
-  'profile.registerDevice': 'Register This Device',
-  'profile.deviceRegisteredSub': 'Push notifications are enabled',
-  'profile.registerDeviceSub': 'Send your FCM token to the backend',
-  'profile.deviceRegisteredTitle': 'Device registered',
-  'profile.deviceRegisteredMsg':
-    'This device will now receive CityShield push notifications.',
-  'profile.registrationFailed': 'Registration Failed',
-  'profile.fcmToken': 'FCM Token',
 
   'profile.sectionAbout': 'About',
   'profile.email': 'Email',
@@ -481,22 +465,6 @@ const bg: Record<TranslationKey, string> = {
   'profile.permDeniedTitle': 'Отказано разрешение',
   'profile.permDeniedMsg':
     'Разрешете известията от настройките на устройството, за да получавате сигнали.',
-  'profile.permTitle': 'Известия от CityShield',
-  'profile.permMessage':
-    'CityShield се нуждае от разрешение, за да ви изпраща сигнали в реално време.',
-  'profile.permAllow': 'Разреши',
-  'profile.permDeny': 'Откажи',
-
-  'profile.sectionDevice': 'Устройство',
-  'profile.deviceRegistered': 'Устройството е регистрирано',
-  'profile.registerDevice': 'Регистрирай това устройство',
-  'profile.deviceRegisteredSub': 'Push известията са включени',
-  'profile.registerDeviceSub': 'Изпраща FCM токена ви към сървъра',
-  'profile.deviceRegisteredTitle': 'Устройството е регистрирано',
-  'profile.deviceRegisteredMsg':
-    'Това устройство вече ще получава push известия от CityShield.',
-  'profile.registrationFailed': 'Неуспешна регистрация',
-  'profile.fcmToken': 'FCM токен',
 
   'profile.sectionAbout': 'Информация',
   'profile.email': 'Имейл',

@@ -128,41 +128,51 @@ frontend/
     │   ├── RegisterScreen.tsx       Email + password only (no location at register)
     │   ├── HomeScreen.tsx           Alert dashboard — banner if no location set
     │   ├── NotificationsScreen.tsx  Inbox (persisted) + category toggles
-    │   └── ProfileScreen.tsx        Account, device token, location setup
+    │   └── ProfileScreen.tsx        Account, push permission, location setup
     ├── services/
     │   ├── api.ts                   All API calls — BASE_URL is here
-    │   ├── fcm.ts                   FCM token + message handlers
+    │   ├── push.ts                  OneSignal init, permission, user identity
     │   └── notifications.ts         Local notification storage (AsyncStorage)
     └── theme.ts                     Colors, fonts, spacing
 ```
 
 ---
 
-## Firebase push notifications
+## Push notifications (OneSignal)
 
-### Step A — Create a Firebase project
-1. Go to https://console.firebase.google.com
-2. **Add project** → give it a name → click through
-3. On the dashboard click **Add app** → Android icon
-4. Package name: **`com.cityshieldscaffold`** (must match exactly)
-5. Download **`google-services.json`** → place it at `android/app/google-services.json`
+Push goes through OneSignal, not Firebase directly. Android delivery still rides
+on FCM underneath, but those credentials live in the OneSignal dashboard — the
+app itself carries no `google-services.json` and no Firebase SDK.
 
-### Step B — Rebuild
-`build.sh` detects `google-services.json` and patches the Gradle files automatically:
-```cmd
-rmdir /s /q android
-make clean
+### Step A — Configure the OneSignal app
+1. In the OneSignal dashboard: **Settings → Push & In-App → Google Android**
+2. Upload the Firebase service-account JSON
+3. Set the **Android package name** to match `PACKAGE_NAME` in
+   [scripts/build.sh](scripts/build.sh) (`com.cityshield.fcmtest` by default).
+   A mismatch means the device subscribes and then silently receives nothing.
+4. Copy the **App ID** from **Settings → Keys & IDs**
+
+### Step B — Build with the app id
+`ONESIGNAL_APP_ID` is inlined at bundle time (see `src/config.ts`); a release
+build without it fails immediately rather than shipping a push-less app.
+```sh
+export ONESIGNAL_APP_ID=<app id>
 make build
 make install-host
 ```
 
-### Step C — Register the device
+### Step C — Subscribe the device
 1. Open the app → **Profile** tab
-2. Tap **Push Alerts** toggle → Allow
-3. Tap **Register This Device**
+2. Tap the **Push Alerts** toggle → Allow
+
+There is no "register device" step anymore: signing in calls `OneSignal.login()`
+with your account id, and the backend targets that id directly.
 
 ### Step D — Send a test notification
-Firebase Console → your project → **Messaging** → **Send your first message** → **Send test message** → paste the FCM token shown in the Profile screen.
+OneSignal dashboard → **Messages → New Push** → target **Subscribed Users** (or a
+specific External ID — your `user_id`, visible in the GDPR export). The
+**Delivery** tab shows per-device outcomes, which is the fastest way to tell a
+targeting mistake from a delivery failure.
 
 ---
 
