@@ -1,8 +1,11 @@
 # CityShield → Cloudflare Migration — TODO
 
 Working checklist for [PLAN.MD](PLAN.MD). **Phases 1–3 + Worker-side Phase 4 are code
-complete (2026-07-19, 101 tests green).** Remaining: user-driven milestone checks,
-remote provisioning + first deploy, frontend changes, and the Phase 5 cutover.
+complete; the backend is deployed and live (2026-07-21, 160 tests green).** Push moved
+from FCM to OneSignal on 2026-07-21 (§1.6) — the backend half is done, the app half is
+not: **OneSignal has 0 subscribers until the APK is rebuilt with `ONESIGNAL_APP_ID`**,
+and the one previously-registered device is dark in the meantime (accepted hard cutover).
+Remaining: that rebuild, the user-driven milestone checks, and the Phase 5 cutover.
 Tick items as they complete; each phase gets broken into small tasks when we reach it.
 
 ## Phase 0 — de-risking spikes
@@ -111,9 +114,10 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
       bbox+ray-cast targeting, geocode cache, push send + audience chunking at the 2,000 cap
 - [x] `wrangler dev` smoke: submit → real Nominatim pin (43.1799, 27.8972 for Народни
       будители) → recent renders the exact app DTO; wrong X-Api-Key → 401
-- [ ] Milestone: injecting a test alert via curl produces a push on a real device — needs
-      `ONESIGNAL_API_KEY` secret + `ONESIGNAL_APP_ID` var on a deployed Worker + the RN app
-      (user-driven check)
+- [ ] Milestone: injecting a test alert via curl produces a push on a real device.
+      Worker side is done and deployed; **blocked on the app**, not the backend —
+      OneSignal has 0 subscribers until an APK built with `ONESIGNAL_APP_ID` is installed
+      and signed into (that call is what creates the subscription). User-driven check
 
 ## Phase 3 — ingestion (code complete 2026-07-19)
 
@@ -188,19 +192,40 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
       until this is settled — COMPLIANCE.md §5 lists what to update when it is
 - [ ] Enforcement stays soft (login works unverified). Revisit only if signup spam appears
 
-## Deploy & remote provisioning (blocks the Phase 3 milestone and Phase 5)
+## Deploy & remote provisioning (backend live 2026-07-21)
 
-- [ ] `wrangler d1 create cityshield-db --location=weur` → paste database_id into
-      wrangler.jsonc → `npm run db:remote`
-- [ ] Secrets: `JWT_KEY` (≥48 random bytes), `INGEST_API_KEY`, `ONESIGNAL_API_KEY`
-      (REST API key from the OneSignal dashboard)
-- [ ] Fill the `ONESIGNAL_APP_ID` var in wrangler.jsonc (currently empty)
-- [ ] `npx wrangler deploy` → set `SELF_URL` var to the workers.dev URL (mailed
-      verification/reset links from cron) → `wrangler tail` sanity watch
-- [ ] GitHub repo secret `CLOUDFLARE_API_TOKEN` for the CI deploy job
+- [x] `wrangler d1 create cityshield-db --location=weur` → database_id in wrangler.jsonc
+      → `npm run db:remote`. All 8 migrations confirmed applied on the remote DB
+- [x] Secrets: `JWT_KEY`, `INGEST_API_KEY`, `ONESIGNAL_API_KEY` — all three present
+      (`wrangler secret list`); no stale `FCM_SERVICE_ACCOUNT` left over
+- [x] `ONESIGNAL_APP_ID` var filled (`2988dfb1-…`, public — it ships in the APK too)
+- [x] `npx wrangler deploy` → live at `https://cityshield.cityshield-varna.workers.dev`,
+      both crons registered. Post-deploy checks: `device_tokens` absent from the remote
+      schema, `/api/tokens` + `/internal/push-batch` 404, `/api/alerts/recent` still 401,
+      `/privacy` serving the OneSignal processor disclosure
+- [ ] `SELF_URL` var — still unset. Only matters once mail delivery is real: a cron-sent
+      verification/reset link has no request origin to fall back on (see §5 below)
+- [ ] GitHub repo secret `CLOUDFLARE_API_TOKEN` for the CI deploy job — **unverified**,
+      no `gh` CLI on this machine to check
 
 ## Phase 5 — cutover
 
+- [ ] **Rebuild the app on OneSignal** — the immediate next step, and what unblocks the
+      Phase 2 and Phase 3 push milestones:
+      ```sh
+      cd frontend
+      export ONESIGNAL_APP_ID=2988dfb1-4647-4dc5-b5bb-7c52a3150b5f
+      export CITYSHIELD_API_URL=https://cityshield.cityshield-varna.workers.dev
+      make build && make install-host
+      ```
+      Then sign in and confirm the device appears in OneSignal → Audience with
+      `external_id` equal to the account's `user_id` (visible in the GDPR export).
+      Untested end to end: the Android build has not been run since the Firebase SDK and
+      the `google-services` Gradle plugin were removed
+- [ ] Verify the notification inbox now fills from `/api/alerts/recent`: kill the app,
+      inject an alert, reopen — it should be listed. This is the path that replaced
+      Firebase's `setBackgroundMessageHandler`, so it is the regression most worth
+      checking by hand
 - [ ] Release build → Play Store → monitor → decommission per §1.13 parity checklist
 
 ## Blocked on user
@@ -212,7 +237,9 @@ Tick items as they complete; each phase gets broken into small tasks when we rea
 - [x] Firebase **service account** JSON key (SETUP.md §2) — received 2026-07-19, validated
       live. Since 2026-07-21 it is no longer a Worker secret: it is uploaded to the
       **OneSignal** dashboard, which now owns Android delivery
-- [ ] `ONESIGNAL_APP_ID` + `ONESIGNAL_API_KEY` from the OneSignal dashboard
+- [x] `ONESIGNAL_APP_ID` + `ONESIGNAL_API_KEY` — received 2026-07-21; app id committed to
+      wrangler.jsonc, REST key uploaded as a Worker secret and mirrored in local `.dev.vars`.
+      Worth rotating: the key passed through a chat transcript
 - [ ] Confirm the OneSignal Android settings carry the FCM service account **and** an
       Android package name matching the app's `applicationId` — a mismatch means devices
       subscribe and silently receive nothing

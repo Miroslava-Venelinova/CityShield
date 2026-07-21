@@ -4,16 +4,12 @@ Everything else (code, secrets generation, D1 creation, deploys) I can do; these
 you because they involve accounts, payment identity, or decisions only the operator can make.
 Details in [PLAN.MD](PLAN.MD) §3; current status in [TODO.md](TODO.md).
 
-## 1. Now — Cloudflare account (blocks the AI model eval, then Phase 1+ deploys)
+## 1. ✅ Done — Cloudflare account
 
-- Sign up at dash.cloudflare.com — free plan, **no credit card needed**.
-  Use a team-accessible email, not a personal one. Enable 2FA.
-- Then run in a terminal: `npx wrangler login` (opens browser OAuth) from anywhere in the repo.
-- That's it — tell me when it's done. It unblocks:
-  - the Workers AI model eval (last open Phase 0 item, ~5 min, see [spikes/RESULTS.md](spikes/RESULTS.md)),
-  - creating the D1 database (`--location=weur` for GDPR) and real Worker deploys.
+Account `cityshield.varna@gmail.com`, `wrangler login` completed 2026-07-19. D1 lives in
+`weur`; the Worker is deployed at `https://cityshield.cityshield-varna.workers.dev`.
 
-Note: Workers AI **does not work on the throwaway preview accounts** I used for the spikes —
+Note for anyone re-provisioning: Workers AI **does not work on throwaway preview accounts** —
 a real account is genuinely required, but the free plan is enough for everything in the plan.
 
 ## 2. Push notifications — OneSignal app
@@ -36,6 +32,16 @@ In the OneSignal dashboard:
 - Settings → Keys & IDs: the **App ID** goes in `wrangler.jsonc` vars and in the app's
   `ONESIGNAL_APP_ID` build env var (both public). The **REST API Key** is the secret —
   store it with `npx wrangler secret put ONESIGNAL_API_KEY`; it never touches git.
+
+**Status (2026-07-21):** both credentials received and installed — App ID committed to
+`wrangler.jsonc`, REST key uploaded as a Worker secret. Two things still on you:
+
+- **Confirm the Android settings above** (service-account JSON uploaded, package name
+  matching `com.cityshield.fcmtest`). Nothing in the code can detect a mismatch: devices
+  subscribe successfully and then silently receive nothing.
+- **Consider rotating the REST key.** It was pasted into a chat transcript. It can only
+  send pushes — it cannot read subscriber data — so the risk is spam, not a breach, but
+  regenerating it and re-running `wrangler secret put` takes about a minute.
 
 ## 3. Phase 4 (CI auto-deploys) — one API token + one GitHub secret
 

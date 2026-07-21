@@ -183,6 +183,10 @@ The Worker deploys with Wrangler; TLS and scaling are handled by Cloudflare. Rem
 D1 and secrets must be provisioned first — see [SETUP.md](SETUP.md) and
 [PLAN.MD](PLAN.MD) §3.
 
+Currently live at `https://cityshield.cityshield-varna.workers.dev` (D1 in `weur`,
+crons every 15 min + a daily cleanup). The Android app is **not** yet rebuilt against
+OneSignal, so there are no push subscribers yet — see [TODO.md](TODO.md) Phase 5.
+
 ```sh
 cd backend
 npm run db:remote                     # apply migrations + seed the remote D1
