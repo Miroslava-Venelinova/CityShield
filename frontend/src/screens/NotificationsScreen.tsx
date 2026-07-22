@@ -18,6 +18,7 @@ import {
 import {
   loadNotifications, syncFromRecentAlerts, markAsRead, markAllAsRead,
   deleteNotification, StoredNotification, getCategoryMeta, getCategoryLabelKey,
+  categoryOrder,
 } from '../services/notifications';
 
 type Tab = 'inbox' | 'settings';
@@ -56,7 +57,11 @@ export default function NotificationsScreen() {
         preferencesApi.getAll(token),
         preferencesApi.getBusLines(token),
       ]);
-      setPreferences(prefs);
+      // The API returns them in its own KNOWN_CATEGORIES order; the display
+      // order is ours (services/notifications.ts), which keeps Traffic — and
+      // the bus-line picker it unfolds — at the bottom of the list.
+      setPreferences([...prefs].sort(
+        (a, b) => categoryOrder(a.category) - categoryOrder(b.category)));
       setBusLines(lines);
     } catch { /* shown in UI */ }
     finally { setPrefLoading(false); }
