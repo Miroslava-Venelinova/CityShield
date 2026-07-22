@@ -70,6 +70,17 @@ echo ">>> Installing JS dependencies..."
 cd /app
 npm install --legacy-peer-deps --silent
 
+# React Native caches autolinking results under android/build, keyed only on the
+# package.json hashes — not on where the build ran. A host (build-apk.bat) build
+# leaves behind C:\... project paths that mean nothing in here, and Gradle then
+# fails with "No variants exist" for every autolinked library. Drop the cache
+# whenever it was generated outside this container.
+AUTOLINK=/app/android/build/generated/autolinking
+if [ -f "$AUTOLINK/autolinking.json" ] && ! grep -q '"root": "/app"' "$AUTOLINK/autolinking.json"; then
+  echo ">>> Clearing an autolinking cache from a host build..."
+  rm -rf "$AUTOLINK"
+fi
+
 # ── 2. Scaffold android/ on first run ─────────────────────────────────────────
 if [ ! -f /app/android/gradlew ]; then
   echo ">>> First run: scaffolding Android project (~2 min)..."

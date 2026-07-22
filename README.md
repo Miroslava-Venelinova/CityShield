@@ -107,6 +107,7 @@ CityShield/
 ├── tools/
 │   └── osm-seed-builder/     Local UI that builds the seed data from Overpass
 ├── backend_deprecated/       Old pre-Cloudflare stack — do not use (see DEPRECATED.md)
+├── setup.bat                 Windows: install deps for frontend and/or backend
 ├── PLAN.MD                   Cloudflare migration plan (design spec)
 ├── TODO.md                   Migration checklist / status
 └── SETUP.md                  Operator setup checklist (accounts & secrets)
@@ -125,6 +126,10 @@ CityShield/
 
 See [SETUP.md](SETUP.md) for the exact accounts, secrets, and one-time provisioning
 the operator needs to supply.
+
+On Windows, **`setup.bat`** in the repo root installs the npm packages for both
+sides and checks the Android toolchain; it asks what to set up and whether to use
+Docker (default: no). The manual equivalents are below.
 
 ### 1. Run the backend locally
 
@@ -155,6 +160,9 @@ Follow **[frontend/SETUP.md](frontend/SETUP.md)** — a step-by-step guide cover
 Android emulator/device, OneSignal configuration, and what to run after each kind of
 change. Point the app's `CITYSHIELD_API_URL` at your `wrangler dev` host (or the
 deployed Worker).
+
+The short version on Windows: `frontend\build-apk.bat` builds a standalone
+release APK against the deployed Worker and needs no arguments.
 
 ## Running the tests
 
