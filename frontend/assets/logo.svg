@@ -5,9 +5,9 @@
   The mark artwork is a copy of logo-mark.svg (translated +26 on x to centre it
   in the wider box) — edit that file first, then mirror the change here.
 
-  The wordmark uses #2B7FD4 — the mark's hue (~210°) held at a darker value.
-  Matching #4FA3F0 exactly would drop the text under a readable contrast on
-  white; this keeps the pair related without making them the same colour.
+  Mark and wordmark share one blue — the app's accent (theme.ts
+  `lightColors.primary`). It is dark enough to read as text on white, so the
+  pair no longer needs the two-tone split it used to carry.
 
   The wordmark uses a live <text> node, so it renders with whatever grotesque
   the viewer has. That is fine in-repo; convert the text to outlines before
@@ -25,7 +25,7 @@
              L 20 27
              Q 20 22.8 24 21.5
              Z"
-          fill="#4FA3F0"/>
+          fill="#1A56DB"/>
 
     <g fill="#FFFFFF">
       <rect x="57.5" y="58" width="13" height="36" rx="2"/>
@@ -41,6 +41,6 @@
   <text x="90" y="162" text-anchor="middle"
         font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
         font-size="26" font-weight="800" letter-spacing="-0.4">
-    <tspan fill="#0D2145">City</tspan><tspan fill="#2B7FD4">Shield</tspan>
+    <tspan fill="#0D2145">City</tspan><tspan fill="#1A56DB">Shield</tspan>
   </text>
 </svg>

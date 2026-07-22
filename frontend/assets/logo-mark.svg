@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   CityShield brand mark (icon only).
-  A flat light-blue shield holding a single tower that broadcasts two alert
+  A flat blue shield holding a single tower that broadcasts two alert
   waves — region-scoped alerts pushed to the people standing in them.
+
+  The fill is the app's accent blue (theme.ts `lightColors.primary`), so the
+  mark and the app's primary buttons are the same blue. The in-app port reads
+  it from the live palette instead, which lifts it in dark mode; this static
+  file cannot, so it carries the light-theme value.
 
   Minimal by construction: one fill colour, one accent (white), no gradient,
   no sheen, no inset rim, no floor bands. Everything here earns its place; if
@@ -26,7 +31,7 @@
            L 20 27
            Q 20 22.8 24 21.5
            Z"
-        fill="#4FA3F0"/>
+        fill="#1A56DB"/>
 
   <!-- Tower and beacon lamp -->
   <g fill="#FFFFFF">
