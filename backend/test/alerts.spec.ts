@@ -515,6 +515,93 @@ describe("push send", () => {
   });
 });
 
+describe("POST /api/alerts/test-push", () => {
+  function testPush(body: unknown, apiKey: string | null = INGEST_KEY) {
+    return api("/api/alerts/test-push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { "X-Api-Key": apiKey } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  const payload = { title: "Тест", body: "Проверка на доставката" };
+
+  it("401s without or with a wrong X-Api-Key", async () => {
+    expect((await testPush(payload, null)).status).toBe(401);
+    expect((await testPush(payload, "wrong")).status).toBe(401);
+  });
+
+  it("400s on missing or empty title/body", async () => {
+    expect((await testPush({ body: "b" })).status).toBe(400);
+    expect((await testPush({ title: "t" })).status).toBe(400);
+    expect((await testPush({ title: "", body: "b" })).status).toBe(400);
+    const res = await testPush({ title: "t", body: 7 });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "title and body must be non-empty strings." });
+  });
+
+  it("sends to just the named user, ignoring every other registration", async () => {
+    const restore = withPushCredentials();
+    try {
+      const captured = interceptPush(1);
+      const target = await createUser({ region: "Аспарухово" });
+      await createUser({ region: "Аспарухово" }); // must not be addressed
+
+      const res = await testPush({ ...payload, userId: target });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: 1, failed: 0, target: "user" });
+      fetchMock.assertNoPendingInterceptors();
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.include_aliases.external_id).toEqual([target]);
+      expect(captured[0]!.headings.en).toBe(payload.title);
+      expect(captured[0]!.contents.en).toBe(payload.body);
+    } finally {
+      restore();
+    }
+  });
+
+  it("broadcasts to every registered user when userId is omitted", async () => {
+    const restore = withPushCredentials();
+    try {
+      const captured = interceptPush(1);
+      const alice = await createUser({ region: "Аспарухово" });
+      // No region and category preferences off would both drop a real alert;
+      // a test push must reach them anyway.
+      const bob = await createUser();
+
+      const res = await testPush(payload);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: 1, failed: 1, target: "broadcast" });
+      fetchMock.assertNoPendingInterceptors();
+
+      expect([...captured[0]!.include_aliases.external_id].sort())
+        .toEqual([alice, bob].sort());
+    } finally {
+      restore();
+    }
+  });
+
+  it("stores no alert — the test push never enters the feed", async () => {
+    const restore = withPushCredentials();
+    try {
+      interceptPush(1);
+      await createUser({ region: "Аспарухово" });
+      await testPush(payload);
+      fetchMock.assertNoPendingInterceptors();
+
+      const { count } = (await env.DB.prepare("SELECT COUNT(*) AS count FROM alerts")
+        .first<{ count: number }>())!;
+      expect(count).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("push chunking", () => {
   // The migration rests on this: an audience larger than one request's alias
   // cap must split cleanly, with nobody dropped at the boundary. Driven

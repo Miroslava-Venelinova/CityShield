@@ -300,6 +300,11 @@ daily cleanup cron (`30 3 * * *`) now runs only the §1.10 retention jobs.
 sender warns and skips, exactly as the FCM client did — a notification failure must never fail a
 request whose alert is already stored.
 
+**Delivery check:** `POST /api/alerts/test-push` (ingest-key gated, like `submit-data`) takes
+`{title, body, userId?}` and sends a raw push — to that one `external_id`, or to every registered
+user when `userId` is omitted — bypassing all §1.5 targeting and preference filters. Returns
+`{sent, failed, target}`. Nothing is stored, so a test push never reaches `/api/alerts/recent`.
+
 ### 1.7 Ingestion port (`ingestion/`)
 
 **Scheduling model.** The five asyncio loops with per-source intervals collapse into one cron tick every 10 minutes (all sources currently use the 600 s default anyway — per-source intervals die with this migration; if ever needed, run a source only when `tickMinute % N === 0`).

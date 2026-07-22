@@ -4,6 +4,8 @@
 
 import { Hono } from "hono";
 import { getRecentAlerts, sendUsersNotification, storeAlert } from "../core/alert-service";
+import { sendPushToUsers } from "../core/onesignal";
+import * as q from "../db/queries";
 import { KNOWN_CATEGORIES } from "../shared/constants";
 import type { AppEnv } from "./middleware";
 import { requireAuth, requireIngestKey } from "./middleware";
@@ -93,6 +95,37 @@ export const alertRoutes = new Hono<AppEnv>()
       notified_count: notifiedIds.length,
       user_ids: notifiedIds,
     });
+  })
+
+  // Ops tool: verifies push delivery end to end without inventing an alert.
+  // Deliberately does *not* go through sendUsersNotification — geo-targeting,
+  // bus-line filtering and category preferences would all silently drop the
+  // test push, which is the opposite of what a delivery check needs. Nothing
+  // is written to D1, so this never shows up in /recent.
+  .post("/test-push", requireIngestKey, async (c) => {
+    const data = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const title = data?.title;
+    const body = data?.body;
+    if (typeof title !== "string" || title.length === 0
+      || typeof body !== "string" || body.length === 0)
+      return c.json({ error: "title and body must be non-empty strings." }, 400);
+
+    const userId = data?.userId;
+    if (userId !== undefined && (typeof userId !== "string" || userId.length === 0))
+      return c.json({ error: "userId must be a non-empty string when present." }, 400);
+
+    // A single id needs no row lookup: sendPushToUsers only passes it to
+    // OneSignal as an external_id alias, which resolves (or doesn't) there.
+    const target = userId ? "user" : "broadcast";
+    const userIds = userId ? [userId] : await q.getAllUserIds(c.env);
+
+    // `category: "test"` keeps the payload shape the app's push handler
+    // expects while marking the notification as not a real alert.
+    const { sent, failed } = await sendPushToUsers(c.env, userIds, {
+      title, body, data: { category: "test", startTime: "", endTime: "" },
+    });
+
+    return c.json({ sent, failed, target });
   })
 
   // requireAuth still runs on every request — only the D1 read is cached, and
