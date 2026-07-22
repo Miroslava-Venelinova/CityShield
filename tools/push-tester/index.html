@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CityShield — push tester</title>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1a1f27; --line: #2b323d; --text: #e6e9ef;
+    --muted: #98a2b3; --accent: #4f9cf9; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --panel: #fff; --line: #dfe3e8; --text: #1a1f27;
+      --muted: #5c6673; --accent: #1667d0; --ok: #1a7f37; --warn: #9a6700; --err: #cf222e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 400px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card.remote { border-color: var(--warn); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  label:first-of-type { margin-top: 0; }
+  input, select, textarea, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%;
+  }
+  textarea { resize: vertical; }
+  button { background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+  button.danger { background: var(--err); }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row > * { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+  .check input { width: auto; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .msg { padding: 9px 11px; border-radius: 6px; border: 1px solid var(--line); margin-bottom: 12px; font-size: 13px; white-space: pre-wrap; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; font-size: 12px; margin: 0; max-height: 240px; }
+  .hide { display: none; }
+  .stat { display: flex; gap: 20px; margin-bottom: 12px; }
+  .stat div span { display: block; font-size: 22px; font-weight: 600; }
+  .stat div small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--panel); }
+  .scroll { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover td { background: rgba(127, 127, 127, .12); }
+  tr.pick.on td { background: rgba(79, 156, 249, .16); }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .log { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+  .log:first-child { border-top: none; }
+  .preview {
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    background: var(--bg); margin-top: 12px;
+  }
+  .preview .app { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .preview .t { font-weight: 600; margin-top: 4px; }
+  .preview .b { color: var(--muted); margin-top: 2px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Push tester</h1>
+  <p class="sub">Sends a real OneSignal push through <code>POST /api/alerts/test-push</code> — to one
+  user, or to everyone registered. No alert is stored, so nothing here reaches
+  <code>/api/alerts/recent</code>. Targeting, bus-line and category filters are all bypassed.</p>
+
+  <div class="grid">
+    <div>
+      <div class="card" id="targetCard">
+        <h2>1 · Target</h2>
+        <label for="scope">Worker</label>
+        <select id="scope">
+          <option value="local">Local — wrangler dev</option>
+          <option value="remote">Remote — deployed Worker</option>
+        </select>
+
+        <label for="url">Base URL</label>
+        <input id="url" placeholder="https://cityshield.<subdomain>.workers.dev" spellcheck="false">
+
+        <label for="key">Ingest key <span class="muted">— <code>INGEST_API_KEY</code></span></label>
+        <input id="key" type="password" placeholder="leave blank to keep the current one" spellcheck="false">
+        <div id="keyState" class="hint"></div>
+
+        <div class="row">
+          <button class="ghost" id="saveTarget">Save target</button>
+          <button class="ghost" id="forgetKeys">Forget keys</button>
+        </div>
+        <div class="hint">The URL is remembered in <code>config.json</code>; the key is held in the
+        tool's memory for this session only and never sent to this page.</div>
+      </div>
+
+      <div class="card">
+        <h2>2 · Recipient</h2>
+        <div class="check">
+          <input type="radio" name="mode" id="modeUser" value="user" checked>
+          <label for="modeUser" style="margin:0">One user</label>
+        </div>
+        <div class="check">
+          <input type="radio" name="mode" id="modeAll" value="all">
+          <label for="modeAll" style="margin:0">Broadcast — every registered user</label>
+        </div>
+
+        <div id="userPane">
+          <label for="userId">User id <span class="muted">— OneSignal <code>external_id</code></span></label>
+          <input id="userId" class="mono" placeholder="paste a UUID, or pick one below" spellcheck="false">
+
+          <div class="row">
+            <select id="userScope" style="flex:1.4">
+              <option value="local">…from local D1</option>
+              <option value="remote">…from remote D1</option>
+            </select>
+            <button class="ghost" id="loadUsers">Load users</button>
+          </div>
+          <div class="hint">Runs <code>wrangler d1 execute</code> — not an API call, the Worker
+          never exposes a user list. This is deliberately independent of the target above: a phone
+          is registered against the account it signed into, which normally lives in the
+          <em>remote</em> database, while the Worker you send through can still be the local one.
+          Delivery only needs the id to be known to OneSignal, not to that Worker's D1.</div>
+
+          <input id="filter" class="hide" placeholder="Filter by email…" style="margin-top:12px">
+          <div id="userList" class="scroll hide">
+            <table>
+              <thead><tr><th>Email</th><th>User id</th><th>Joined</th></tr></thead>
+              <tbody id="userRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div id="messages"></div>
+
+      <div class="card" id="composeCard">
+        <h2>3 · Notification</h2>
+        <label for="title">Title</label>
+        <input id="title" value="CityShield тест" maxlength="120">
+
+        <label for="body">Message</label>
+        <textarea id="body" rows="3">Проверка на доставката на известия.</textarea>
+        <div class="hint"><span id="bodyCount">0</span> / <span id="bodyMax">240</span> characters</div>
+
+        <div class="preview">
+          <div class="app">CityShield · now</div>
+          <div class="t" id="prevTitle"></div>
+          <div class="b" id="prevBody"></div>
+        </div>
+
+        <div id="sendWarn" class="msg warn" style="margin-top:12px"></div>
+
+        <div class="row">
+          <button id="sendBtn">Send push</button>
+        </div>
+      </div>
+
+      <div class="card" id="resultCard" style="display:none">
+        <h2>Last result</h2>
+        <div class="stat">
+          <div><span id="statSent">0</span><small>sent</small></div>
+          <div><span id="statFailed">0</span><small>failed</small></div>
+          <div><span id="statTarget">—</span><small>target</small></div>
+        </div>
+        <pre id="rawResult"></pre>
+        <div class="hint"><code>sent</code> counts devices as OneSignal reported them, and
+        <code>failed</code> is users minus that — a user with no registered device, or two phones,
+        moves both numbers. It is a delivery report, not a per-user verdict.</div>
+      </div>
+
+      <div class="card" id="historyCard" style="display:none">
+        <h2>This session</h2>
+        <div id="history"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = new URLSearchParams(location.search).get("t") || "";
+const $ = (id) => document.getElementById(id);
+let users = [];
+let config = null;
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-Tool-Token": token },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function message(text, cls = "") {
+  const el = document.createElement("div");
+  el.className = `msg ${cls}`;
+  el.textContent = text;
+  $("messages").prepend(el);
+  setTimeout(() => el.remove(), 15000);
+}
+
+function busy(button, on, label) {
+  button.disabled = on;
+  if (on) { button.dataset.label = button.textContent; button.textContent = label; }
+  else if (button.dataset.label) button.textContent = button.dataset.label;
+}
+
+const scope = () => $("scope").value;
+const broadcasting = () => $("modeAll").checked;
+
+// ── setup ────────────────────────────────────────────────────────────────────
+
+async function init() {
+  config = await api("/api/config");
+  $("bodyMax").textContent = config.max_body_length;
+  $("body").maxLength = config.max_body_length;
+  renderTargets(config.targets);
+  renderWarning();
+  renderPreview();
+}
+
+function renderTargets(targets) {
+  config.targets = targets;
+  const t = targets[scope()];
+  $("url").value = t.url;
+  $("keyState").innerHTML = t.has_key
+    ? `<span class="ok">key set</span> — ${t.key_source}`
+    : `<span class="warn">no key yet</span> — paste the one this Worker was deployed with`;
+  $("targetCard").classList.toggle("remote", scope() === "remote");
+}
+
+// The key belongs to one deployment, so the field resets on a switch. The
+// loaded user list deliberately does not — it has its own scope, and pairing a
+// local Worker with a remote user id is a normal thing to want.
+function syncScope() {
+  renderTargets(config.targets);
+  $("key").value = "";
+  renderWarning();
+}
+
+/**
+ * Both targets send real pushes — "local" only means the Worker runs here, not
+ * that delivery is simulated. What actually differs is the audience a broadcast
+ * reads, so the warning is about that rather than about local vs remote.
+ */
+function renderWarning() {
+  const remote = scope() === "remote";
+  const warn = $("sendWarn");
+  warn.classList.remove("hide");
+  warn.className = "msg " + (remote && broadcasting() ? "err" : "warn");
+  warn.textContent = broadcasting()
+    ? (remote
+        ? "Remote broadcast: a real push to every registered user's phone. You will be asked to confirm."
+        : "Local broadcast reads the LOCAL database — usually empty, in which case nothing is sent and nothing is proven.")
+    : "This sends a real push to that user's device. The local Worker uses the same live OneSignal "
+      + "credentials as the deployed one, and never checks the id against its own database.";
+  $("sendBtn").className = remote && broadcasting() ? "danger" : "";
+}
+
+// ── users ────────────────────────────────────────────────────────────────────
+
+async function loadUsers() {
+  const button = $("loadUsers");
+  busy(button, true, "Querying D1…");
+  try {
+    const from = $("userScope").value;
+    const data = await api("/api/users", { scope: from });
+    users = data.users;
+    renderUsers();
+    message(`${users.length} user(s) in the ${from} database.`, users.length ? "ok" : "warn");
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+function renderUsers() {
+  const needle = $("filter").value.trim().toLowerCase();
+  const shown = needle
+    ? users.filter((u) => u.email.toLowerCase().includes(needle) || u.user_id.includes(needle))
+    : users;
+
+  $("userRows").innerHTML = shown.map((u) => `
+    <tr class="pick" data-id="${u.user_id}">
+      <td>${u.email}</td>
+      <td class="mono">${u.user_id.slice(0, 8)}…</td>
+      <td class="muted">${u.created}</td>
+    </tr>`).join("");
+  $("userRows").querySelectorAll("[data-id]").forEach((tr) =>
+    tr.addEventListener("click", () => { $("userId").value = tr.dataset.id; markPicked(); }));
+
+  $("userList").classList.toggle("hide", users.length === 0);
+  $("filter").classList.toggle("hide", users.length === 0);
+  markPicked();
+}
+
+function markPicked() {
+  const picked = $("userId").value.trim();
+  $("userRows").querySelectorAll("[data-id]").forEach((tr) =>
+    tr.classList.toggle("on", tr.dataset.id === picked));
+}
+
+// ── compose & send ───────────────────────────────────────────────────────────
+
+function renderPreview() {
+  $("prevTitle").textContent = $("title").value || "—";
+  $("prevBody").textContent = $("body").value || "—";
+  const length = $("body").value.length;
+  $("bodyCount").textContent = length;
+  $("bodyCount").className = length > config.max_body_length ? "err" : "";
+}
+
+async function send() {
+  const button = $("sendBtn");
+  const toAll = broadcasting();
+  const userId = $("userId").value.trim();
+
+  if (!toAll && !userId) return message("Pick a user, or switch to broadcast.", "err");
+  if (toAll && scope() === "remote" &&
+      !confirm("Send a real push to EVERY registered user of the deployed Worker?")) return;
+
+  busy(button, true, "Sending…");
+  try {
+    const result = await api("/api/send", {
+      scope: scope(), title: $("title").value, body: $("body").value,
+      user_id: toAll ? "" : userId,
+    });
+    showResult(result);
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+function showResult(result) {
+  const payload = result.body;
+  const ok = result.status === 200 && payload && typeof payload === "object";
+
+  $("resultCard").style.display = "";
+  $("statSent").textContent = ok ? payload.sent : "—";
+  $("statSent").className = ok && payload.sent > 0 ? "ok" : "warn";
+  $("statFailed").textContent = ok ? payload.failed : "—";
+  $("statFailed").className = ok && payload.failed > 0 ? "warn" : "";
+  $("statTarget").textContent = ok ? payload.target : result.status;
+  $("rawResult").textContent =
+    `HTTP ${result.status}\n` +
+    (typeof payload === "string" ? payload || "(empty body)" : JSON.stringify(payload, null, 2));
+
+  if (!ok) {
+    message(`The Worker returned HTTP ${result.status}.`, "err");
+  } else if (payload.sent === 0) {
+    // The single most common outcome worth explaining: the request succeeded
+    // and still nobody's phone buzzed.
+    message("Accepted, but 0 devices were reached. Either the target has never opened the app " +
+            "signed in (no external_id registered), or the Worker has no OneSignal credentials.", "warn");
+  } else {
+    message(`Sent to ${payload.sent} device(s).`, "ok");
+  }
+  addHistory(result, ok ? payload : null);
+}
+
+function addHistory(result, payload) {
+  $("historyCard").style.display = "";
+  const el = document.createElement("div");
+  el.className = "log";
+  const outcome = payload
+    ? `<span class="${payload.sent ? "ok" : "warn"}">${payload.sent} sent, ${payload.failed} failed</span> · ${payload.target}`
+    : `<span class="err">HTTP ${result.status}</span>`;
+  el.innerHTML = `<span class="muted mono">${new Date().toLocaleTimeString()}</span> · ` +
+    `${scope()} · ${outcome} · ${$("title").value}`;
+  $("history").prepend(el);
+}
+
+// ── wiring ───────────────────────────────────────────────────────────────────
+
+$("scope").addEventListener("change", syncScope);
+$("saveTarget").addEventListener("click", async () => {
+  try {
+    const data = await api("/api/target",
+      { scope: scope(), url: $("url").value, key: $("key").value });
+    $("key").value = "";
+    renderTargets(data.targets);
+    message(`Saved the ${scope()} target.`, "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+});
+$("forgetKeys").addEventListener("click", async () => {
+  renderTargets((await api("/api/forget-keys", {})).targets);
+  message("Session keys cleared. The .dev.vars key is still read for local sends.", "ok");
+});
+$("loadUsers").addEventListener("click", loadUsers);
+$("filter").addEventListener("input", renderUsers);
+$("userId").addEventListener("input", markPicked);
+for (const id of ["modeUser", "modeAll"]) {
+  $(id).addEventListener("change", () => {
+    $("userPane").classList.toggle("hide", broadcasting());
+    renderWarning();
+  });
+}
+$("title").addEventListener("input", renderPreview);
+$("body").addEventListener("input", renderPreview);
+$("sendBtn").addEventListener("click", send);
+
+init().catch((e) => message(`Could not start: ${e.message}`, "err"));
+</script>
+</body>
+</html>

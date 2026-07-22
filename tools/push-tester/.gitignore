@@ -1,0 +1,4 @@
+# Per-machine target URLs written by the tool. Keys are never stored here —
+# they live in the process's memory for one session.
+config.json
+__pycache__/

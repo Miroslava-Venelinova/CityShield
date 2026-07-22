@@ -105,7 +105,8 @@ CityShield/
 │   └── spikes/               Phase 0 de-risking spikes + RESULTS.md
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
 ├── tools/
-│   └── osm-seed-builder/     Local UI that builds the seed data from Overpass
+│   ├── osm-seed-builder/     Local UI that builds the seed data from Overpass
+│   └── push-tester/          Local UI that fires a test push at one user or everyone
 ├── backend_deprecated/       Old pre-Cloudflare stack — do not use (see DEPRECATED.md)
 ├── setup.bat                 Windows: install deps for frontend and/or backend
 ├── PLAN.MD                   Cloudflare migration plan (design spec)
@@ -153,6 +154,17 @@ there; `backend/seeds/` changes only when you press its dedicated merge button.
 
 Local secrets go in `backend/.dev.vars` (copy `backend/.dev.vars.example`); config
 and non-secret vars live in [backend/wrangler.jsonc](backend/wrangler.jsonc).
+
+To check that push delivery actually works — Worker → OneSignal → phone — run the
+push tester and follow [tools/push-tester/README.md](tools/push-tester/README.md):
+
+```sh
+python tools/push-tester/app.py
+```
+
+It drives `POST /api/alerts/test-push` against the local or the deployed Worker,
+addressing one user or every registered user. No alert is stored, so a test push
+never shows up in the app's feed.
 
 ### 2. Run the mobile app
 
