@@ -1,0 +1,82 @@
+<!--
+  Adaptive-icon foreground: the CityShield mark, mirroring
+  frontend/assets/logo-mark.svg. Change the geometry there first.
+
+  The path data is the SVG's, unmodified — the fitting is done by the <group>
+  instead, so the two files stay diffable. An adaptive icon is 108x108dp of
+  which the launcher may mask away everything outside the central 72x72dp
+  keyline, so the group scales the shield (88x113 in the SVG's 128 viewport)
+  to exactly 72dp tall and centres it on 54,54:
+
+      scale     = 72 / 113          = 0.637168
+      translate = 54 - centre*scale = (13.2212, 12.9027)
+
+  No <monochrome> layer: Android 13 themed icons are tinted a single colour
+  with detail carried by alpha, and this mark reads by knockout — the tower
+  and waves are the background showing through. Flattening it to one colour
+  would leave a blank shield, so the launcher is better off falling back to
+  the full-colour icon.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:scaleX="0.637168"
+        android:scaleY="0.637168"
+        android:translateX="13.2212"
+        android:translateY="12.9027">
+
+        <!-- Shield body -->
+        <path
+            android:fillColor="#1A56DB"
+            android:pathData="M 64 8
+                              L 104 21.5
+                              Q 108 22.8 108 27
+                              L 108 60
+                              Q 108 88 66.4 119.4
+                              Q 64 121 61.6 119.4
+                              Q 20 88 20 60
+                              L 20 27
+                              Q 20 22.8 24 21.5
+                              Z" />
+
+        <!-- Tower -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M 59.5 58
+                              L 68.5 58
+                              A 2 2 0 0 1 70.5 60
+                              L 70.5 92
+                              A 2 2 0 0 1 68.5 94
+                              L 59.5 94
+                              A 2 2 0 0 1 57.5 92
+                              L 57.5 60
+                              A 2 2 0 0 1 59.5 58
+                              Z" />
+
+        <!-- Beacon lamp -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M 64 44
+                              A 4 4 0 0 1 64 52
+                              A 4 4 0 0 1 64 44
+                              Z" />
+
+        <!-- Two alert waves; the outer one fades so the pair reads as one
+             signal spreading outward rather than as two equal rings. -->
+        <path
+            android:pathData="M 53.6 42 A 12 12 0 0 1 74.4 42"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3.6"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M 46.7 36 A 22 22 0 0 1 81.3 36"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3.6"
+            android:strokeAlpha="0.55"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

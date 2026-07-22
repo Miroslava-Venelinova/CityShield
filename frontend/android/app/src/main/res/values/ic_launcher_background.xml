@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backdrop for the adaptive launcher icon. White by design: the mark
+     carries the brand blue, and a blue-on-blue icon loses the shield outline
+     under a circular launcher mask. -->
+<resources>
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>
