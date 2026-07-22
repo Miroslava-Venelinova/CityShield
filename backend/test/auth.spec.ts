@@ -174,6 +174,32 @@ describe("PUT /api/auth/location", () => {
     expect(dto.streetName).toBe("Народни будители");
   });
 
+  // The city centre is the case this exists for: Nominatim labels it with a
+  // city_district we do not seed, and the region we do have sits one level
+  // further out. Matching only the most specific name left it unmatched.
+  it("falls back through the address levels when the finest one is unknown", async () => {
+    const { token } = await registerAndLogin();
+    await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Варна')").run();
+    clearRefCaches();
+
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({
+        address: { city_district: "Одесос", city: "Варна", road: "бул. Сливница" },
+      }), { headers: { "Content-Type": "application/json" } });
+
+    const res = await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 43.2065, longitude: 27.9147 }, token));
+    expect(res.status).toBe(204);
+
+    const dto = await (await api("/api/auth/me",
+      { headers: { Authorization: `Bearer ${token}` } })).json() as Record<string, unknown>;
+    expect(dto.hasLocation).toBe(true);
+    expect(dto.regionName).toBe("Варна");
+  });
+
+  // hasLocation tracks the stored coordinates, not the region lookup: polygon
+  // targeting runs off lat/lng, so an unnamed district is still a located user.
   it("still 204s (lat/lng saved, no region) when Nominatim fails", async () => {
     const { token } = await registerAndLogin();
 
@@ -188,7 +214,7 @@ describe("PUT /api/auth/location", () => {
     const me = await api("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
     const dto = await me.json() as Record<string, unknown>;
     expect(dto.latitude).toBeCloseTo(43.2);
-    expect(dto.hasLocation).toBe(false);
+    expect(dto.hasLocation).toBe(true);
     expect(dto.regionName).toBeNull();
   });
 

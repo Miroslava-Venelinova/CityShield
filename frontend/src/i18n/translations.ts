@@ -192,6 +192,7 @@ const en = {
   'profile.region': 'Neighbourhood / Region',
   'profile.street': 'Street',
   'profile.noStreet': 'No street match found',
+  'profile.noRegion': 'No neighbourhood match found',
 
   'profile.sectionNotifications': 'Notifications',
   'profile.pushAlerts': 'Push Alerts',
@@ -471,6 +472,7 @@ const bg: Record<TranslationKey, string> = {
   'profile.region': 'Квартал / Район',
   'profile.street': 'Улица',
   'profile.noStreet': 'Няма намерена улица',
+  'profile.noRegion': 'Няма намерен квартал',
 
   'profile.sectionNotifications': 'Известия',
   'profile.pushAlerts': 'Push известия',

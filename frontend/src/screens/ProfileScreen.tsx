@@ -365,8 +365,11 @@ export default function ProfileScreen() {
                 <RowIcon name="home" />
                 <View style={styles.infoTextGroup}>
                   <Text style={styles.infoLabel}>{t('profile.region')}</Text>
-                  <Text style={styles.infoValue}>
-                    {regionName ?? '—'}
+                  {/* A pin can save without resolving to a seeded region —
+                      say so rather than showing a bare dash, since the alerts
+                      that depend on it (region-targeted ones) won't arrive. */}
+                  <Text style={[styles.infoValue, !regionName && {color: colors.textMuted}]}>
+                    {regionName ?? t('profile.noRegion')}
                   </Text>
                 </View>
               </View>
@@ -375,7 +378,7 @@ export default function ProfileScreen() {
                 <RowIcon name="navigation" />
                 <View style={styles.infoTextGroup}>
                   <Text style={styles.infoLabel}>{t('profile.street')}</Text>
-                  <Text style={styles.infoValue}>
+                  <Text style={[styles.infoValue, !streetName && {color: colors.textMuted}]}>
                     {streetName ?? t('profile.noStreet')}
                   </Text>
                 </View>

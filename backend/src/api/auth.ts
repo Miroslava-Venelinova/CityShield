@@ -56,6 +56,15 @@ function publicOrigin(env: Env, requestUrl: string): string {
   return env.SELF_URL?.replace(/\/$/, "") ?? new URL(requestUrl).origin;
 }
 
+/** First candidate name that fuzzy-matches a seeded row, or null. */
+function firstMatch<T>(names: string[], rows: T[], nameOf: (row: T) => string): T | null {
+  for (const name of names) {
+    const hit = bestMatch(name, rows, nameOf, SIMILARITY_THRESHOLD);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export const authRoutes = new Hono<AppEnv>()
 
   .post("/register", async (c) => {
@@ -160,7 +169,11 @@ export const authRoutes = new Hono<AppEnv>()
       email: user.email,
       latitude: user.latitude,
       longitude: user.longitude,
-      hasLocation: user.region_id !== null,
+      // Coordinates, not a region match. Those are what polygon targeting runs
+      // against, so a pin whose district we could not name is still a located
+      // user — reporting "no location" for one made the app look like it had
+      // dropped a save it had in fact persisted.
+      hasLocation: user.latitude !== null && user.longitude !== null,
       regionName: user.region_name,
       streetName: user.street_name,
       emailVerified: user.email_verified_at !== null,
@@ -377,15 +390,16 @@ export const authRoutes = new Hono<AppEnv>()
     // Reverse-geocode, then fuzzy-match region (and street) — port of
     // AuthService.UpdateLocationAsync. Geocoding failure (including a Nominatim
     // that never answers) just means no region/street match; the coordinates
-    // are still saved.
+    // are still saved, and /me reports hasLocation off those.
     const address = await reverseGeocode(c.env, latitude, longitude, Date.now() + LOCATION_BUDGET_MS);
 
-    const region = address.regionName
-      ? bestMatch(address.regionName, await q.getRegions(c.env), (r) => r.name, SIMILARITY_THRESHOLD)
-      : null;
-    const street = address.streetName
-      ? bestMatch(address.streetName, await q.getStreets(c.env), (s) => s.name, SIMILARITY_THRESHOLD)
-      : null;
+    // Walk the candidates most-specific-first and keep the first that matches,
+    // rather than betting the whole lookup on the most specific name Nominatim
+    // happened to return (see ReverseAddress.regionNames).
+    const regions = await q.getRegions(c.env);
+    const region = firstMatch(address.regionNames, regions, (r) => r.name);
+    const streets = await q.getStreets(c.env);
+    const street = firstMatch(address.streetNames, streets, (s) => s.name);
 
     await q.updateUserLocation(
       c.env, user.user_id, latitude, longitude, region?.id ?? null, street?.id ?? null);

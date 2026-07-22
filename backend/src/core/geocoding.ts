@@ -14,16 +14,27 @@ const USER_AGENT = "CityShieldAPI/1.0";
 const REQUEST_TIMEOUT_MS = 8_000;
 
 export interface ReverseAddress {
-  regionName: string | null;
-  streetName: string | null;
+  /**
+   * Region candidates, most specific first — every populated address field,
+   * not just the first one. Nominatim labels the same place at several
+   * granularities and only some of them exist in our `regions` table: the
+   * city centre comes back as a `city_district` ("Одесос") that we have never
+   * heard of, while the `city` right behind it ("Варна") is a region we seed.
+   * Returning one name meant that address matched nothing at all.
+   */
+  regionNames: string[];
+  /** Street candidates, most specific first. */
+  streetNames: string[];
 }
 
-function pick(address: Record<string, unknown>, keys: string[]): string | null {
+/** Every populated field among `keys`, in order, deduped. */
+function pickAll(address: Record<string, unknown>, keys: string[]): string[] {
+  const out: string[] = [];
   for (const key of keys) {
     const value = address[key];
-    if (typeof value === "string" && value) return value;
+    if (typeof value === "string" && value && !out.includes(value)) out.push(value);
   }
-  return null;
+  return out;
 }
 
 export interface GeoPoint {
@@ -123,7 +134,7 @@ export function buildGeocodeQuery(name: string): string {
 export async function reverseGeocode(
   env: Env, lat: number, lon: number, deadline?: number,
 ): Promise<ReverseAddress> {
-  const none: ReverseAddress = { regionName: null, streetName: null };
+  const none: ReverseAddress = { regionNames: [], streetNames: [] };
   try {
     const url = `${env.NOMINATIM_URL}/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1`;
     const res = await fetch(url, {
@@ -137,9 +148,11 @@ export async function reverseGeocode(
     const body = (await res.json()) as { address?: Record<string, unknown> };
     if (!body.address) return none;
     return {
-      // Same preference order as NominatimGeocodingService.cs.
-      regionName: pick(body.address, ["suburb", "neighbourhood", "city_district", "city", "town"]),
-      streetName: pick(body.address, ["road", "pedestrian", "path"]),
+      // Same preference order as NominatimGeocodingService.cs, but every
+      // level is kept so the caller can fall back down the list.
+      regionNames: pickAll(body.address,
+        ["suburb", "neighbourhood", "quarter", "city_district", "city", "town", "village"]),
+      streetNames: pickAll(body.address, ["road", "pedestrian", "path"]),
     };
   } catch (e) {
     console.warn(`Reverse geocoding failed for (${lat}, ${lon}): ${e}`);
