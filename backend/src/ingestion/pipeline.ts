@@ -22,7 +22,7 @@ const POLYGON_MIN_BUDGET_MS = 6_000;
 // this many failed sends, give up on the push and let the cursor advance past
 // it. The alert stays stored (notified_at NULL with push_attempts at the cap
 // marks it abandoned), so it still shows in the feed; it just never gets pushed.
-export const MAX_PUSH_ATTEMPTS = 5;
+export const MAX_PUSH_ATTEMPTS = 3;
 
 /**
  * Store + notify — the direct-call replacement for submit_to_api.
