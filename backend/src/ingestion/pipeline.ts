@@ -3,7 +3,9 @@
 // API becomes a direct call into alert-service.ts, under the same
 // store-first / notification-failure-never-fails rule.
 
-import { markAlertNotified, sendUsersNotification, storeAlert } from "../core/alert-service";
+import {
+  incrementPushAttempts, markAlertNotified, sendUsersNotification, storeAlert,
+} from "../core/alert-service";
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
 import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../shared/schemas";
@@ -14,6 +16,13 @@ import { buildPolygonForStreets } from "./polygon";
 // Overpass round-trip plus the JSTS pipeline; below this there is no point
 // starting, and the remaining budget is better spent storing the alert.
 const POLYGON_MIN_BUDGET_MS = 6_000;
+
+// A push that fails on every tick would otherwise pin the cursor until the
+// message ages off its source — a long block on a low-volume listing. After
+// this many failed sends, give up on the push and let the cursor advance past
+// it. The alert stays stored (notified_at NULL with push_attempts at the cap
+// marks it abandoned), so it still shows in the feed; it just never gets pushed.
+export const MAX_PUSH_ATTEMPTS = 5;
 
 /**
  * Store + notify — the direct-call replacement for submit_to_api.
@@ -69,10 +78,19 @@ export async function ingestAlert(
   }
 
   if (!delivered) {
+    const attempts = await incrementPushAttempts(env, stored.id);
+    if (attempts >= MAX_PUSH_ATTEMPTS) {
+      // Give up: unblock the cursor rather than pin it forever. The alert stays
+      // stored with notified_at NULL — findable as abandoned by push_attempts.
+      console.error(
+        `[${tag}] Giving up on alert ${stored.id} after ${attempts} failed push attempt(s); advancing past ${msgRef}.`);
+      return true;
+    }
     // The alert is stored; hold the cursor so the next tick re-drives it. The
     // re-store is a no-op (source_ref) and notified_at is still unset, so the
     // push retries without a duplicate alert.
-    console.warn(`[${tag}] Push send failed for alert ${stored.id}; holding cursor to retry.`);
+    console.warn(
+      `[${tag}] Push send failed for alert ${stored.id} (attempt ${attempts}/${MAX_PUSH_ATTEMPTS}); holding cursor to retry.`);
     return false;
   }
 

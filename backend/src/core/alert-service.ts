@@ -291,6 +291,11 @@ export function markAlertNotified(env: Env, alertId: string): Promise<void> {
   return q.markAlertNotified(env, alertId);
 }
 
+/** Record a failed push attempt for an alert; returns the running total. */
+export function incrementPushAttempts(env: Env, alertId: string): Promise<number> {
+  return q.incrementPushAttempts(env, alertId);
+}
+
 export async function getRecentAlerts(env: Env, maxAgeMs: number, limit: number): Promise<AlertDTO[]> {
   const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
   const rows = await q.getRecentAlertRows(env, cutoff, limit);

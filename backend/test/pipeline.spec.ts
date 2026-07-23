@@ -4,7 +4,9 @@
 import { env, fetchMock } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearRefCaches } from "../src/db/queries";
-import { applyCityWideGuard, ingestAlert, processOutageMessage } from "../src/ingestion/pipeline";
+import {
+  applyCityWideGuard, ingestAlert, MAX_PUSH_ATTEMPTS, processOutageMessage,
+} from "../src/ingestion/pipeline";
 import type { ProcessedData } from "../src/shared/schemas";
 
 const location = (name: string | null, subs: string[] = [], poly = false) =>
@@ -186,6 +188,25 @@ describe("ingestAlert idempotency + push retry (migration 0009)", () => {
       .all<{ notified_at: string | null }>();
     expect(rows.results).toHaveLength(1); // idempotent store — still one alert
     expect(rows.results[0]!.notified_at).not.toBeNull(); // delivery now stamped
+  });
+
+  it("gives up and unblocks the cursor after the push-attempt cap", async () => {
+    await makeUser();
+
+    // Every tick's send fails. The cursor holds (false) until the final attempt,
+    // which gives up and returns true so the cursor can advance past the message.
+    for (let attempt = 1; attempt <= MAX_PUSH_ATTEMPTS; attempt++) {
+      interceptPush(500);
+      const held = await ingestAlert(env, "VIK", "vik", "t", "c", cityWide(), "id=99");
+      expect(held).toBe(attempt < MAX_PUSH_ATTEMPTS ? false : true);
+    }
+
+    // Abandoned: stored, delivery never stamped, attempts sitting at the cap.
+    const row = await env.DB.prepare(
+      "SELECT notified_at, push_attempts FROM alerts WHERE source_ref = 'vik:id=99'")
+      .first<{ notified_at: string | null; push_attempts: number }>();
+    expect(row!.notified_at).toBeNull();
+    expect(row!.push_attempts).toBe(MAX_PUSH_ATTEMPTS);
   });
 
   it("does not re-push a message already delivered", async () => {

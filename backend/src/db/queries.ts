@@ -374,6 +374,18 @@ export async function markAlertNotified(env: Env, alertId: string): Promise<void
   ).bind(nowIso(), alertId).run();
 }
 
+/**
+ * Record one more failed push attempt for an alert and return the new total.
+ * Persisted per alert (keyed by source_ref across re-drives) so the pipeline can
+ * cap retries on a permanently-failing send (migration 0010).
+ */
+export async function incrementPushAttempts(env: Env, alertId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "UPDATE alerts SET push_attempts = push_attempts + 1 WHERE id = ? RETURNING push_attempts",
+  ).bind(alertId).first<{ push_attempts: number }>();
+  return row?.push_attempts ?? 0;
+}
+
 export async function getRecentAlertRows(env: Env, cutoffIso: string, limit: number): Promise<AlertRow[]> {
   // ISO-8601 "Z" strings sort correctly lexicographically (§1.2).
   const { results } = await env.DB.prepare(
