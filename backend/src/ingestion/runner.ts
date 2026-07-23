@@ -1,5 +1,5 @@
 // Scheduled dispatcher (PLAN.MD §1.7): the asyncio loops collapse into
-// one cron tick. Sources run sequentially under a 25 s deadline guard, and
+// one cron tick. Sources run sequentially under a 180 s deadline guard, and
 // the start order rotates by tick number so a slow source can't starve the
 // others. Worst case is delayed — never lost — alerts (cursor semantics).
 //
@@ -21,7 +21,15 @@ const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promis
   { name: "vt", run: vt.run },
 ];
 
-const DEADLINE_MS = 25_000;
+// The 25 s the plan first assumed was conservative: scheduled handlers get up
+// to ~15 min of wall clock (only CPU is capped at 10 ms, and the AI/Overpass/
+// Nominatim hops are all I/O — see spikes/RESULTS.md). The budget exists to
+// keep a tick well inside the 15-min cron cadence so the next tick never
+// overlaps this one (the cursor/state model assumes one writer per source at a
+// time), NOT because the platform kills at 30 s. 180 s gives the AI room to
+// wait out its I/O — a qwen3 parse runs 4–21 s, and a message may need a retry
+// or two — without raising MAX_MESSAGES_PER_TICK.
+const DEADLINE_MS = 180_000;
 const TICK_INTERVAL_MS = TICK_MINUTES * 60 * 1000;
 
 export async function runIngestion(env: Env): Promise<void> {
@@ -47,7 +55,8 @@ export async function runIngestion(env: Env): Promise<void> {
     try {
       // Belt-and-braces on top of the deadlines threaded into the source: a
       // source that somehow blocks past the budget must not take the remaining
-      // sources down with it, since workerd kills the whole invocation at ~30 s.
+      // sources down with it, so the whole tick finishes well inside the 15-min
+      // cron cadence and the next tick never overlaps it.
       await withTimeout(source.run(env, deadline), deadline - startedAt, undefined, `source '${source.name}'`);
     } catch (e) {
       console.error(`[runner] Source '${source.name}' failed after ${Date.now() - startedAt} ms: ${e}`);

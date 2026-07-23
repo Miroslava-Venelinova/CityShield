@@ -41,7 +41,7 @@ export function ticksFor(source: string): number {
  * Whether `source` should run on the tick containing `now`.
  *
  * `phase` staggers sources that share an interval so they don't all land on
- * the same tick and fight over the 25 s deadline; pass a stable per-source
+ * the same tick and fight over the 180 s deadline; pass a stable per-source
  * index. Sources at the tick rate (every === 1) are due on every tick
  * regardless of phase.
  */

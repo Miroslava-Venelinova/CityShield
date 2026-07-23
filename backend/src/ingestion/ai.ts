@@ -11,9 +11,13 @@ const MAX_TOKENS = 8000;
 const ATTEMPTS = 3;
 
 // The AI binding accepts no AbortSignal, so a wedged inference request would
-// otherwise hold the invocation open until workerd kills it. A generous cap
-// (reasoning models genuinely take a while at 8k tokens) still beats no cap.
-const RUN_TIMEOUT_MS = 20_000;
+// otherwise hold the invocation open until workerd kills it. Spike 2 clocked
+// legitimate qwen3 parses at 4–21 s (reasoning models genuinely take a while at
+// 8k tokens), so the old 20 s cap could abort a call that was about to succeed;
+// 30 s clears the observed tail while still bounding a truly wedged request.
+// The effective wait is min(this, remaining deadline) (deadline.ts), so the
+// 120 s tick budget is what actually lets this breathe.
+const RUN_TIMEOUT_MS = 30_000;
 
 export async function aiParse<T>(
   env: Env,
