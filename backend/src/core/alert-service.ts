@@ -401,11 +401,29 @@ function seededPoint(row: q.NamedRow | null): GeoPoint | null {
 
 /**
  * Geocoding strategy (ResolveCoordinatesAsync): canonicalize names against
- * our own DB first (trigram fuzzy match), then ask Nominatim. Street-level
- * pin when a street is listed, otherwise district/locality-level.
+ * our own DB first (trigram fuzzy match), then ask Nominatim.
+ *
+ * Region-first for the pin: when a location names a district/locality it
+ * usually lists several streets within it, and dropping the pin on one of
+ * them reads as "the outage is here" when it spans the whole area — so the
+ * region centroid is the better marker. Streets are only used when no region
+ * was given (or the named region resolves to nothing). This is the pin only;
+ * notification targeting stays street-first — see getUserIdsInRange.
  */
 async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: number) {
-  // 1. Street-level: first sublocation that geocodes wins
+  // 1. District / locality level: a named region pins the whole area.
+  if (dto.location_name.trim()) {
+    const match = bestMatch(dto.location_name, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD);
+    const seeded = seededPoint(match);
+    if (seeded) return seeded;
+
+    const point = await geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(dto.location_name)), deadline);
+    if (point) return point;
+    // Region named but unresolvable — fall through to the streets rather than
+    // leaving the alert with no pin at all.
+  }
+
+  // 2. Street-level fallback: first sublocation that resolves wins.
   const candidates = dto.sublocations.slice(0, 3);
   if (candidates.length > 0) {
     const streets = await q.getStreets(env); // hoisted: constant across the loop
@@ -417,15 +435,6 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
       const point = await geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(raw)), deadline);
       if (point) return point;
     }
-  }
-
-  // 2. District / locality level
-  if (dto.location_name.trim()) {
-    const match = bestMatch(dto.location_name, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD);
-    const seeded = seededPoint(match);
-    if (seeded) return seeded;
-
-    return geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(dto.location_name)), deadline);
   }
 
   return null;

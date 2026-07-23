@@ -334,6 +334,8 @@ describe("GET /api/alerts/recent", () => {
 });
 
 describe("geocoding enrichment (forward geocode + D1 cache)", () => {
+  // Street fallback path: with no region named, the street is what pins the
+  // alert (region-first only kicks in when a location_name is present).
   it("resolves a street-level pin via Nominatim and caches the result", async () => {
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/search") })
@@ -342,7 +344,7 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
 
     const sub = await submit(basePayload({
       processed_data: {
-        locations: [{ location_name: "Аспарухово", sublocations: ["ул. Дубровник"], is_polygon: false }],
+        locations: [{ location_name: "", sublocations: ["ул. Дубровник"], is_polygon: false }],
       },
     }));
     const { alert_id } = await sub.json() as SubmitResponse;
@@ -363,13 +365,42 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
     // interceptor registered, so a real call would throw and drop the pin.
     const sub2 = await submit(basePayload({
       processed_data: {
-        locations: [{ location_name: "Аспарухово", sublocations: ["Дубровник"], is_polygon: false }],
+        locations: [{ location_name: "", sublocations: ["Дубровник"], is_polygon: false }],
       },
     }));
     const { alert_id: id2 } = await sub2.json() as SubmitResponse;
     const row2 = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
       .bind(id2).first<{ locations_json: string }>();
     expect(JSON.parse(row2!.locations_json)[0].lat).toBeCloseTo(43.2141);
+  });
+
+  // The user-facing rule this priority exists for: an alert that names a region
+  // pins the region even when it also lists streets, because several streets in
+  // one district read better as a single region pin than as one arbitrary street.
+  it("pins the region, not a listed street, when both are present", async () => {
+    await env.DB.prepare(
+      "UPDATE regions SET lat = 43.1741, lng = 27.9147 WHERE region_name = 'Аспарухово'").run();
+    await env.DB.prepare(
+      "UPDATE streets SET lat = 43.1953, lng = 27.9021 WHERE street_name = 'Дубровник'").run();
+    clearRefCaches();
+
+    // No Nominatim interceptor: a seeded region needs no network call, and the
+    // street must not be consulted at all — either would throw here.
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "кв. Аспарухово", sublocations: ["ул. Дубровник"], is_polygon: false }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.1741); // region centroid, not the street's 43.1953
+    expect(loc.lng).toBeCloseTo(27.9147);
+
+    const cache = await env.DB.prepare("SELECT COUNT(*) AS n FROM geocode_cache").first<{ n: number }>();
+    expect(cache!.n).toBe(0);
   });
 
   // Migration 0005 + tools/osm-seed-builder: a matched reference row that
@@ -380,9 +411,10 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
     await env.DB.prepare("UPDATE streets SET lat = 43.1953, lng = 27.9021 WHERE street_name = 'Дубровник'").run();
     clearRefCaches(); // the row was cached without coordinates by an earlier read
 
+    // No region named, so the street pins the alert (region-first would win otherwise).
     const sub = await submit(basePayload({
       processed_data: {
-        locations: [{ location_name: "Аспарухово", sublocations: ["ул. Дубровник"], is_polygon: false }],
+        locations: [{ location_name: "", sublocations: ["ул. Дубровник"], is_polygon: false }],
       },
     }));
     const { alert_id } = await sub.json() as SubmitResponse;
@@ -398,7 +430,7 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
     expect(cache!.n).toBe(0);
   });
 
-  it("falls back to the region centroid when no street is listed", async () => {
+  it("pins the region centroid from a seeded row without calling Nominatim", async () => {
     await env.DB.prepare("UPDATE regions SET lat = 43.1741, lng = 27.9147 WHERE region_name = 'Аспарухово'").run();
     clearRefCaches();
 
@@ -423,7 +455,7 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
 
     const sub = await submit(basePayload({
       processed_data: {
-        locations: [{ location_name: "Аспарухово", sublocations: ["Розова долина"], is_polygon: false }],
+        locations: [{ location_name: "", sublocations: ["Розова долина"], is_polygon: false }],
       },
     }));
     const { alert_id } = await sub.json() as SubmitResponse;
