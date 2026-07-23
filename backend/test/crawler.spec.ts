@@ -114,6 +114,40 @@ describe("crawlIdListing cursor semantics", () => {
     expect(await getLastId(env, "vik")).toBe(1004);
   });
 
+  it("persists the cursor per success, so a mid-batch kill can't re-notify", async () => {
+    // Reproduces the production incident: message 1051 is stored + pushed, then
+    // 1052's processing hangs (a slow AI parse) until the runner's withTimeout
+    // aborts source.run() — before any post-loop write could run. The cursor
+    // MUST already reflect 1051, or the next tick re-notifies it.
+    await writeLastId(env, "vik", 1050);
+    const processedIds: number[] = [];
+    const opts: IdListingOptions = {
+      tag: "TEST",
+      category: "vik",
+      listingUrl: "https://example.com/listing",
+      idPattern: /(\d+)\.html/,
+      parsePage: () => listing([1052, 1051, 1050]),
+      parseMessage: (html) => ({ title: `t-${html}`, content: `c-${html}` }),
+      fetchImpl: async (url) => new Response(url),
+      processImpl: async (_env, _tag, _cat, _title, _content, msgRef) => {
+        const id = Number(msgRef.replace("id=", ""));
+        processedIds.push(id);
+        if (id === 1051) return true; // stored + pushed
+        await new Promise(() => {}); // 1052 hangs forever
+        return true;
+      },
+    };
+
+    // Race the crawl against a short timeout, exactly like runner.ts does.
+    await Promise.race([
+      crawlIdListing(env, Date.now() + 5000, opts),
+      new Promise((resolve) => setTimeout(resolve, 50)),
+    ]);
+
+    expect(processedIds).toEqual([1051, 1052]);
+    expect(await getLastId(env, "vik")).toBe(1051); // 1051's delivery is committed
+  });
+
   it("stops cleanly when the deadline is already exceeded", async () => {
     await writeLastId(env, "vik", 1050);
     const { opts, processedIds } = makeOpts(listing([1052, 1051]), {});

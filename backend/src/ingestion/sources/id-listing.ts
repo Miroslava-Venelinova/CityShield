@@ -78,7 +78,6 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
 
   // Oldest-first; cap work per tick — anything left is picked up next tick
   // because the cursor only advances past successes.
-  let latestId = storedId;
   const batch = newMessages.reverse().slice(0, MAX_MESSAGES_PER_TICK);
   for (const { id, url } of batch) {
     if (Date.now() >= deadline) {
@@ -102,8 +101,16 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
       console.warn(`[${tag}] Stopping at id=${id}; it will be retried next run.`);
       break;
     }
-    latestId = Math.max(latestId, id);
-  }
 
-  if (latestId !== storedId) await writeLastId(env, category, latestId);
+    // Persist the cursor after EACH success, not once after the whole batch.
+    // A trailing write never runs when the invocation is killed mid-batch —
+    // and it routinely is: the next message's AI parse can burn the remaining
+    // budget, so the runner's deadline guard aborts source.run() before the
+    // post-loop write is reached. The already-notified message then looks new
+    // on every following tick, re-storing and re-pushing it until the cursor
+    // finally advances. Writing per success commits delivered work immediately.
+    // Ids are ascending (batch is oldest-first), so the cursor only ever moves
+    // forward, and writeLastId is an idempotent upsert.
+    await writeLastId(env, category, id);
+  }
 }
