@@ -3,7 +3,7 @@
 // API becomes a direct call into alert-service.ts, under the same
 // store-first / notification-failure-never-fails rule.
 
-import { sendUsersNotification, storeAlert } from "../core/alert-service";
+import { markAlertNotified, sendUsersNotification, storeAlert } from "../core/alert-service";
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
 import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../shared/schemas";
@@ -16,9 +16,14 @@ import { buildPolygonForStreets } from "./polygon";
 const POLYGON_MIN_BUDGET_MS = 6_000;
 
 /**
- * Store + notify — the direct-call replacement for submit_to_api. Returns
- * true when the alert was stored (a notification failure does not fail the
- * message; retrying it would duplicate the alert AND the pushes).
+ * Store + notify — the direct-call replacement for submit_to_api.
+ *
+ * Both halves are idempotent per source message, so returning false safely
+ * hands retry to the cursor: the next tick re-drives the message, storeAlert
+ * no-ops on the source_ref, and — because notified_at is still unset — the push
+ * is re-sent. Returns true once the alert is stored AND its push has either
+ * landed or is genuinely owed to nobody; false only when the send failed and
+ * the cursor must hold so the message comes back around.
  */
 export async function ingestAlert(
   env: Env,
@@ -30,26 +35,49 @@ export async function ingestAlert(
   msgRef: string,
   deadline?: number,
 ): Promise<boolean> {
-  let alertId: string;
+  // Stable key from the source message to its stored alert, unique across
+  // sources: msgRef alone ("id=17148") is not — two categories can share a
+  // numeric id — so prefix the category, e.g. "vik:id=17148".
+  const sourceRef = `${category}:${msgRef}`;
+
+  let stored;
   try {
-    alertId = await storeAlert(
+    stored = await storeAlert(
       env, category, title, content, processed.start_time, processed.end_time,
-      processed.locations, deadline);
+      processed.locations, sourceRef, deadline);
   } catch (e) {
     console.error(`[${tag}] Failed to store alert for ${msgRef}: ${e}`);
     return false;
   }
 
-  try {
-    await sendUsersNotification(
-      env, processed.locations, title, content, category,
-      processed.start_time, processed.end_time, processed.city_wide,
-      processed.bus_lines ?? null);
-  } catch (e) {
-    console.error(`[${tag}] Notification dispatch failed for alert ${alertId}; the alert is stored. ${e}`);
+  // Already delivered on an earlier tick (store found the stored row with its
+  // flag set): the push is done, so let the cursor advance without re-sending.
+  if (stored.notified_at !== null) {
+    console.log(`[${tag}] ${msgRef} already delivered as alert ${stored.id}; skipping push.`);
+    return true;
   }
 
-  console.log(`[${tag}] Ingested ${msgRef} as alert ${alertId}`);
+  let delivered = false;
+  try {
+    ({ delivered } = await sendUsersNotification(
+      env, processed.locations, title, content, category,
+      processed.start_time, processed.end_time, processed.city_wide,
+      processed.bus_lines ?? null));
+  } catch (e) {
+    console.error(`[${tag}] Notification dispatch errored for alert ${stored.id}; will retry. ${e}`);
+    return false;
+  }
+
+  if (!delivered) {
+    // The alert is stored; hold the cursor so the next tick re-drives it. The
+    // re-store is a no-op (source_ref) and notified_at is still unset, so the
+    // push retries without a duplicate alert.
+    console.warn(`[${tag}] Push send failed for alert ${stored.id}; holding cursor to retry.`);
+    return false;
+  }
+
+  await markAlertNotified(env, stored.id);
+  console.log(`[${tag}] Ingested ${msgRef} as alert ${stored.id}`);
   return true;
 }
 

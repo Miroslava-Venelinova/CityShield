@@ -37,13 +37,23 @@ interface CreateNotificationResponse {
   errors?: unknown;
 }
 
+/** One chunk's outcome: users reached, and whether the API accepted the send. */
+interface ChunkResult {
+  recipients: number;
+  /** false only on a retryable transport-level failure (network/timeout/non-2xx).
+   *  A 200 that reached zero live devices is still ok — those aliases are stale
+   *  churn, not a fault worth re-driving the message for. */
+  ok: boolean;
+}
+
 /**
  * Never rejects: one chunk's network failure must not discard the outcomes of
- * the other chunks. Returns how many users that chunk reached.
+ * the other chunks. Returns how many users that chunk reached and whether the
+ * send was accepted (so the caller can retry only genuine transport failures).
  */
 async function sendChunk(
   env: Env, userIds: string[], notification: PushNotification,
-): Promise<number> {
+): Promise<ChunkResult> {
   try {
     const res = await fetch(API_URL, {
       method: "POST",
@@ -64,7 +74,7 @@ async function sendChunk(
 
     if (!res.ok) {
       console.error(`OneSignal send failed: ${res.status} ${await res.text()}`);
-      return 0;
+      return { recipients: 0, ok: false };
     }
 
     const body = (await res.json()) as CreateNotificationResponse;
@@ -76,11 +86,21 @@ async function sendChunk(
 
     // `recipients` counts devices, which is what actually got reached; fall back
     // to the chunk size when the field is absent rather than reporting zero.
-    return body.recipients ?? userIds.length;
+    return { recipients: body.recipients ?? userIds.length, ok: true };
   } catch (e) {
     console.warn(`OneSignal send errored: ${e}`);
-    return 0;
+    return { recipients: 0, ok: false };
   }
+}
+
+export interface PushResult {
+  sent: number;
+  failed: number;
+  /** false only when a send to a non-empty audience hit a retryable transport
+   *  failure (network/timeout/non-2xx) on at least one chunk. True when there
+   *  was nobody to send to, credentials were absent (deliberate skip), or every
+   *  chunk was accepted — including sends that reached zero live devices. */
+  ok: boolean;
 }
 
 /**
@@ -88,28 +108,31 @@ async function sendChunk(
  * is the app's own `user_id`, set client-side via `OneSignal.login()`.
  *
  * Never throws: a notification failure must never fail the caller's request
- * (the alert is already stored by then).
+ * (the alert is already stored by then). Instead it reports `ok`, so a caller
+ * that owns retry (the ingest pipeline) can hold its cursor on a real failure.
  */
 export async function sendPushToUsers(
   env: Env, userIds: string[], notification: PushNotification,
-): Promise<{ sent: number; failed: number }> {
-  if (userIds.length === 0) return { sent: 0, failed: 0 };
+): Promise<PushResult> {
+  if (userIds.length === 0) return { sent: 0, failed: 0, ok: true };
 
   if (!env.ONESIGNAL_API_KEY || !env.ONESIGNAL_APP_ID) {
     // Local dev / tests without credentials: log and skip rather than failing.
+    // A missing config is not a transient fault, so ok:true — retrying would
+    // only pin the pipeline's cursor forever.
     console.warn(
       `ONESIGNAL_API_KEY/ONESIGNAL_APP_ID not set — skipping push to ${userIds.length} user(s)`);
-    return { sent: 0, failed: userIds.length };
+    return { sent: 0, failed: userIds.length, ok: true };
   }
 
   const chunks: string[][] = [];
   for (let i = 0; i < userIds.length; i += MAX_ALIASES_PER_REQUEST)
     chunks.push(userIds.slice(i, i + MAX_ALIASES_PER_REQUEST));
 
-  const counts = await Promise.all(chunks.map((c) => sendChunk(env, c, notification)));
-  const sent = counts.reduce((a, b) => a + b, 0);
+  const results = await Promise.all(chunks.map((c) => sendChunk(env, c, notification)));
+  const sent = results.reduce((a, r) => a + r.recipients, 0);
 
   // `sent` counts devices and `userIds` counts users, so a user with two phones
   // can push `sent` above the user count — clamp so `failed` never goes negative.
-  return { sent, failed: Math.max(0, userIds.length - sent) };
+  return { sent, failed: Math.max(0, userIds.length - sent), ok: results.every((r) => r.ok) };
 }

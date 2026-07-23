@@ -139,9 +139,19 @@ async function getUserIdsInPolygonRange(env: Env, polygonJson: Json): Promise<st
   return [...ids];
 }
 
+export interface NotifyResult {
+  /** The post-filter audience the push was addressed to. */
+  recipients: string[];
+  /** false only when a send to a non-empty audience hit a retryable transport
+   *  failure and is worth re-driving. True when there was nobody to notify or
+   *  OneSignal accepted the send (see PushResult.ok). */
+  delivered: boolean;
+}
+
 /**
  * Port of SendUsersNotificationAsync — same decision tree, returns the
- * notified user ids.
+ * notified user ids plus whether delivery succeeded (so a caller that owns
+ * retry can distinguish "sent" from "send failed, try again").
  */
 export async function sendUsersNotification(
   env: Env,
@@ -153,7 +163,7 @@ export async function sendUsersNotification(
   endTime: string | null,
   cityWide: boolean | null,
   busLines: string[] | null,
-): Promise<string[]> {
+): Promise<NotifyResult> {
   // ── 1. Gather target users ─────────────────────────────────────────────
   let userIds: string[] = [];
   const locationArray = Array.isArray(locations) ? locations : [];
@@ -174,7 +184,7 @@ export async function sendUsersNotification(
     // arrived — almost certainly an LLM misparse of a street-level outage.
     // Store-only; never escalate it into a broadcast to the whole user base.
     console.warn(`Alert '${title}' (${category}) has no locations and city_wide=false — skipping notifications.`);
-    return [];
+    return { recipients: [], delivered: true };
   } else {
     // city_wide=true or a legacy payload without the flag: broadcast to
     // everyone; the per-category preference filter below still applies.
@@ -208,7 +218,8 @@ export async function sendUsersNotification(
   const allIds = [...new Set(userIds)];
   const disabled = new Set(await q.getDisabledUserIds(env, allIds, category));
   const filteredIds = allIds.filter((id) => !disabled.has(id));
-  if (filteredIds.length === 0) return filteredIds;
+  // Nobody to notify is a delivered outcome, not a failure to retry.
+  if (filteredIds.length === 0) return { recipients: filteredIds, delivered: true };
 
   // ── 3. Push data payload — all values must be strings ──────────────────
   const pushData = {
@@ -233,13 +244,21 @@ export async function sendUsersNotification(
   // Users are addressed by id (OneSignal external_id), so there is no device
   // lookup here — the provider resolves users to devices.
   const notification: PushNotification = { title, body: fullBody, data: pushData };
-  await sendPushToUsers(env, filteredIds, notification);
+  const result = await sendPushToUsers(env, filteredIds, notification);
 
-  return filteredIds;
+  return { recipients: filteredIds, delivered: result.ok };
 }
 
 // ── Alert storage (map/read side) ─────────────────────────────────────────────
 
+/**
+ * Store an alert, idempotent per source message when a sourceRef is given.
+ *
+ * A stable sourceRef ("<category>:id=<n>") lets a re-driven message find its
+ * already-stored alert instead of duplicating it — the read side of the
+ * lost-push fix (see ingestAlert). Manual /submit-data injections pass null:
+ * they have no source message and always store a fresh row.
+ */
 export async function storeAlert(
   env: Env,
   category: string,
@@ -248,12 +267,12 @@ export async function storeAlert(
   startTime: string | null,
   endTime: string | null,
   locations: unknown,
+  sourceRef: string | null,
   deadline?: number,
-): Promise<string> {
+): Promise<q.StoredAlert> {
   const enriched = await enrichLocations(env, locations, deadline);
-  const id = crypto.randomUUID();
-  await q.insertAlert(env, {
-    id,
+  return q.insertAlert(env, {
+    id: crypto.randomUUID(),
     category,
     title,
     content,
@@ -262,8 +281,14 @@ export async function storeAlert(
     end_time: endTime,
     locations_json: JSON.stringify(enriched),
     created_on_utc: new Date().toISOString(),
+    source_ref: sourceRef,
+    notified_at: null,
   });
-  return id;
+}
+
+/** Stamp an alert's delivery time once its push has landed (idempotency flag). */
+export function markAlertNotified(env: Env, alertId: string): Promise<void> {
+  return q.markAlertNotified(env, alertId);
 }
 
 export async function getRecentAlerts(env: Env, maxAgeMs: number, limit: number): Promise<AlertDTO[]> {

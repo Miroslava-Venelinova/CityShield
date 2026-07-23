@@ -324,14 +324,54 @@ export interface AlertRow {
   end_time: string | null;
   locations_json: string;
   created_on_utc: string;
+  /** Stable "<category>:id=<n>" key back to the source message; NULL for
+   *  manual /submit-data injections, which never dedup (migration 0009). */
+  source_ref: string | null;
+  /** ISO-8601 when the push landed; NULL = delivery still owed (migration 0009). */
+  notified_at: string | null;
 }
 
-export async function insertAlert(env: Env, row: AlertRow) {
+/** The canonical stored row for a source message: its id and delivery state. */
+export interface StoredAlert {
+  id: string;
+  notified_at: string | null;
+}
+
+/**
+ * Idempotent per source message (migration 0009): keyed by source_ref, a second
+ * attempt at the same message finds the stored row instead of duplicating the
+ * alert (and re-pushing to everyone). Returns the canonical row's id + delivery
+ * state either way, so the caller can tell "freshly stored, push owed" from
+ * "already delivered on an earlier tick".
+ */
+export async function insertAlert(env: Env, row: AlertRow): Promise<StoredAlert> {
+  // The conflict target repeats the partial index's WHERE so SQLite matches it.
   await env.DB.prepare(
-    `INSERT INTO alerts (id, category, title, content, severity, start_time, end_time, locations_json, created_on_utc)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO alerts (id, category, title, content, severity, start_time, end_time, locations_json, created_on_utc, source_ref, notified_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_ref) WHERE source_ref IS NOT NULL DO NOTHING`,
   ).bind(row.id, row.category, row.title, row.content, row.severity,
-    row.start_time, row.end_time, row.locations_json, row.created_on_utc).run();
+    row.start_time, row.end_time, row.locations_json, row.created_on_utc,
+    row.source_ref, row.notified_at).run();
+
+  // No source_ref → no dedup key (NULLs never conflict under the partial index),
+  // so the insert always created our own row; skip the read-back.
+  if (row.source_ref === null) return { id: row.id, notified_at: row.notified_at };
+
+  // With a source_ref the insert may have been a no-op (the message was stored
+  // on an earlier tick); read back the canonical row to get its id + delivery
+  // state, whether we just wrote it or it already existed.
+  const stored = await env.DB.prepare(
+    "SELECT id, notified_at FROM alerts WHERE source_ref = ?",
+  ).bind(row.source_ref).first<StoredAlert>();
+  return stored!;
+}
+
+/** Stamp delivery time once a push for an alert has landed (idempotency flag). */
+export async function markAlertNotified(env: Env, alertId: string): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE alerts SET notified_at = ? WHERE id = ?",
+  ).bind(nowIso(), alertId).run();
 }
 
 export async function getRecentAlertRows(env: Env, cutoffIso: string, limit: number): Promise<AlertRow[]> {

@@ -1,10 +1,10 @@
 // Pipeline tests: the city-wide guard for spike 2's known qwen3 deviation,
 // and processOutageMessage end-to-end with a mocked AI binding against D1.
 
-import { env } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { env, fetchMock } from "cloudflare:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearRefCaches } from "../src/db/queries";
-import { applyCityWideGuard, processOutageMessage } from "../src/ingestion/pipeline";
+import { applyCityWideGuard, ingestAlert, processOutageMessage } from "../src/ingestion/pipeline";
 import type { ProcessedData } from "../src/shared/schemas";
 
 const location = (name: string | null, subs: string[] = [], poly = false) =>
@@ -105,4 +105,102 @@ describe("processOutageMessage (mocked AI)", () => {
     const ok = await processOutageMessage(env, "VIK", "vik", "t", "c", "id=3");
     expect(ok).toBe(true);
   }, 15_000);
+});
+
+// The lost-push fix (migration 0009): a failed send must hold the cursor so the
+// message is re-driven, and the re-drive must neither duplicate the alert nor
+// re-notify once delivery has landed. Driven through ingestAlert with a
+// city-wide payload so no AI or geocoding is involved.
+describe("ingestAlert idempotency + push retry (migration 0009)", () => {
+  const PUSH_ENV = env as { ONESIGNAL_APP_ID?: string; ONESIGNAL_API_KEY?: string };
+
+  beforeAll(() => {
+    fetchMock.activate();
+    fetchMock.disableNetConnect();
+  });
+
+  beforeEach(() => {
+    PUSH_ENV.ONESIGNAL_APP_ID = "test-app-id";
+    PUSH_ENV.ONESIGNAL_API_KEY = "test-api-key";
+  });
+
+  afterEach(() => {
+    delete PUSH_ENV.ONESIGNAL_APP_ID;
+    delete PUSH_ENV.ONESIGNAL_API_KEY;
+    fetchMock.assertNoPendingInterceptors();
+  });
+
+  // One OneSignal send with the given HTTP status; returns a live call counter.
+  function interceptPush(status: number): () => number {
+    let calls = 0;
+    fetchMock.get("https://api.onesignal.com")
+      .intercept({ path: "/notifications", method: "POST" })
+      .reply(() => {
+        calls++;
+        return {
+          statusCode: status,
+          data: JSON.stringify(status === 200 ? { id: "n", recipients: 1 } : { error: "down" }),
+          responseOptions: { headers: { "Content-Type": "application/json" } },
+        };
+      })
+      .times(1);
+    return () => calls;
+  }
+
+  async function makeUser(): Promise<void> {
+    const userId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO users (user_id, email, password_hash, receives_all_alerts, subscribed_bus_lines, created_on_utc, updated_on_utc)
+       VALUES (?, ?, 'x', 0, '[]', ?, ?)`,
+    ).bind(userId, `${userId}@example.com`, now, now).run();
+  }
+
+  const cityWide = (): ProcessedData => ({
+    locations: [], start_time: null, end_time: null, city_wide: true,
+  });
+
+  it("holds the cursor on a failed send, then re-drives without duplicating or re-storing", async () => {
+    await makeUser();
+
+    const failCount = interceptPush(500);
+    const first = await ingestAlert(env, "VIK", "vik", "Авария", "text", cityWide(), "id=42");
+    expect(first).toBe(false); // send failed → false so the cursor holds
+    expect(failCount()).toBe(1);
+
+    // Stored, but delivery still owed.
+    const stored = await env.DB.prepare(
+      "SELECT source_ref, notified_at FROM alerts")
+      .all<{ source_ref: string; notified_at: string | null }>();
+    expect(stored.results).toHaveLength(1);
+    expect(stored.results[0]!.source_ref).toBe("vik:id=42");
+    expect(stored.results[0]!.notified_at).toBeNull();
+
+    // Next tick re-drives the same message: no duplicate alert, push retries.
+    const okCount = interceptPush(200);
+    const second = await ingestAlert(env, "VIK", "vik", "Авария", "text", cityWide(), "id=42");
+    expect(second).toBe(true);
+    expect(okCount()).toBe(1);
+
+    const rows = await env.DB.prepare("SELECT notified_at FROM alerts")
+      .all<{ notified_at: string | null }>();
+    expect(rows.results).toHaveLength(1); // idempotent store — still one alert
+    expect(rows.results[0]!.notified_at).not.toBeNull(); // delivery now stamped
+  });
+
+  it("does not re-push a message already delivered", async () => {
+    await makeUser();
+
+    const okCount = interceptPush(200);
+    expect(await ingestAlert(env, "VIK", "vik", "t", "c", cityWide(), "id=7")).toBe(true);
+    expect(okCount()).toBe(1);
+
+    // Re-drive: store no-ops and notified_at is set, so no second send. No
+    // interceptor is registered for a second call — disableNetConnect would
+    // throw if one were attempted, failing the test.
+    expect(await ingestAlert(env, "VIK", "vik", "t", "c", cityWide(), "id=7")).toBe(true);
+
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM alerts").first<{ n: number }>();
+    expect(count!.n).toBe(1);
+  });
 });

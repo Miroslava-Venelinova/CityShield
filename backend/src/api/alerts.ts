@@ -76,16 +76,19 @@ export const alertRoutes = new Hono<AppEnv>()
 
     // Persist BEFORE notifications go out: if the store fails the scraper
     // gets a 500 and can safely re-submit, because no push has been sent yet.
+    // Manual injection has no source message, so no dedup key: pass null and
+    // always store a fresh row (the idempotency path is for cursor-driven
+    // sources; see ingestAlert).
     const deadline = Date.now() + SUBMIT_BUDGET_MS;
-    const alertId = await storeAlert(
-      c.env, category, title, content, startTime, endTime, locations, deadline);
+    const { id: alertId } = await storeAlert(
+      c.env, category, title, content, startTime, endTime, locations, null, deadline);
 
     // Never fail the request once the alert is stored: a non-2xx here would
     // make the scraper re-submit a message whose pushes already went out.
     let notifiedIds: string[] = [];
     try {
-      notifiedIds = await sendUsersNotification(
-        c.env, locations, title, content, category, startTime, endTime, cityWide, busLines);
+      ({ recipients: notifiedIds } = await sendUsersNotification(
+        c.env, locations, title, content, category, startTime, endTime, cityWide, busLines));
     } catch (e) {
       console.error(`Notification dispatch failed for alert ${alertId}; the alert is stored. ${e}`);
     }
