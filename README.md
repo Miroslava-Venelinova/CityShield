@@ -13,9 +13,10 @@ Cloudflare's free plan. A React Native app is the client.
 
 > **History:** CityShield previously ran on a Python ingestion service + an
 > ASP.NET Core API + PostgreSQL/PostGIS + self-hosted Ollama. That stack has been
-> replaced and now lives, unmaintained, in [`backend_deprecated/`](backend_deprecated/) — see
-> [`backend_deprecated/DEPRECATED.md`](backend_deprecated/DEPRECATED.md). The migration is recorded
-> in [PLAN.MD](PLAN.MD) and [TODO.md](TODO.md).
+> replaced, and its source has now been deleted from the working tree — it is
+> still in git history if a port ever needs checking against the original
+> (`git log --all -- backend_deprecated/`, last present at commit `026f562`).
+> The migration itself is recorded in [PLAN.MD](PLAN.MD) and [TODO.md](TODO.md).
 
 ---
 
@@ -107,7 +108,6 @@ CityShield/
 ├── tools/
 │   ├── osm-seed-builder/     Local UI that builds the seed data from Overpass
 │   └── push-tester/          Local UI that fires a test push at one user or everyone
-├── backend_deprecated/       Old pre-Cloudflare stack — do not use (see DEPRECATED.md)
 ├── setup.bat                 Windows: install deps for frontend and/or backend
 ├── PLAN.MD                   Cloudflare migration plan (design spec)
 ├── TODO.md                   Migration checklist / status
@@ -226,4 +226,3 @@ Pushes to `main` deploy automatically via GitHub Actions once the
 | [SETUP.md](SETUP.md) | Operator setup — accounts, secrets, provisioning |
 | [frontend/SETUP.md](frontend/SETUP.md) | Mobile app development environment |
 | [backend/spikes/RESULTS.md](backend/spikes/RESULTS.md) | Phase 0 de-risking spike findings |
-| [backend_deprecated/DEPRECATED.md](backend_deprecated/DEPRECATED.md) | The retired pre-Cloudflare stack |

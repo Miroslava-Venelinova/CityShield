@@ -1,7 +1,0 @@
-# Test / development-only dependencies.
-#   pip install -r requirements.txt -r requirements-dev.txt
-pytest==8.4.2
-requests-mock==1.12.1
-
-# Debug map rendering (POLYGON_DEBUG_MAP / scripts) — not needed in production.
-folium==0.20.0

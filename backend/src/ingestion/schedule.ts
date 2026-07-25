@@ -1,7 +1,7 @@
-// Per-source polling intervals — port of the *_INTERVAL settings in
-// backend_deprecated/backend/config.py. Some sources publish a handful of
-// messages a week, so hitting them every tick is pure waste (and burns AI +
-// D1 quota on nothing).
+// Per-source polling intervals — port of the *_INTERVAL settings in the retired
+// Python service's config.py (deleted from the tree; see git history). Some
+// sources publish a handful of messages a week, so hitting them every tick is
+// pure waste (and burns AI + D1 quota on nothing).
 //
 // The Worker still wakes on ONE cron ("*/15 * * * *", see wrangler.jsonc);
 // this module decides which sources are due on a given tick. Whether a source

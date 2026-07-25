@@ -67,5 +67,3 @@ export const VT_JSON_SCHEMA = {
 export const vtAiSchema = z.object({
   bus_lines: z.array(z.string()).nullable().default(null),
 });
-
-export type VtAiOutput = z.infer<typeof vtAiSchema>;
