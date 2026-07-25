@@ -67,7 +67,15 @@
     "JWT_EXPIRE_MINUTES": "60",
     // OneSignal app pushes are sent from. Not a secret — the same id ships
     // inside the mobile app; the REST API key next to it is the secret.
-    "ONESIGNAL_APP_ID": "2988dfb1-4647-4dc5-b5bb-7c52a3150b5f"
+    "ONESIGNAL_APP_ID": "2988dfb1-4647-4dc5-b5bb-7c52a3150b5f",
+    // Origin for the verification/reset links we mail out. Pinned here rather
+    // than derived from the request, because the request's Host is supplied by
+    // the caller: a forged one would mail a working reset token on a link
+    // pointing at someone else's server. Cloudflare will not route a mismatched
+    // Host to this Worker, so that was a backstop rather than a live hole — but
+    // the fix costs one line and removes the class. Update this when a custom
+    // domain replaces the workers.dev name.
+    "SELF_URL": "https://cityshield.cityshield-varna.workers.dev"
   }
   // Secrets (wrangler secret put / .dev.vars): JWT_KEY, INGEST_API_KEY, ONESIGNAL_API_KEY
   // Mail delivery is mocked for now (src/core/mailer.ts) — no provider config here yet.

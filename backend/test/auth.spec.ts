@@ -2,6 +2,9 @@
 
 import { env, fetchMock } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  nominatimSlotsGranted, resetNominatimThrottle, reverseGeocode,
+} from "../src/core/geocoding";
 import { clearRefCaches } from "../src/db/queries";
 import { api, jsonInit, registerAndLogin } from "./helpers";
 
@@ -228,5 +231,31 @@ describe("PUT /api/auth/location", () => {
   it("401s without a token", async () => {
     expect((await api("/api/auth/location",
       jsonInit("PUT", { latitude: 43.2, longitude: 27.9 }))).status).toBe(401);
+  });
+});
+
+// The ≥1,100 ms spacing is how we hold up the ≤1 rps side of OSMF's usage
+// policy, which the privacy policy commits us to. It used to wrap forward
+// geocoding only, leaving reverse — the direction an actual user triggers, and
+// the one with no cache in front of it — going out unspaced. RL_GEOCODE_USER
+// does not substitute: it bounds one user's calls per minute, not how many
+// users call at once.
+describe("Nominatim rate policy", () => {
+  // Asserted on the slot counter rather than on elapsed time: the throttle's
+  // effect is a wall-clock delay, and `Date.now()` inside workerd advances at
+  // I/O boundaries instead of continuously, so a stopwatch assertion here passes
+  // whether or not the throttle is wired up (it did, before this was rewritten).
+  it("takes a throttle slot for a reverse lookup", async () => {
+    resetNominatimThrottle();
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({ address: { city: "Варна" } }),
+        { headers: { "Content-Type": "application/json" } });
+
+    const address = await reverseGeocode(env, 43.20, 27.91, Date.now() + 60_000);
+
+    expect(nominatimSlotsGranted()).toBe(1);
+    // Throttled, not dropped — the lookup still resolves.
+    expect(address.regionNames).toContain("Варна");
   });
 });

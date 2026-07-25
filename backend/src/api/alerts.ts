@@ -7,6 +7,7 @@ import { getRecentAlerts, sendUsersNotification, storeAlert } from "../core/aler
 import { sendPushToUsers } from "../core/onesignal";
 import * as q from "../db/queries";
 import { KNOWN_CATEGORIES } from "../shared/constants";
+import { detach } from "./background";
 import type { AppEnv } from "./middleware";
 import { requireAuth, requireIngestKey } from "./middleware";
 
@@ -28,15 +29,6 @@ const FEED_CACHE_TTL_S = 60;
 
 /** User-independent cache key — never derived from the caller's token. */
 const feedCacheKey = (url: string) => new Request(`${new URL(url).origin}/api/alerts/recent`);
-
-/** Hono only exposes executionCtx when one was supplied (not via app.request in tests). */
-function detach(c: { executionCtx: { waitUntil(p: Promise<unknown>): void } }, promise: Promise<unknown>): void {
-  try {
-    c.executionCtx.waitUntil(promise);
-  } catch {
-    void promise; // no ExecutionContext — the cache write is best-effort anyway
-  }
-}
 
 /** Test hook: drop the edge-cached feed, which outlives per-test D1 resets. */
 export async function clearAlertFeedCache(origin = "http://localhost"): Promise<void> {

@@ -1,11 +1,15 @@
 // Wall-clock budgeting for the ingest path.
 //
-// A sub-hourly cron on the free plan gets ~30 s of wall clock, and every
-// external hop in the pipeline (source fetch, Workers AI, Overpass, Nominatim,
-// FCM) can hang for far longer than that on its own. Without a shared budget
+// Every external hop in the pipeline (source fetch, Workers AI, Overpass,
+// Nominatim, OneSignal) can hang for minutes on its own. Without a shared budget
 // the runner's deadline check between messages is fiction: one stuck subrequest
-// burns the whole invocation, workerd kills it mid-flight, and the neurons and
-// subrequests spent on the message are lost.
+// burns the whole invocation and the neurons and subrequests spent on the
+// message are lost.
+//
+// The budget that matters is the cron cadence, not a platform kill: the tick has
+// to finish well inside 15 minutes so the next one never overlaps it, because
+// the cursor/seen-id model assumes one writer per source at a time. See
+// DEADLINE_MS in ingestion/runner.ts for the number and the reasoning.
 //
 // The contract is: a `deadline` is an absolute `Date.now()` timestamp threaded
 // down from the runner. Every blocking operation caps its own timeout at

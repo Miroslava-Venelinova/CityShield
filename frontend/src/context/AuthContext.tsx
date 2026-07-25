@@ -3,9 +3,25 @@ import React, {
   createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {authApi, setSessionRenewer} from '../services/api';
+import {ApiError, authApi, setSessionRenewer} from '../services/api';
 import {clearUser, identifyUser} from '../services/push';
 
+// Both tokens live in AsyncStorage, which is NOT encrypted — it is a plain file
+// in the app's private data directory.
+//
+// Considered and deliberately not done: moving the refresh token to
+// react-native-keychain / EncryptedSharedPreferences. The paths that would let
+// another party read this file are already closed — app-private storage is
+// unreadable by other apps, and `android:allowBackup="false"` in the manifest
+// blocks `adb backup` and Google backup from carrying it off the device. What
+// remains is a rooted or otherwise compromised device, and there the Keystore
+// buys less than it looks like: an attacker running as the app's own UID can
+// ask it to decrypt. So the trade was a native dependency and a native rebuild
+// against a partial mitigation for a threat that already owns the device.
+//
+// Revisit if any of that changes — in particular if allowBackup is ever turned
+// back on, which would make this a real exfiltration path rather than a
+// theoretical one.
 const ACCESS_KEY  = 'auth_token';
 const REFRESH_KEY = 'refresh_token';
 
@@ -79,13 +95,22 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
         ]).catch(() => {});
         setToken(res.token);
         return res.token;
-      } catch {
-        // 401 means the refresh token is spent, expired or revoked — the
-        // session is genuinely over and the user must sign in again. A network
-        // failure lands here too and signs them out a little eagerly; the
-        // alternative is leaving the app in the exact silent-dead state this
-        // whole mechanism exists to remove.
-        await clearSession();
+      } catch (err) {
+        // Only a 401 means the session is actually over — the refresh token is
+        // spent, expired or revoked, and nothing but a password will fix it.
+        //
+        // Everything else is transient and must NOT sign the user out. The
+        // window this protects is narrow but entirely ordinary: the app wakes
+        // with an hours-old access token, the first call 401s, and renewal is
+        // the request that goes out while the phone is still on a dead
+        // connection (or lands on a 429/5xx). Clearing here made that moment
+        // cost the user their password, for a session the server had not
+        // revoked. Returning null instead leaves the tokens in place, surfaces
+        // the failure to the screen as any other error, and lets the next call
+        // renew normally once the network is back.
+        if (err instanceof ApiError && err.status === 401) {
+          await clearSession();
+        }
         return null;
       }
     });
@@ -144,7 +169,7 @@ export const AuthProvider = ({children}: {children: ReactNode}) => {
   };
 
   const logout = async () => {
-    // Revoke server-side too, so the 60-day refresh token dies with the session
+    // Revoke server-side too, so the 90-day refresh token dies with the session
     // rather than lingering in the database until it expires on its own.
     const refreshToken = refreshTokenRef.current;
     if (refreshToken) {

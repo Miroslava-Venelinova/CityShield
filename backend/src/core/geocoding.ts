@@ -2,8 +2,15 @@
 // /api/auth/location (one uncached call per request, matching the old
 // service — only forward lookups were cached). Forward geocoding backs alert
 // enrichment, with the cache moved from process memory to the D1
-// geocode_cache table (misses are cached too) and the 1 rps throttle kept as
-// ≥1,100 ms spacing between uncached calls within one invocation.
+// geocode_cache table (misses are cached too).
+//
+// Both directions go through the same ≥1,100 ms slot reservation, because OSMF's
+// 1 rps limit counts requests, not lookup directions. Reverse used to skip it on
+// the grounds that it is uncached and user-driven — but "user-driven" is exactly
+// what makes it unbounded: PUT /location is rate limited per *user*
+// (RL_GEOCODE_USER), which says nothing about how many users call it at once, so
+// a busy minute could put an arbitrary number of reverse lookups on the wire
+// while forward lookups politely queued behind each other.
 
 import type { Env } from "../env";
 import { abortIn, msLeft } from "../shared/deadline";
@@ -56,6 +63,28 @@ const MIN_SPACING_MS = 1_100;
 let throttleChain: Promise<void> = Promise.resolve();
 
 /**
+ * How many slots have been granted, i.e. how many requests this isolate has
+ * actually put on the wire under the throttle.
+ *
+ * A test hook, in the same spirit as clearRefCaches: "was this lookup throttled"
+ * is otherwise only observable as elapsed wall-clock, and `Date.now()` inside
+ * workerd advances at I/O boundaries rather than continuously, so timing it
+ * measures nothing reliable.
+ */
+let slotsGranted = 0;
+
+export function nominatimSlotsGranted(): number {
+  return slotsGranted;
+}
+
+/** Test hook: forget the spacing, so one test's calls don't delay the next's. */
+export function resetNominatimThrottle(): void {
+  lastNominatimCallAt = 0;
+  slotsGranted = 0;
+  throttleChain = Promise.resolve();
+}
+
+/**
  * Reserve the next Nominatim slot. Resolves false when the wait would not fit
  * inside the caller's budget — a skipped geocode (alert stored without
  * coordinates) is strictly better than sleeping into a mid-flight kill.
@@ -67,6 +96,7 @@ function reserveNominatimSlot(deadline?: number): Promise<boolean> {
     if (msLeft(deadline) < wait + 1_000) return false;
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     lastNominatimCallAt = Date.now();
+    slotsGranted++;
     return true;
   });
   // The chain must not stall on a failed link, and must not surface unhandled
@@ -136,6 +166,12 @@ export async function reverseGeocode(
 ): Promise<ReverseAddress> {
   const none: ReverseAddress = { regionNames: [], streetNames: [] };
   try {
+    if (!(await reserveNominatimSlot(deadline))) {
+      // No region/street match, coordinates still saved — the same degradation
+      // the caller already handles for an unreachable Nominatim.
+      console.warn(`Skipping reverse geocode of (${lat}, ${lon}) — not enough time budget left.`);
+      return none;
+    }
     const url = `${env.NOMINATIM_URL}/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1`;
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT },

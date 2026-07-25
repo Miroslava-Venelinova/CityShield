@@ -37,8 +37,22 @@ export type WaysByName = Map<string, [number, number][][]>; // street → lines 
 const overpassCache = new Map<string, WaysByName>();
 const OVERPASS_CACHE_MAX = 50;
 
+/**
+ * Make a street name safe to drop inside `["name"~"^(…)$"]`.
+ *
+ * Two layers, both required. The regex metacharacters would otherwise make
+ * "Боровец-юг 9-та (бул. Тих кът)" — a real seeded name — match on its
+ * parenthesised group instead of literally. The double quote is the one that
+ * matters more: it closes the Overpass QL string literal, so a name containing
+ * one turns the rest of the query into syntax errors (or, with enough care,
+ * something else entirely). No seeded name carries one today, but Bulgarian
+ * street names are routinely written with quotes — ул. "Отец Паисий" — so a
+ * reseed is one dataset away from producing them.
+ */
 function escapeOverpassRegex(name: string): string {
-  return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return name
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/"/g, '\\"');
 }
 
 export interface OverpassResponse {

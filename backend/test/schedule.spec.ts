@@ -13,7 +13,10 @@ const atTick = (n: number) => n * TICK_MS + TICK_MS / 2;
 
 describe("ticksFor", () => {
   it("converts minutes to ticks", () => {
-    expect(ticksFor("vt")).toBe(SOURCE_INTERVAL_MINUTES.vt / TICK_MINUTES);
+    // Non-null: the map is a Record<string, number>, so noUncheckedIndexedAccess
+    // widens every lookup to `| undefined` — and "vt" missing from the table is
+    // itself a failure this test would catch.
+    expect(ticksFor("vt")).toBe(SOURCE_INTERVAL_MINUTES.vt! / TICK_MINUTES);
   });
 
   it("falls back to the default for an unknown source", () => {

@@ -17,6 +17,7 @@ import { hashPassword, verifyPassword } from "../core/password";
 import * as q from "../db/queries";
 import type { Env } from "../env";
 import { resetFormPage, resultPage } from "./auth-pages";
+import { detach } from "./background";
 import type { AppEnv } from "./middleware";
 import { requireAuth } from "./middleware";
 import { clientIp, isOverLimit, perUserRateLimit, tooManyRequests } from "./rate-limit";
@@ -49,11 +50,20 @@ const refreshSchema = z.object({ refreshToken: z.string().min(1) });
 const newPasswordSchema = z.string().min(8).max(50);
 
 /**
- * Public origin for links we mail out. `SELF_URL` when configured (cron has no
- * request to derive one from), otherwise the origin of the request itself.
+ * Public origin for links we mail out — `SELF_URL`, which wrangler.jsonc sets
+ * for every deployed environment.
+ *
+ * The fallback exists for local dev only, and it is the weaker path on purpose:
+ * a request's Host header is supplied by whoever sent it, so deriving the origin
+ * from it means a forged Host mails a *working* reset token on a link pointing
+ * somewhere else. That is why SELF_URL is now pinned rather than optional, and
+ * why falling back is loud.
  */
 function publicOrigin(env: Env, requestUrl: string): string {
-  return env.SELF_URL?.replace(/\/$/, "") ?? new URL(requestUrl).origin;
+  if (env.SELF_URL) return env.SELF_URL.replace(/\/$/, "");
+  const origin = new URL(requestUrl).origin;
+  console.warn(`SELF_URL is unset — mailed links are being built from the request Host (${origin}).`);
+  return origin;
 }
 
 /** First candidate name that fuzzy-matches a seeded row, or null. */
@@ -81,13 +91,23 @@ export const authRoutes = new Hono<AppEnv>()
       return c.text("An account with this email already exists", 409);
 
     const userId = crypto.randomUUID();
-    await q.insertUser(c.env, userId, email, await hashPassword(password));
+    try {
+      await q.insertUser(c.env, userId, email, await hashPassword(password));
+    } catch (e) {
+      // Two signups for one address both pass the check above and race to the
+      // UNIQUE index — as does a client that retries a request whose reply it
+      // never saw. The loser gets the answer it would have got a moment earlier
+      // rather than a 500 telling it something went wrong.
+      if (/UNIQUE constraint failed/i.test(String(e)))
+        return c.text("An account with this email already exists", 409);
+      throw e;
+    }
 
     // Verification is a nudge, not a gate (see /verify below), so the mail goes
     // out in the background: a mail-provider outage must not fail a signup.
     const token = await issueToken(c.env, userId, "verify_email", VERIFY_TTL_MINUTES);
     const link = `${publicOrigin(c.env, c.req.url)}/api/auth/verify?token=${token}`;
-    c.executionCtx.waitUntil(sendMail(c.env, verificationMail(email, link)));
+    detach(c, sendMail(c.env, verificationMail(email, link)));
 
     return c.text("User successfully registered", 200);
   })
@@ -106,6 +126,13 @@ export const authRoutes = new Hono<AppEnv>()
     if (await isOverLimit(c.env.RL_LOGIN_EMAIL, email.toLowerCase(), "RL_LOGIN_EMAIL"))
       return tooManyRequests(60);
 
+    // An unknown address answers without paying for PBKDF2, so a caller can time
+    // the difference and learn which addresses are registered. Left as is: the
+    // 409 on /register already says the same thing on purpose, both endpoints
+    // sit behind the same limiters, and the usual fix — hashing a dummy password
+    // on the miss path — turns every junk login into 100,000 rounds of work the
+    // attacker chooses to spend on our CPU budget. Not worth trading a
+    // deliberate disclosure for an amplification primitive.
     const user = await q.getUserByEmail(c.env, email);
     if (!user || !(await verifyPassword(password, user.password_hash)))
       return c.text("Invalid email or password", 401);
@@ -199,7 +226,7 @@ export const authRoutes = new Hono<AppEnv>()
     if (user && user.email_verified_at === null) {
       const token = await issueToken(c.env, userId, "verify_email", VERIFY_TTL_MINUTES);
       const link = `${publicOrigin(c.env, c.req.url)}/api/auth/verify?token=${token}`;
-      c.executionCtx.waitUntil(sendMail(c.env, verificationMail(user.email, link)));
+      detach(c, sendMail(c.env, verificationMail(user.email, link)));
     }
     return c.body(null, 204);
   })
@@ -253,7 +280,7 @@ export const authRoutes = new Hono<AppEnv>()
     if (user) {
       const token = await issueToken(c.env, user.user_id, "reset_password", RESET_TTL_MINUTES);
       const link = `${publicOrigin(c.env, c.req.url)}/api/auth/password/reset?token=${token}`;
-      c.executionCtx.waitUntil(sendMail(c.env, passwordResetMail(user.email, link)));
+      detach(c, sendMail(c.env, passwordResetMail(user.email, link)));
     }
     return c.body(null, 204);
   })
@@ -311,7 +338,7 @@ export const authRoutes = new Hono<AppEnv>()
     // verification for accounts that never clicked the signup link.
     await q.markEmailVerified(c.env, userId);
     // Sign every device out. Someone resetting a password may be evicting
-    // whoever got in, and a 60-day refresh token would otherwise outlive the
+    // whoever got in, and a 90-day refresh token would otherwise outlive the
     // password it was issued against. Access tokens already in flight still
     // work until they expire — that hour is the bound we cannot revoke.
     await revokeAllRefreshTokens(c.env, userId);

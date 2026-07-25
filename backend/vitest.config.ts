@@ -30,6 +30,11 @@ export default defineWorkersProject(async () => {
             ratelimits: {
               RL_LOGIN_IP: { simple: { limit: 20, period: 60 } },
               RL_LOGIN_EMAIL: { simple: { limit: 10, period: 60 } },
+              // Was missing while wrangler.jsonc had it: the binding then
+              // resolved to undefined and isOverLimit fails open, so every
+              // refresh.spec.ts run exercised an *unthrottled* endpoint and a
+              // regression in this limiter could not have failed a test.
+              RL_REFRESH_IP: { simple: { limit: 30, period: 60 } },
               RL_REGISTER_IP: { simple: { limit: 5, period: 60 } },
               RL_GEOCODE_USER: { simple: { limit: 5, period: 60 } },
               RL_API_IP: { simple: { limit: 120, period: 60 } },

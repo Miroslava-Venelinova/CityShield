@@ -18,7 +18,7 @@ The React Native app, the Firebase project, and the five data sources stay as th
 
 **Verified free-tier numbers this plan is built around** (as of July 2026 — re-check before implementation, links in §3.6):
 
-- Workers Free: 100,000 requests/day, **10 ms CPU** per invocation (I/O wait does not count), **50 external subrequests** per invocation (D1/AI/KV calls have a separate 1,000 internal ceiling), 3 MB gzipped script size, 3 Cron Triggers per Worker. Cron invocations scheduled more often than hourly get **~30 s wall-clock**.
+- Workers Free: 100,000 requests/day, **10 ms CPU** per invocation (I/O wait does not count), **50 external subrequests** per invocation (D1/AI/KV calls have a separate 1,000 internal ceiling), 3 MB gzipped script size, 3 Cron Triggers per Worker. ~~Cron invocations scheduled more often than hourly get ~30 s wall-clock.~~ — corrected during Phase 3: only CPU is capped, and a scheduled invocation gets minutes of wall clock for I/O (measured in spikes/RESULTS.md, which is why `DEADLINE_MS` is 180 s and not 25 s). The 15-minute cron cadence, not a platform kill, is what bounds a tick.
 - D1 Free: 5 GB total / 500 MB per DB, 5M rows read/day, 100k rows written/day, 50 queries per invocation.
 - Workers AI Free: **10,000 neurons/day**, resets 00:00 UTC. JSON mode (`response_format: json_schema`) is supported on the mainline instruct models.
 

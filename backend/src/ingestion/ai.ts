@@ -16,7 +16,7 @@ const ATTEMPTS = 3;
 // 8k tokens), so the old 20 s cap could abort a call that was about to succeed;
 // 30 s clears the observed tail while still bounding a truly wedged request.
 // The effective wait is min(this, remaining deadline) (deadline.ts), so the
-// 120 s tick budget is what actually lets this breathe.
+// tick budget (DEADLINE_MS, 180 s) is what actually lets this breathe.
 const RUN_TIMEOUT_MS = 30_000;
 
 export async function aiParse<T>(
