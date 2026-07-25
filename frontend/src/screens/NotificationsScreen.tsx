@@ -20,6 +20,7 @@ import {
   deleteNotification, StoredNotification, getCategoryMeta, getCategoryLabelKey,
   categoryOrder,
 } from '../services/notifications';
+import {formatTimeRange} from '../utils/datetime';
 
 type Tab = 'inbox' | 'settings';
 
@@ -419,11 +420,7 @@ function NotificationCard({item, onPress, onDelete}: {
           <View style={styles.timeRow}>
             <Icon name="clock" size={11} color={colors.textMuted} />
             <Text style={styles.timeText}>
-              {item.startTime && item.endTime
-                ? `${item.startTime} – ${item.endTime}`
-                : item.startTime
-                  ? `${t('common.from')} ${item.startTime}`
-                  : `${t('common.until')} ${item.endTime}`}
+              {formatTimeRange(item.startTime, item.endTime, t)}
             </Text>
           </View>
         )}
@@ -511,11 +508,7 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
                 <View>
                   <Text style={modal.timeBoxLabel}>{t('notif.scheduledWindow')}</Text>
                   <Text style={modal.timeBoxValue}>
-                    {item.startTime && item.endTime
-                      ? `${item.startTime} – ${item.endTime}`
-                      : item.startTime
-                        ? `${t('common.from')} ${item.startTime}`
-                        : `${t('common.until')} ${item.endTime}`}
+                    {formatTimeRange(item.startTime, item.endTime, t)}
                   </Text>
                 </View>
               </View>

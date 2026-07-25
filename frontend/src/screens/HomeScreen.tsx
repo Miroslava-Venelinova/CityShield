@@ -21,6 +21,7 @@ import AlertMap, {AlertMapHandle, MapMarker, MapPolygon} from '../components/Ale
 import Icon from '../components/icons';
 import {alertsApi, Alert, AlertLocation} from '../services/api';
 import {getCategoryMeta, getCategoryLabelKey} from '../services/notifications';
+import {formatTimeRange, activeUntil as activeUntilMs} from '../utils/datetime';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
 import {TranslationKey} from '../i18n/translations';
@@ -64,9 +65,7 @@ function getAlertBody(alert: Alert): string {
 
 function formatTime(alert: Alert, t: T): string {
   const {start_time, end_time} = alert.processed_data;
-  if (start_time && end_time) { return `${start_time} – ${end_time}`; }
-  if (start_time) { return `${t('common.from')} ${start_time}`; }
-  return '';
+  return formatTimeRange(start_time, end_time, t);
 }
 
 // ── Untrusted map geometry ────────────────────────────────────────────────────
@@ -120,25 +119,13 @@ function severityLabel(severity: string, t: T): string {
 }
 
 // ── Active window ─────────────────────────────────────────────────────────────
-// An alert stays "active" until the end time stated in the message ("HH:MM",
-// anchored to the day it was published; an end before the publish time rolls
-// over to the next day). Messages that state no end time stay active for 24h.
+// An alert stays "active" until its end datetime (ISO 8601 local — see
+// utils/datetime.ts). Messages that state no end time stay active for 24h.
 // Transport (vt) route changes are never "active" — they are notification-only
 // and appear just under Recent.
-const DEFAULT_ACTIVE_MS = 24 * 3600000;
-
-function activeUntil(alert: Alert): number {
-  const created = new Date(alert.created_at);
-  const match = /^\s*(\d{1,2}):(\d{2})/.exec(alert.processed_data.end_time ?? '');
-  if (!match) { return created.getTime() + DEFAULT_ACTIVE_MS; }
-  const end = new Date(created);
-  end.setHours(Number(match[1]), Number(match[2]), 0, 0);
-  if (end.getTime() < created.getTime()) { end.setDate(end.getDate() + 1); }
-  return end.getTime();
-}
-
 function isActive(alert: Alert): boolean {
-  return alert.source !== 'vt' && activeUntil(alert) > Date.now();
+  return alert.source !== 'vt' &&
+    activeUntilMs(alert.processed_data.end_time, alert.created_at) > Date.now();
 }
 
 function timeAgo(iso: string, t: T): string {

@@ -10,9 +10,14 @@ export const KNOWN_CATEGORIES = new Map<string, string>([
 ]);
 
 // ── AI prompts ────────────────────────────────────────────────────────────────
-// Copied CHARACTER-FOR-CHARACTER from backend/services/common.py
-// (OUTAGE_AI_PROMPT) and varnatraffic_service.py — they're
-// tuned for Bulgarian abbreviation handling; do not "improve" them (§1.7).
+// The location-extraction rules are copied CHARACTER-FOR-CHARACTER from
+// backend/services/common.py (OUTAGE_AI_PROMPT) and varnatraffic_service.py —
+// they're tuned for Bulgarian abbreviation handling; do not "improve" them
+// (§1.7). The time handling deliberately diverges from the Python original:
+// start_time/end_time are now full ISO 8601 local datetimes (see
+// shared/datetime.ts), not bare "HH:MM", so outages scheduled days ahead get a
+// correct active window. The pipeline prepends a "CURRENT_DATE:" line the model
+// uses to default the date, and normalizeDateTime backstops the model's output.
 
 export const OUTAGE_AI_PROMPT = `You are a system that outputs strictly valid JSON.
 
@@ -45,10 +50,18 @@ If there are details regarding what happened and who caused it - ignore it.
             "is_polygon": bool
         }
     ],
-    "start_time": format "HH:MM",
-    "end_time": format "HH:MM",
+    "start_time": ISO 8601 local datetime "YYYY-MM-DDTHH:MM:00" or null,
+    "end_time": ISO 8601 local datetime "YYYY-MM-DDTHH:MM:00" or null,
     "city_wide": bool
 }
+
+## Dates and times
+- The first line of the message is "CURRENT_DATE: YYYY-MM-DD". Use that date whenever the message states a time but no date of its own.
+- Output "start_time" and "end_time" as ISO 8601 local datetimes in the EXACT format "YYYY-MM-DDTHH:MM:00". The seconds are ALWAYS 00.
+- Bulgarian dates are written day.month.year. Example: "На 27.07.2026 г. В периода 8:00 ч. до 13:30 ч." gives start_time "2026-07-27T08:00:00" and end_time "2026-07-27T13:30:00".
+- A date without a year (e.g. "27.07") takes the year from CURRENT_DATE.
+- For a date range with a single daily window (e.g. "От 27.07.2026 г. до 29.07.2026 г. В периода 8:00 ч. до 17:00 ч."), set "start_time" to the FIRST date at the start clock ("2026-07-27T08:00:00") and "end_time" to the LAST date at the end clock ("2026-07-29T17:00:00").
+- If a start or end time is not stated at all, use null for that field.
 
 The "location_name" field must contain the name of the city/village/locality/district/residential complex.
 The "sublocations" array includes streets/boulevards, each as a separate entry.

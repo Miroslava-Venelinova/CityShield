@@ -8,6 +8,7 @@ import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
 import { pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
 import { type PushNotification, sendPushToUsers } from "./onesignal";
+import { formatWindow } from "../shared/datetime";
 import type { Env } from "../env";
 
 // Push payloads are size-limited by the provider (and by Android below it);
@@ -229,12 +230,11 @@ export async function sendUsersNotification(
   };
 
   // ── 4. Notification body with time info appended ───────────────────────
+  // start/end are ISO local datetimes; render them compactly (e.g.
+  // "27.07 08:00 – 17:00") rather than pasting the raw ISO into the push.
   let fullBody = body;
-  if (startTime || endTime) {
-    fullBody += startTime && endTime ? ` (${startTime} – ${endTime})`
-      : startTime ? ` (from ${startTime})`
-      : ` (until ${endTime})`;
-  }
+  const window = formatWindow(startTime, endTime);
+  if (window) fullBody += ` (${window})`;
   // Scraped content is unbounded, but oversized payloads are rejected —
   // cap the push body.
   if (fullBody.length > MAX_NOTIFICATION_BODY_LENGTH)

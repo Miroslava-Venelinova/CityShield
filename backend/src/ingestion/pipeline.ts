@@ -9,6 +9,7 @@ import {
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
 import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../shared/schemas";
+import { normalizeDateTime, sofiaToday } from "../shared/datetime";
 import { expired } from "../shared/deadline";
 import { aiParse } from "./ai";
 import { buildPolygonForStreets } from "./polygon";
@@ -128,7 +129,11 @@ export async function processOutageMessage(
   msgRef: string,
   deadline?: number,
 ): Promise<boolean> {
-  const msgContent = `${title}\n${content}`;
+  // The date the model defaults to when a message states a time but no date.
+  // Pinned once here so both the prompt input and the normalization below agree
+  // even if the message is processed across a midnight boundary.
+  const today = sofiaToday();
+  const msgContent = `CURRENT_DATE: ${today}\n${title}\n${content}`;
   const aiOutput = await aiParse(
     env, OUTAGE_AI_PROMPT, msgContent, OUTAGE_JSON_SCHEMA, outageAiSchema, deadline);
   if (aiOutput === null) {
@@ -136,7 +141,14 @@ export async function processOutageMessage(
     return false;
   }
 
-  const processed = applyCityWideGuard({ ...aiOutput, locations: [...aiOutput.locations] });
+  const processed = applyCityWideGuard({
+    ...aiOutput,
+    locations: [...aiOutput.locations],
+    // Coerce the model's times to canonical ISO local datetimes (or null); a
+    // malformed value degrades to "no time" rather than a wrong active window.
+    start_time: normalizeDateTime(aiOutput.start_time, today),
+    end_time: normalizeDateTime(aiOutput.end_time, today),
+  });
 
   // For every location marked is_polygon, build a GeoJSON polygon from its
   // street list. Polygon failures leave polygon_geojson unset — never fail

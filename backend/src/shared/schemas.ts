@@ -8,6 +8,10 @@
 import { z } from "zod";
 
 // ── Outage sources (vik, epro, heating) ──────────────────────────────────────
+// start_time/end_time are ISO 8601 local datetimes ("YYYY-MM-DDTHH:MM:00") or
+// null — see shared/datetime.ts. The model is prompted to produce that shape and
+// normalizeDateTime coerces/rejects it, so the zod/JSON layers stay a lenient
+// string|null and never reject a whole parse over a malformed time.
 
 export const OUTAGE_JSON_SCHEMA = {
   type: "object",

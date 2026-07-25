@@ -8,6 +8,7 @@ import {
   applyCityWideGuard, ingestAlert, MAX_PUSH_ATTEMPTS, processOutageMessage,
 } from "../src/ingestion/pipeline";
 import type { ProcessedData } from "../src/shared/schemas";
+import { sofiaToday } from "../src/shared/datetime";
 
 const location = (name: string | null, subs: string[] = [], poly = false) =>
   ({ location_name: name, sublocations: subs, is_polygon: poly });
@@ -67,14 +68,18 @@ describe("processOutageMessage (mocked AI)", () => {
     const ok = await processOutageMessage(env, "VIK", "vik", "Авария", "Спиране на водата", "id=1");
     expect(ok).toBe(true);
 
+    const today = sofiaToday();
     const inputs = captured[0] as { messages: Array<{ role: string; content: string }>; max_tokens: number };
     expect(inputs.max_tokens).toBe(8000); // qwen3 reasoning headroom (spike 2)
-    expect(inputs.messages[1]!.content).toBe("Авария\nСпиране на водата");
+    // The pipeline prepends the current date so the model can default it.
+    expect(inputs.messages[1]!.content).toBe(`CURRENT_DATE: ${today}\nАвария\nСпиране на водата`);
 
     const row = await env.DB.prepare("SELECT * FROM alerts").first<Record<string, string>>();
     expect(row!.category).toBe("vik");
     expect(row!.severity).toBe("warning");
-    expect(row!.start_time).toBe("09:00");
+    // Bare "09:00"/"17:00" get dated to today (Sofia) as ISO local datetimes.
+    expect(row!.start_time).toBe(`${today}T09:00:00`);
+    expect(row!.end_time).toBe(`${today}T17:00:00`);
     const locations = JSON.parse(row!.locations_json!);
     expect(locations[0].location_name).toBe("кв. Аспарухово");
   });
