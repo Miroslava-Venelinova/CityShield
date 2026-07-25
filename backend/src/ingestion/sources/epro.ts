@@ -2,6 +2,15 @@
 // JSON XHR endpoint its map uses. Port of epro_service.py. Entries carry no
 // stable id → SHA-256 content hash (24 hex chars). Seen-ids are persisted
 // per-message on success so a mid-run abort never re-broadcasts (§1.7).
+//
+// Endpoint contract (changed since the Python port): the parameterless call
+// returns the area list with every interruption bucket EMPTY. Entries are only
+// returned for a queried `region_id` + `type`, inside a single `area_locations`
+// array (each item tagged with `location_interruption`). `offset` is ignored —
+// one call per type returns the whole list. So we query each active type for the
+// configured region and read `area_locations`, rather than the old top-level
+// `area_locations_for_next_48_hours` / `_all_active` keys, which are now always
+// empty (which is why epro silently delivered nothing).
 
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
@@ -13,8 +22,15 @@ const TAG = "EPRO";
 const CATEGORY = "epro";
 const TITLE = "Прекъсване на електрозахранването";
 
-// Interruption buckets published per area; "archive" is deliberately excluded.
-const ACTIVE_KEYS = ["area_locations_for_next_48_hours", "area_locations_all_active"] as const;
+// Interruption filters queried per region; "archive" is deliberately excluded.
+// all_active is largely a superset of the next-48h window, but they don't fully
+// overlap, so both are fetched and de-duplicated by content.
+const INTERRUPTION_TYPES = ["for_next_48_hours", "all_active"] as const;
+
+/** Injectable for tests; defaults to the real page fetcher. */
+export type FetchImpl = (
+  url: string, headers?: Record<string, string>, deadline?: number,
+) => Promise<Response>;
 
 interface EproEntry {
   location_period?: string;
@@ -26,46 +42,73 @@ async function entryId(period: string, text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
 }
 
-async function fetchVarnaEntries(env: Env, deadline?: number): Promise<EproEntry[] | null> {
-  let areas: unknown;
-  try {
-    const res = await fetchPage(
-      env.EPRO_URL, { ...DEFAULT_HEADERS, "X-Requested-With": "XMLHttpRequest" }, deadline);
-    areas = await res.json();
-  } catch (e) {
-    console.error(`[EPRO] Failed to fetch interruptions endpoint: ${e}.`);
-    return null;
-  }
-
-  // The endpoint is undocumented and could return anything; an unexpected shape
-  // must read as "nothing to do", not throw out of the source runner.
-  if (!Array.isArray(areas)) {
-    console.error("[EPRO] Interruptions endpoint did not return an array.");
-    return null;
-  }
-
-  const area = (areas as Array<Record<string, unknown>>)
-    .find((a) => a && typeof a === "object" && a.area_name === env.EPRO_AREA_NAME);
-  if (!area) {
-    console.error(`[EPRO] Area '${env.EPRO_AREA_NAME}' not found in endpoint response.`);
-    return null;
-  }
-
-  const entries: EproEntry[] = [];
-  for (const key of ACTIVE_KEYS) {
-    const raw = area[key] ?? "[]";
-    try {
-      const items = typeof raw === "string" ? JSON.parse(raw) : raw;
-      if (Array.isArray(items)) entries.push(...items);
-    } catch (e) {
-      console.warn(`[EPRO] Could not decode '${key}': ${e}. Skipping bucket.`);
-    }
-  }
-  return entries;
+function entriesUrl(base: string, regionId: string, type: string): string {
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}region_id=${encodeURIComponent(regionId)}&type=${type}`
+    + "&offset=0&archive_from_date=&archive_to_date=";
 }
 
-export async function run(env: Env, deadline: number): Promise<void> {
-  const entries = await fetchVarnaEntries(env, deadline);
+/** Exported for tests; see run() for the production entry point. */
+export async function fetchVarnaEntries(
+  env: Env, deadline?: number, fetchImpl: FetchImpl = fetchPage,
+): Promise<EproEntry[] | null> {
+  // De-dupe across the two type buckets by raw content; the same interruption
+  // appears identically in both, and one AI parse per interruption is enough.
+  const byKey = new Map<string, EproEntry>();
+  let anyOk = false;
+
+  for (const type of INTERRUPTION_TYPES) {
+    let areas: unknown;
+    try {
+      const res = await fetchImpl(
+        entriesUrl(env.EPRO_URL, env.EPRO_REGION_ID, type),
+        { ...DEFAULT_HEADERS, "X-Requested-With": "XMLHttpRequest" },
+        deadline);
+      areas = await res.json();
+    } catch (e) {
+      // One type failing must not discard the other — press on.
+      console.error(`[EPRO] Failed to fetch '${type}' interruptions: ${e}.`);
+      continue;
+    }
+
+    // The endpoint is undocumented and could return anything; an unexpected
+    // shape must read as "this type had nothing", not throw out of the runner.
+    if (!Array.isArray(areas)) {
+      console.error(`[EPRO] '${type}' response was not an array.`);
+      continue;
+    }
+
+    const area = (areas as Array<Record<string, unknown>>)
+      .find((a) => a && typeof a === "object" && String(a.area_id) === env.EPRO_REGION_ID);
+    if (!area) {
+      console.error(`[EPRO] Region '${env.EPRO_REGION_ID}' not found in '${type}' response.`);
+      continue;
+    }
+    // Soft config sanity check — region_id is the key, but a mismatched name
+    // usually means EPRO_REGION_ID points at the wrong region.
+    if (typeof area.area_name === "string" && area.area_name !== env.EPRO_AREA_NAME) {
+      console.warn(`[EPRO] Region ${env.EPRO_REGION_ID} is '${area.area_name}', expected '${env.EPRO_AREA_NAME}'.`);
+    }
+    anyOk = true;
+
+    const locations = area.area_locations;
+    if (!Array.isArray(locations)) continue;
+    for (const item of locations as EproEntry[]) {
+      if (!item || typeof item !== "object") continue;
+      const key = `${item.location_period ?? ""}|${item.location_text ?? ""}`;
+      if (!byKey.has(key)) byKey.set(key, item);
+    }
+  }
+
+  // Every type query failing is "couldn't read the source", not "no entries":
+  // return null so run() skips the tick instead of bootstrapping the real
+  // interruptions away or treating a transient outage as an empty listing.
+  if (!anyOk) return null;
+  return [...byKey.values()];
+}
+
+export async function run(env: Env, deadline: number, fetchImpl: FetchImpl = fetchPage): Promise<void> {
+  const entries = await fetchVarnaEntries(env, deadline, fetchImpl);
   if (entries === null) return;
 
   // First run ever: mark everything currently visible as seen without

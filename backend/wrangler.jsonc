@@ -56,6 +56,7 @@
     "VT_URL": "https://www.varnatraffic.com/Info",
     "EPRO_URL": "https://www.erpsever.bg/bg/profil/xhr/?method=get_interruptions",
     "EPRO_AREA_NAME": "Варна",
+    "EPRO_REGION_ID": "1",
     "HEATING_BASE_URL": "https://energy-varna.bg",
     "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
     // Spike 1 verdict: kumi.systems was down; overpass-api.de works with a descriptive UA.

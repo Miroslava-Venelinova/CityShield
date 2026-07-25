@@ -22,6 +22,9 @@ export interface Env {
   VT_URL: string;
   EPRO_URL: string;
   EPRO_AREA_NAME: string;
+  /** erpsever.bg region id for EPRO_AREA_NAME (Варна = 1). The interruptions
+   *  endpoint now returns entries only for a queried region_id (see epro.ts). */
+  EPRO_REGION_ID: string;
   HEATING_BASE_URL: string;
   HEATING_URL: string;
   OVERPASS_URL: string;
