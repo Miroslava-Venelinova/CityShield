@@ -15,7 +15,7 @@
 //  - Rotation on every use. A refresh token is spent when redeemed, and the
 //    reply carries its replacement. Long-lived *and* static would mean a token
 //    lifted off a device works for two months undetected.
-//  - Sliding expiry: each rotation gets a fresh 60 days. A user who opens the
+//  - Sliding expiry: each rotation gets a fresh 90 days. A user who opens the
 //    app inside that window is never signed out; one who abandons it is.
 //  - Reuse of an already-rotated token means two parties hold the chain — the
 //    legitimate device and a thief. There is no way to tell which is calling,
@@ -28,8 +28,15 @@ import { hashToken } from "./auth-tokens";
  * How long a session survives without the app being opened. Long, because the
  * cost of getting this wrong is a user who thinks the app is broken; the short
  * window that actually bounds damage is the access token's.
+ *
+ * 90 days suits how this app is actually used: an outage notifier is something
+ * you install and then do not open until something breaks, and a quiet quarter
+ * is normal rather than a sign of abandonment. What keeps the longer window from
+ * widening the exposure is that the token is single-use — rotation means a
+ * stolen one works until the real device next refreshes and trips the replay
+ * check, which is a property of the chain, not of its expiry date.
  */
-export const REFRESH_TTL_DAYS = 60;
+export const REFRESH_TTL_DAYS = 90;
 
 const TOKEN_BYTES = 32;
 
