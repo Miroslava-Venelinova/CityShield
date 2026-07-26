@@ -18,7 +18,10 @@ export interface Env {
 
   // vars (wrangler.jsonc)
   AI_MODEL: string;
+  /** ViK listing, unfiltered by region. Only seeds/unwedges the cursor — the crawl walks ids (ingestion/sources/id-probe.ts). */
   VIK_URL: string;
+  /** ViK message path prefix; the crawler appends "<id>.html". Must stay query-string-free, or every page is scoped to one region. */
+  VIK_MESSAGE_BASE_URL: string;
   VT_URL: string;
   EPRO_URL: string;
   EPRO_AREA_NAME: string;

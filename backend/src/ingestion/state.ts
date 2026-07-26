@@ -51,6 +51,22 @@ export async function getLastId(env: Env, source: string): Promise<number | null
   }
 }
 
+/**
+ * When the cursor last moved (ISO string), or null when there is no row yet or
+ * the read failed. Used to tell a source that is merely quiet from one that is
+ * wedged — see stepOverDeadIds in sources/id-probe.ts.
+ */
+export async function getLastIdUpdatedAt(env: Env, source: string): Promise<string | null> {
+  try {
+    const row = await env.DB.prepare("SELECT updated_at FROM crawl_state WHERE source = ?")
+      .bind(source).first<{ updated_at: string | null }>();
+    return row?.updated_at ?? null;
+  } catch (e) {
+    console.error(`[state] getLastIdUpdatedAt(${source}) failed: ${e}`);
+    return null;
+  }
+}
+
 export async function writeLastId(env: Env, source: string, lastId: number): Promise<void> {
   try {
     await env.DB.prepare(

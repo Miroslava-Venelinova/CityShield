@@ -130,6 +130,17 @@ export function vikParsePage(html: string): string[] | null {
   return urls;
 }
 
+/**
+ * The heading on an unfiltered message page is built as "<title>/<region>", and
+ * with no region_id in the URL the second half comes out empty — every title
+ * arrives as "Без вода/" or "Без вода /". Left in, the stray separator reaches
+ * the AI prompt and the notification text, so trim it off. Only a trailing run
+ * is touched; a slash anywhere else in the title is the site's own.
+ */
+function stripTitleSeparator(title: string): string {
+  return title.replace(/\s*\/+\s*$/, "").trim();
+}
+
 /** Parse a single VIK message page, or null if parsing fails. */
 export function vikParseMessage(html: string): VikMessage | null {
   const $ = cheerio.load(html);
@@ -148,7 +159,7 @@ export function vikParseMessage(html: string): VikMessage | null {
   const title = container.find("h1").first();
   const date = container.find(".list-item-date").first();
   return {
-    title: title.length ? getText(title, "") : "",
+    title: title.length ? stripTitleSeparator(getText(title, "")) : "",
     date: date.length ? getText(date, "") : null,
     content: getText(content, ""),
   };

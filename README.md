@@ -38,7 +38,7 @@ Cloudflare's free plan. A React Native app is the client.
 
 | Category | Source |
 |---|---|
-| Water supply | ViK Varna (vikvarna.com) |
+| Water supply | ViK Varna (vikvarna.com) — breakdowns and planned repairs, across the whole municipality |
 | Electricity | Energo-Pro / ERP Sever (erpsever.bg) |
 | District heating | Veolia Energy Varna (energy-varna.bg) |
 | Public transport & traffic | VarnaTraffic (varnatraffic.com) |

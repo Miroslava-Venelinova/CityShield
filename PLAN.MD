@@ -69,7 +69,8 @@ worker/
 │   │   ├── state.ts            # crawl_state repository (port of state_repository.py)
 │   │   ├── scrape.ts           # port of scraping/scrape.py (cheerio parsers)
 │   │   └── sources/
-│   │       ├── vik.ts  ├── heating.ts   # shared id-listing crawler
+│   │       ├── vik.ts                   # id-probe crawler (walks the id space)
+│   │       ├── heating.ts               # id-listing crawler
 │   │       ├── epro.ts ├── vt.ts
 │   ├── db/
 │   │   └── queries.ts          # all prepared statements in one place
@@ -106,7 +107,8 @@ No ORM: D1's prepared-statement API (`env.DB.prepare(...).bind(...)`) with all S
   "ai": { "binding": "AI" },
   "vars": {
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "VIK_URL": "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown",
+    "VIK_URL": "https://vikvarna.com/bg/messages.html?region_id=0&sub_region_id=0&type=breakdown",
+    "VIK_MESSAGE_BASE_URL": "https://vikvarna.com/bg/messages/breakdown/",
     "VT_URL": "https://www.varnatraffic.com/Info",
     "EPRO_URL": "https://www.erpsever.bg/bg/profil/xhr/?method=get_interruptions",
     "EPRO_AREA_NAME": "Варна",
@@ -331,7 +333,7 @@ export default {
 
 | Source | Port notes |
 |---|---|
-| `vik.ts` | id-listing crawler, `(\d+)\.html` pattern, listing + message parsers from scrape.py → cheerio |
+| `vik.ts` | id-**probe** crawler (`id-probe.ts`): the listing only exists filtered by region, so following its links covered the city of Varna alone. Walks `<VIK_MESSAGE_BASE_URL><id>.html` — query-string-free, hence municipality-wide — forward from the cursor, stopping after 3 empty ids; message parser from scrape.py → cheerio. Also picks up planned repairs, which share the id space. The listing survives only to seed the cursor on a fresh DB and to step over a dead id run |
 | `heating.ts` | id-listing crawler, `/node/(\d+)` pattern, base-URL-relative links |
 | `epro.ts` | JSON XHR endpoint (`X-Requested-With` header), same two active buckets, sha-256 content hash ids (24 hex chars), `strip_html` port |
 | `vt.ts` | accordion parse, data-id or sha1 fallback ids, bus-lines prompt (`{bus_lines}`, `["0"]` sentinel, `null` = irrelevant), submit as city-wide `vt` alert with `bus_lines`; "Засегнати линии: …" content suffix |

@@ -44,11 +44,29 @@ describe("vik", () => {
     expect(vikParsePage('<div id="main_content"></div>')).toEqual([]);
   });
 
-  it("parses a message page", () => {
+  it("parses a message page, trimming the empty region separator off the title", () => {
     const msg = vikParseMessage(vikMessage)!;
     expect(msg.title).toBe("Авария на водопровод в кв. Аспарухово");
     expect(msg.date).toBe("10.06.2026");
     expect(msg.content).toContain("спряно водоподаването");
+  });
+
+  it("trims the trailing separator in every shape the site emits", () => {
+    const title = (h1: string) =>
+      vikParseMessage(`<div id="main_content"><h1>${h1}</h1><div class="view"><p>x</p></div></div>`)!.title;
+    expect(title("Без вода/")).toBe("Без вода");
+    expect(title("Без вода /")).toBe("Без вода");
+    // Only the trailing run is touched — inner spacing is the site's own.
+    expect(title("Без вода  ще бъдат:/")).toBe("Без вода  ще бъдат:");
+    // A slash that is part of the title is left alone.
+    expect(title("Планов ремонт 08.07. и 09.07.2026г./сряда и четвъртък/")).toBe(
+      "Планов ремонт 08.07. и 09.07.2026г./сряда и четвъртък");
+  });
+
+  it("reports the empty shell an unused id serves as no message", () => {
+    // vikvarna answers every id with 200; an id that holds nothing renders the
+    // listing heading and no .view — this null is what ends a probe walk.
+    expect(vikParseMessage('<div id="main_content"><h1>Съобщения за аварии</h1></div>')).toBeNull();
   });
 
   it("handles missing container / content / title", () => {

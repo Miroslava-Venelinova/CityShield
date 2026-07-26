@@ -52,7 +52,14 @@
     // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes
     // JSON-schema mode on our nullable-union schemas, and the cheapest. Needs max_tokens: 8000.
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
-    "VIK_URL": "https://vikvarna.com/bg/messages.html?region_id=15&sub_region_id=&type=breakdown",
+    // region_id=0 is the whole municipality; region_id=15 was the city of Varna
+    // alone. Only used to seed the cursor on a fresh DB — the crawl itself walks
+    // ids off VIK_MESSAGE_BASE_URL.
+    "VIK_URL": "https://vikvarna.com/bg/messages.html?region_id=0&sub_region_id=0&type=breakdown",
+    // No query string, by design: the id alone resolves the message for whatever
+    // region it belongs to. The "breakdown" segment is not a filter — vikvarna
+    // serves planned repairs off it too.
+    "VIK_MESSAGE_BASE_URL": "https://vikvarna.com/bg/messages/breakdown/",
     "VT_URL": "https://www.varnatraffic.com/Info",
     "EPRO_URL": "https://www.erpsever.bg/bg/profil/xhr/?method=get_interruptions",
     "EPRO_AREA_NAME": "Варна",
