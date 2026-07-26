@@ -27,7 +27,7 @@ export const DEFAULT_INTERVAL_MINUTES = 15;
 export const SOURCE_INTERVAL_MINUTES: Record<string, number> = {
   vik: 15, // several outages a day
   epro: 15, // planned + unplanned power cuts, moderately chatty
-  vt: 360, // route changes; a few per week
+  vt: 240, // route changes; a few per week, but worth catching sooner
   heating: 240, // handful of messages a month outside the heating season
 };
 
