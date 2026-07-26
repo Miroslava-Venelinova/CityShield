@@ -6,7 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAlertFeedCache } from "../src/api/alerts";
 import { sendPushToUsers } from "../src/core/onesignal";
 import { clearRefCaches } from "../src/db/queries";
-import { api, jsonInit } from "./helpers";
+import { api, jsonInit, registerAndLogin } from "./helpers";
 
 const INGEST_KEY = "test-ingest-key";
 
@@ -663,6 +663,63 @@ describe("push chunking", () => {
       // `recipients: 1` per stubbed response — 2 reached, the rest unconfirmed.
       expect(result.sent).toBe(2);
       expect(result.failed).toBe(2_498);
+    } finally {
+      restore();
+    }
+  });
+
+  // Both fields are scraped verbatim off a third-party page, so their length is
+  // whatever that page says. The body has been capped since the port; the title
+  // was the one field left unbounded in a payload the provider rejects whole.
+  it("caps the title and the body it sends to the provider", async () => {
+    const restore = withPushCredentials();
+    try {
+      const captured = interceptPush(1);
+      await createUser({ receivesAll: true });
+
+      await submit(basePayload({
+        original_message: { title: "Т".repeat(500), content: "С".repeat(4000) },
+        processed_data: { locations: [], city_wide: true },
+      }));
+      fetchMock.assertNoPendingInterceptors();
+
+      const { headings, contents } = captured[0]!;
+      expect(headings.en.length).toBe(120);
+      expect(headings.en.endsWith("…")).toBe(true);
+      expect(contents.en.length).toBe(1000);
+      expect(contents.en.endsWith("…")).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+// Targeting moved to external_id aliases, so the provider — not D1 — holds the
+// device registrations for an account. Deleting only our row would leave them,
+// which is not what /privacy promises.
+describe("account erasure reaches the push provider", () => {
+  it("deletes the OneSignal user by external_id", async () => {
+    const restore = withPushCredentials();
+    try {
+      const deleted: string[] = [];
+      fetchMock.get("https://api.onesignal.com")
+        .intercept({ path: (p) => p.includes("/users/by/external_id/"), method: "DELETE" })
+        .reply((opts) => {
+          deleted.push(String(opts.path));
+          return { statusCode: 200, data: "{}" };
+        });
+
+      const { token } = await registerAndLogin();
+      const me = await api("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+      const { userId } = await me.json() as { userId: string };
+
+      const res = await api("/api/auth/me",
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      expect(res.status).toBe(204);
+
+      fetchMock.assertNoPendingInterceptors();
+      expect(deleted).toHaveLength(1);
+      expect(deleted[0]).toBe(`/apps/test-app-id/users/by/external_id/${userId}`);
     } finally {
       restore();
     }

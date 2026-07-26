@@ -14,7 +14,7 @@
 
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
-import { DEFAULT_HEADERS, fetchPage, stripHtml } from "../scrape";
+import { DEFAULT_HEADERS, fetchPage, readCapped, stripHtml } from "../scrape";
 import { addSeenIds, getSeenIds, hasStateRow } from "../state";
 import { MAX_MESSAGES_PER_TICK } from "./id-listing";
 
@@ -64,7 +64,9 @@ export async function fetchVarnaEntries(
         entriesUrl(env.EPRO_URL, env.EPRO_REGION_ID, type),
         { ...DEFAULT_HEADERS, "X-Requested-With": "XMLHttpRequest" },
         deadline);
-      areas = await res.json();
+      // Read through the size cap rather than res.json(), which would buffer
+      // whatever the endpoint decides to send (see readCapped).
+      areas = JSON.parse(await readCapped(res));
     } catch (e) {
       // One type failing must not discard the other — press on.
       console.error(`[EPRO] Failed to fetch '${type}' interruptions: ${e}.`);

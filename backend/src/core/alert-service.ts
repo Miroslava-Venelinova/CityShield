@@ -15,6 +15,18 @@ import type { Env } from "../env";
 // keep bodies well under any of those ceilings.
 const MAX_NOTIFICATION_BODY_LENGTH = 1000;
 
+// The title is scraped straight off the source page — an <h1> or an accordion
+// header — so its length is whatever that page says it is. The body has been
+// capped since the port; the title was not, which left one unbounded field in
+// a payload the provider rejects wholesale if it gets too big. A notification
+// heading is a single line on a phone either way.
+const MAX_NOTIFICATION_TITLE_LENGTH = 120;
+
+/** Trim to `max` characters, marking the cut so a clipped value doesn't read as the whole thing. */
+function clamp(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+}
+
 // Marker color bucket per source category (danger | warning | info).
 const CATEGORY_SEVERITY: Record<string, string> = {
   vik: "warning",
@@ -189,7 +201,16 @@ export async function sendUsersNotification(
   } else {
     // city_wide=true or a legacy payload without the flag: broadcast to
     // everyone; the per-category preference filter below still applies.
+    //
+    // Logged at warn because this is the widest thing the pipeline can do, and
+    // the decision behind it was made by an LLM reading a third-party page —
+    // so a source that starts publishing differently (or is tampered with)
+    // shows up here as a broadcast that should not have been one, rather than
+    // as an unexplained push to the whole user base.
     userIds = await q.getAllUserIds(env);
+    console.warn(
+      `Alert '${clamp(title, 80)}' (${category}) is city-wide — broadcasting to `
+      + `${userIds.length} user(s).`);
   }
 
   // Alerts naming specific bus lines (vt route changes) go only to users
@@ -236,14 +257,17 @@ export async function sendUsersNotification(
   const window = formatWindow(startTime, endTime);
   if (window) fullBody += ` (${window})`;
   // Scraped content is unbounded, but oversized payloads are rejected —
-  // cap the push body.
-  if (fullBody.length > MAX_NOTIFICATION_BODY_LENGTH)
-    fullBody = fullBody.slice(0, MAX_NOTIFICATION_BODY_LENGTH - 1) + "…";
+  // cap both fields the source controls.
+  fullBody = clamp(fullBody, MAX_NOTIFICATION_BODY_LENGTH);
 
   // ── 5. Send ────────────────────────────────────────────────────────────
   // Users are addressed by id (OneSignal external_id), so there is no device
   // lookup here — the provider resolves users to devices.
-  const notification: PushNotification = { title, body: fullBody, data: pushData };
+  const notification: PushNotification = {
+    title: clamp(title, MAX_NOTIFICATION_TITLE_LENGTH),
+    body: fullBody,
+    data: pushData,
+  };
   const result = await sendPushToUsers(env, filteredIds, notification);
 
   return { recipients: filteredIds, delivered: result.ok };

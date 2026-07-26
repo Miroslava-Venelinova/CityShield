@@ -22,7 +22,7 @@
 
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
-import { fetchPage } from "../scrape";
+import { fetchPage, readCapped, resolveSameHost } from "../scrape";
 import { getLastId, getLastIdUpdatedAt, hasStateRow, writeLastId } from "../state";
 import { MAX_MESSAGES_PER_TICK } from "./id-listing";
 
@@ -106,7 +106,8 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
 
     let message: { title: string; content: string } | null;
     try {
-      message = opts.parseMessage(await (await fetchImpl(opts.messageUrl(id), undefined, deadline)).text());
+      message = opts.parseMessage(
+        await readCapped(await fetchImpl(opts.messageUrl(id), undefined, deadline)));
     } catch (e) {
       // A fetch that failed says nothing about whether the id holds a message,
       // so it must not be counted as a miss — that would let a 503 burn the
@@ -205,7 +206,7 @@ async function listedIds(
 ): Promise<number[] | null> {
   let html: string;
   try {
-    html = await (await fetchImpl(opts.listingUrl, undefined, deadline)).text();
+    html = await readCapped(await fetchImpl(opts.listingUrl, undefined, deadline));
   } catch (e) {
     console.error(`[${opts.tag}] Failed to fetch listing page: ${e}.`);
     return null;
@@ -219,7 +220,16 @@ async function listedIds(
 
   const ids: number[] = [];
   for (const url of urls) {
-    const match = opts.idPattern.exec(url);
+    // These ids are never fetched — they only feed stepOverDeadIds, which moves
+    // the cursor. An off-host link is still worth dropping: an injected
+    // `/99999999.html` would jump the cursor past every real message and
+    // silently stop the source from ever reporting an outage again.
+    const target = resolveSameHost(url, opts.listingUrl);
+    if (target === null) {
+      console.warn(`[${opts.tag}] Ignoring off-host listing url: ${url}.`);
+      continue;
+    }
+    const match = opts.idPattern.exec(target);
     if (match) ids.push(Number(match[1]));
   }
   return ids;

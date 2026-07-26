@@ -89,11 +89,42 @@ All operator items; detail in SETUP §6–7 and COMPLIANCE.md §1, §5.
 - [ ] Google Play developer account (identity verification takes days).
 - [ ] Decide the real package name (`com.cityshield.fcmtest` is a test package, permanent
       once published, and must be re-registered in OneSignal when changed).
-- [ ] Create and safely back up a release signing keystore — release APKs are currently
-      debug-signed, which Play rejects.
 - [ ] Store listing assets + privacy-policy URL.
 - [ ] Accept the Cloudflare DPA, the OneSignal DPA (recording DPF or SCCs), and Google's
       Data Processing Terms; submit the Play Data Safety form.
+
+## 5a. Still in a dev/test posture — must change before anyone else installs this
+
+Everything here is deliberate for end-to-end testing and unsafe the moment the APK
+reaches a device that is not ours. Grouped separately from §5 because these are
+security properties, not paperwork.
+
+- [ ] **Release signing key.** `android/app/build.gradle` points the *release* buildType
+      at `signingConfigs.debug`, and that keystore is committed (the root `.gitignore`
+      un-ignores `frontend/android/app/debug.keystore`) with the published Android
+      defaults — `android` / `androiddebugkey` / `android`. Anyone with the repo can
+      therefore build an APK Android accepts as an **in-place update** to an installed
+      CityShield, inheriting its storage (both auth tokens) and its push registration.
+      Play rejects debug-signed uploads too, so this blocks release regardless.
+      Generate a real upload key, keep it out of the repo, and back it up — a lost
+      upload key cannot be replaced without Google's help.
+- [ ] **OneSignal identity verification is off.** `OneSignal.login(userId)` claims an
+      `external_id` with no proof, so anyone who learns another account's `user_id`
+      could subscribe their own device to that user's pushes. The ids are UUIDv4 and
+      only ever returned to their owner, so this is not currently reachable — but the
+      fix (enable Identity Verification in the dashboard, have the Worker sign a user
+      JWT and the app pass it to `login()`) is the difference between "unguessable" and
+      "authenticated".
+- [ ] 🧑 Rotate `INGEST_API_KEY` before release if the deployed value ever came from
+      `.dev.vars.example`. `/api/alerts/submit-data` and `/api/alerts/test-push` are
+      behind it, and the second can broadcast to every registered device.
+- [ ] Confirm `workers_dev` and the `*.workers.dev` hostname are still what you want to
+      ship in the Play listing, or take the custom domain in §6 first.
+
+Already handled, listed so they are not re-litigated: cleartext HTTP is now denied in
+release builds and permitted only in `src/debug/res/xml` (the emulator's loopback
+alias); `allowBackup="false"` is set, which is what keeps the unencrypted AsyncStorage
+tokens off `adb backup` and Google backup.
 
 ## 6. Deferred — deliberately not doing yet
 

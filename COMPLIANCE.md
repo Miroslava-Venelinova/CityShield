@@ -31,7 +31,11 @@ Companion answers:
 - **Is all user data encrypted in transit?** Yes — the API is HTTPS-only and
   Android release builds block cleartext (`network_security_config.xml`).
 - **Can users request data deletion?** Yes — in-app (Profile → Privacy & Data →
-  Delete My Account) and by email. Deletion is immediate and cascades.
+  Delete My Account) and by email. Deletion is immediate and cascades, and it
+  reaches OneSignal too: the account's push subscription is held there against
+  its `external_id`, so `DELETE /api/auth/me` deletes that user record as well
+  as the D1 row. Without that step the "Device or other IDs" row above would
+  outlive the account it belongs to.
 - **Data collected for advertising/analytics?** No. No ads SDK, no analytics
   SDK, no tracking across apps.
 - **Data shared with third parties?** No. Cloudflare, OneSignal (with Google

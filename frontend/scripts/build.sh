@@ -150,21 +150,43 @@ fi
 rm -f /app/android/app/google-services.json
 
 # ── 5. Write network_security_config.xml ──────────────────────────────────────
-echo ">>> Writing network_security_config.xml..."
-mkdir -p /app/android/app/src/main/res/xml
+# Two files, one per variant. The cleartext exception for the emulator's
+# loopback alias belongs to debug builds only — written into src/main/res it
+# applied to release too, which is how a dev-vs-prod mix-up ends up shipping a
+# build that will happily talk to a plain-HTTP API. Keep these in sync with the
+# checked-in copies under frontend/android/app/src/{main,debug}/res/xml/.
+echo ">>> Writing network_security_config.xml (release + debug)..."
+mkdir -p /app/android/app/src/main/res/xml /app/android/app/src/debug/res/xml
 cat > /app/android/app/src/main/res/xml/network_security_config.xml << 'XMLEOF'
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Allows plain HTTP to the local dev API server (10.0.2.2 = emulator localhost).
-  OSM tile servers use HTTPS and are listed explicitly for clarity.
-  Remove the 10.0.2.2 entry before releasing to production.
+  Cleartext is denied outright: everything this app talks to is HTTPS (the
+  Worker, OneSignal, OSM tiles). The emulator loopback exception lives in
+  src/debug/res/xml, which shadows this file for debug builds only.
 -->
 <network-security-config>
-  <!-- Local dev API (HTTP allowed) -->
+  <base-config cleartextTrafficPermitted="false" />
+  <!-- Listed for clarity; the base config already denies cleartext. -->
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">openstreetmap.org</domain>
+    <domain includeSubdomains="true">tile.openstreetmap.org</domain>
+  </domain-config>
+</network-security-config>
+XMLEOF
+cat > /app/android/app/src/debug/res/xml/network_security_config.xml << 'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG BUILDS ONLY. 10.0.2.2 is the Android emulator's alias for the host
+  machine's loopback, i.e. `wrangler dev` on the developer's own laptop
+  (src/config.ts points there when __DEV__ is set). It resolves to nothing off
+  that machine, and this file is not part of a release build.
+-->
+<network-security-config>
+  <!-- Local dev API on the host machine (HTTP allowed) -->
   <domain-config cleartextTrafficPermitted="true">
     <domain includeSubdomains="false">10.0.2.2</domain>
   </domain-config>
-  <!-- OpenStreetMap tile servers (HTTPS only) -->
+  <!-- OpenStreetMap tile servers (HTTPS only, as in release) -->
   <domain-config cleartextTrafficPermitted="false">
     <domain includeSubdomains="true">openstreetmap.org</domain>
     <domain includeSubdomains="true">tile.openstreetmap.org</domain>

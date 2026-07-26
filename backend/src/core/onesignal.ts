@@ -11,7 +11,8 @@
 
 import type { Env } from "../env";
 
-const API_URL = "https://api.onesignal.com/notifications";
+const API_BASE = "https://api.onesignal.com";
+const API_URL = `${API_BASE}/notifications`;
 
 // A send is a network call with no natural bound; without this an unresponsive
 // endpoint holds the invocation open until workerd kills it.
@@ -135,4 +136,46 @@ export async function sendPushToUsers(
   // `sent` counts devices and `userIds` counts users, so a user with two phones
   // can push `sent` above the user count — clamp so `failed` never goes negative.
   return { sent, failed: Math.max(0, userIds.length - sent), ok: results.every((r) => r.ok) };
+}
+
+/**
+ * Erase the OneSignal user record for an account (GDPR Art. 17).
+ *
+ * Targeting moved to `external_id` aliases, which means OneSignal — not us —
+ * holds the device registrations for a user id. Deleting the D1 row therefore
+ * erases only our half: the provider keeps a user with that alias, its
+ * subscriptions and its delivery history until it is told otherwise. The
+ * privacy policy (api/privacy.ts) promises that deletion removes everything,
+ * and this is the call that makes that true.
+ *
+ * Never throws, for the same reason `sendPushToUsers` doesn't: the account is
+ * already gone from D1 by the time this runs, and a provider outage must not
+ * turn a completed erasure into a 500 that invites the user to retry. A failure
+ * is logged loudly instead — it leaves an orphaned alias whose id no longer
+ * maps to anything of ours, and which OneSignal drops as its devices unsubscribe.
+ */
+export async function deleteOneSignalUser(env: Env, userId: string): Promise<void> {
+  if (!env.ONESIGNAL_API_KEY || !env.ONESIGNAL_APP_ID) {
+    console.warn(
+      "ONESIGNAL_API_KEY/ONESIGNAL_APP_ID not set — skipping push-provider erasure.");
+    return;
+  }
+
+  const url = `${API_BASE}/apps/${encodeURIComponent(env.ONESIGNAL_APP_ID)}`
+    + `/users/by/external_id/${encodeURIComponent(userId)}`;
+  try {
+    const res = await fetch(url, {
+      method: "DELETE",
+      headers: { Authorization: `Key ${env.ONESIGNAL_API_KEY}` },
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+    // 404 means the account never registered a device — nothing to erase, which
+    // is the outcome we wanted rather than a failure.
+    if (!res.ok && res.status !== 404) {
+      console.error(
+        `OneSignal user erasure failed: ${res.status} ${await res.text()}`);
+    }
+  } catch (e) {
+    console.error(`OneSignal user erasure errored: ${e}`);
+  }
 }

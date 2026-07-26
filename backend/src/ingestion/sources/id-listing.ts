@@ -7,7 +7,7 @@
 
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
-import { fetchPage } from "../scrape";
+import { fetchPage, readCapped, resolveSameHost } from "../scrape";
 import { getLastId, hasStateRow, writeLastId } from "../state";
 
 export const MAX_MESSAGES_PER_TICK = 2;
@@ -40,7 +40,7 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
 
   let listingHtml: string;
   try {
-    listingHtml = await (await fetchImpl(opts.listingUrl, undefined, deadline)).text();
+    listingHtml = await readCapped(await fetchImpl(opts.listingUrl, undefined, deadline));
   } catch (e) {
     console.error(`[${tag}] Failed to fetch listing page: ${e}. Stopping.`);
     return;
@@ -55,14 +55,22 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
   // Collect everything newer than the cursor (listing is newest-first).
   const newMessages: Array<{ id: number; url: string }> = [];
   for (const url of msgUrls) {
-    const match = opts.idPattern.exec(url);
+    // The links come out of the listing's own HTML, so the source chooses what
+    // we fetch next. Confine that choice to the source's own host — see
+    // resolveSameHost.
+    const target = resolveSameHost(url, opts.listingUrl);
+    if (target === null) {
+      console.warn(`[${tag}] Ignoring off-host message url: ${url}.`);
+      continue;
+    }
+    const match = opts.idPattern.exec(target);
     if (!match) {
-      console.warn(`[${tag}] No numeric id found in url: ${url}. Skipping.`);
+      console.warn(`[${tag}] No numeric id found in url: ${target}. Skipping.`);
       continue;
     }
     const messageId = Number(match[1]);
     if (messageId <= storedId) break;
-    newMessages.push({ id: messageId, url });
+    newMessages.push({ id: messageId, url: target });
   }
 
   if (newMessages.length === 0) return;
@@ -87,7 +95,8 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
 
     let submitted = false;
     try {
-      const message = opts.parseMessage(await (await fetchImpl(url, undefined, deadline)).text());
+      const message = opts.parseMessage(
+        await readCapped(await fetchImpl(url, undefined, deadline)));
       if (message === null) {
         console.warn(`[${tag}] Could not parse message content (id=${id}).`);
       } else {

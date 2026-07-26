@@ -29,6 +29,79 @@ const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const ATTEMPT_TIMEOUT_MS = 15_000;
 const MAX_ATTEMPTS = 3;
 
+/**
+ * Ceiling on a scraped response body. The real pages are tens of kilobytes; a
+ * megabyte is already absurd for any of them.
+ *
+ * `Response.text()` buffers whatever arrives, and the deadline does not help
+ * here — a source that streams steadily never trips a timeout, it just fills
+ * the isolate's 128 MB until workerd kills the invocation, taking the rest of
+ * the tick's sources with it. That needs a hostile or badly broken source, but
+ * the whole ingest path is built on the assumption that the far end can behave
+ * arbitrarily, and this is the one resource it could otherwise exhaust.
+ */
+export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Body as text, abandoned once it passes `maxBytes`.
+ *
+ * Decodes as UTF-8 unconditionally, which is what `Response.text()` does inside
+ * workerd regardless of the charset the source declares — so swapping this in
+ * changes nothing about how any page is read.
+ */
+export async function readCapped(res: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<string> {
+  const declared = Number(res.headers.get("Content-Length"));
+  if (Number.isFinite(declared) && declared > maxBytes)
+    throw new Error(`Response declares ${declared} bytes, over the ${maxBytes}-byte cap`);
+  if (!res.body) return "";
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes)
+        throw new Error(`Response exceeded the ${maxBytes}-byte cap`);
+      chunks.push(value);
+    }
+  } finally {
+    // Releases the connection whether we finished or bailed out mid-stream.
+    await reader.cancel().catch(() => {});
+  }
+
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+}
+
+/**
+ * Absolute form of `href`, but only when it stays on `base`'s host — otherwise
+ * null.
+ *
+ * Every message URL a crawler fetches is read out of the HTML of the page
+ * before it, which means the source decides what we go and fetch next. A
+ * listing that has been tampered with (or a compromised CDN, or an injected
+ * link on a site that accepts user content) can hand back an absolute URL to
+ * anywhere and have the Worker retrieve it, parse it, and publish it to users
+ * as a utility outage. Pinning the host keeps a source able to say what its own
+ * messages are and nothing more.
+ */
+export function resolveSameHost(href: string, base: string): string | null {
+  try {
+    const resolved = new URL(href, base);
+    return resolved.host === new URL(base).host ? resolved.toString() : null;
+  } catch {
+    return null; // unparseable href, or a base that is not a URL at all
+  }
+}
+
 class HttpError extends Error {
   constructor(readonly status: number, url: string) {
     super(`HTTP ${status} for ${url}`);

@@ -13,6 +13,7 @@ import {
   issueRefreshToken, revokeAllRefreshTokens, revokeRefreshToken, rotateRefreshToken,
 } from "../core/refresh-tokens";
 import { passwordResetMail, sendMail, verificationMail } from "../core/mailer";
+import { deleteOneSignalUser } from "../core/onesignal";
 import { hashPassword, verifyPassword } from "../core/password";
 import * as q from "../db/queries";
 import type { Env } from "../env";
@@ -28,9 +29,17 @@ const registerSchema = z.object({
   password: z.string().min(8).max(50),
 });
 
+/**
+ * Deliberately looser than `registerSchema` — a sign-in must not reject a
+ * credential the account could legitimately hold, and validating shape here
+ * would only tell an attacker which addresses look real. The bounds exist for
+ * one reason: every accepted password is fed to PBKDF2, so an unbounded field
+ * lets a caller choose how much of the 10 ms CPU budget to spend. Both caps sit
+ * far above anything registration can produce (50).
+ */
 const loginSchema = z.object({
-  email: z.string(),
-  password: z.string(),
+  email: z.string().max(320),
+  password: z.string().max(200),
 });
 
 /** Budget for the one outbound Nominatim call behind PUT /location. */
@@ -42,9 +51,10 @@ const locationSchema = z.object({
   longitude: z.number().min(-180).max(180),
 });
 
-const forgotSchema = z.object({ email: z.string().email() });
+const forgotSchema = z.object({ email: z.string().max(320).email() });
 
-const refreshSchema = z.object({ refreshToken: z.string().min(1) });
+/** Issued tokens are 43 chars (32 bytes, base64url); the cap is slack, not a format check. */
+const refreshSchema = z.object({ refreshToken: z.string().min(1).max(200) });
 
 /** Same bounds as registration, so a reset cannot install a password signup would reject. */
 const newPasswordSchema = z.string().min(8).max(50);
@@ -355,9 +365,19 @@ export const authRoutes = new Hono<AppEnv>()
   // ── GDPR (§1.10 / §2.3) ──────────────────────────────────────────────────
 
   .delete("/me", requireAuth, async (c) => {
-    // Erasure (Art. 17): cascades to device tokens + preferences.
-    // Log only a non-identifying event.
-    await q.deleteUser(c.env, c.get("userId"));
+    // Erasure (Art. 17): the D1 row goes first and cascades to auth tokens,
+    // refresh tokens and preferences. Log only a non-identifying event.
+    const userId = c.get("userId");
+    await q.deleteUser(c.env, userId);
+
+    // Then the half of the record we do not hold. Since targeting moved to
+    // `external_id`, the device registrations live at OneSignal keyed by this
+    // id — deleting only the D1 row would leave them behind, which the privacy
+    // policy says we do not do. Detached because erasure is already complete
+    // and durable at this point: the user must not be told it failed, or be
+    // invited to retry, because a push provider was briefly unreachable.
+    detach(c, deleteOneSignalUser(c.env, userId));
+
     console.log("Account deleted (GDPR erasure request).");
     return c.body(null, 204);
   })

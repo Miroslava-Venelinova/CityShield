@@ -10,7 +10,16 @@ import type { AppEnv } from "./middleware";
 import { requireAuth } from "./middleware";
 
 const setPreferenceSchema = z.object({ isEnabled: z.boolean() });
-const setBusLinesSchema = z.object({ busLines: z.array(z.string()) });
+
+/**
+ * Bounded because every element is normalized and set-matched before anything
+ * is rejected, so an unbounded array is a free way to spend the request's CPU
+ * budget. The catalog holds 38 lines and the longest is 4 characters, so a
+ * legitimate client never comes close to either cap.
+ */
+const setBusLinesSchema = z.object({
+  busLines: z.array(z.string().max(16)).max(64),
+});
 
 export const preferenceRoutes = new Hono<AppEnv>()
   .use(requireAuth)

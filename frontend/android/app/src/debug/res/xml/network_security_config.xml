@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG BUILDS ONLY. This file shadows the one in src/main/res for the debug
+  variant, and it is the only place plain HTTP is permitted.
+
+  10.0.2.2 is the Android emulator's alias for the host machine's loopback, i.e.
+  `wrangler dev` on the developer's own laptop (src/config.ts points there when
+  __DEV__ is set). It cannot resolve to anything off the machine, so the
+  exception cannot follow a release build anywhere.
+
+  It used to live in src/main/res, which applied it to every variant including
+  release — a standing invitation for a future dev-vs-prod mix-up to ship a
+  build that would accept a cleartext API. Splitting it by variant means the
+  release build has no cleartext exception to remove before shipping.
+-->
+<network-security-config>
+  <!-- Local dev API on the host machine (HTTP allowed) -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">10.0.2.2</domain>
+  </domain-config>
+  <!-- OpenStreetMap tile servers (HTTPS only, as in release) -->
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">openstreetmap.org</domain>
+    <domain includeSubdomains="true">tile.openstreetmap.org</domain>
+  </domain-config>
+</network-security-config>

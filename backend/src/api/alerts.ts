@@ -128,7 +128,10 @@ export const alertRoutes = new Hono<AppEnv>()
   .get("/recent", requireAuth, async (c) => {
     const key = feedCacheKey(c.req.url);
     const hit = await caches.default.match(key);
-    if (hit) return hit;
+    // Rebuilt rather than returned as-is: a Response handed back by the Cache
+    // API guards its headers, and the security-header middleware in app.ts has
+    // to be able to write to whatever leaves this route.
+    if (hit) return new Response(hit.body, hit);
 
     const res = c.json(await getRecentAlerts(c.env, RECENT_WINDOW_MS, RECENT_LIMIT));
     // `public` is required for the Cache API to store the response at all;

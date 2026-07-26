@@ -8,7 +8,7 @@ import { VT_AI_PROMPT } from "../../shared/constants";
 import { VT_JSON_SCHEMA, vtAiSchema } from "../../shared/schemas";
 import { aiParse } from "../ai";
 import { ingestAlert } from "../pipeline";
-import { fetchPage, vtParse, type VtMessage } from "../scrape";
+import { fetchPage, readCapped, vtParse, type VtMessage } from "../scrape";
 import { addSeenIds, getSeenIds, hasStateRow } from "../state";
 import { MAX_MESSAGES_PER_TICK } from "./id-listing";
 
@@ -26,7 +26,7 @@ async function messageId(msg: VtMessage): Promise<string> {
 export async function run(env: Env, deadline: number): Promise<void> {
   let pageHtml: string;
   try {
-    pageHtml = await (await fetchPage(env.VT_URL, undefined, deadline)).text();
+    pageHtml = await readCapped(await fetchPage(env.VT_URL, undefined, deadline));
   } catch (e) {
     console.error(`[VT] Failed to fetch page: ${e}. Stopping.`);
     return;

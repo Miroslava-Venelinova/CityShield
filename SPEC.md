@@ -617,7 +617,12 @@ preemptively.
 
 - **`DELETE /api/auth/me`** — erasure (Art. 17). One `DELETE FROM users`, cascade
   does the rest; only a non-identifying event is logged. Also a Google Play
-  requirement for apps with accounts.
+  requirement for apps with accounts. Because targeting moved to `external_id`
+  aliases, OneSignal — not D1 — holds the account's device registrations, so the
+  route also deletes the provider's user record by external id. That call is
+  detached: erasure is complete and durable once the row is gone, and a push
+  provider being briefly unreachable must not report a failed deletion to
+  someone who asked for one.
 - **`GET /api/auth/me/export`** — portability (Art. 20). Profile + preferences.
   No device section: push registrations live with OneSignal, keyed by `user_id`.
 - **`DELETE /api/auth/location`** — withdraw location consent.
@@ -647,7 +652,9 @@ toggles), Profile (account, push permission, location, Privacy & Data).
 - **Languages**: Bulgarian and English; dark mode supported.
 - **Package name** is still `com.cityshield.fcmtest` (set via `PACKAGE_NAME` in
   `frontend/scripts/build.sh`), and release APKs are signed with the **debug
-  keystore** — both are release blockers, see [TODO.md](TODO.md).
+  keystore, which is committed to this repo** — so anyone holding the repo can
+  build an update Android will install over a real one. Both are release
+  blockers; see [TODO.md](TODO.md) §5a.
 
 Build and toolchain details: [frontend/SETUP.md](frontend/SETUP.md).
 
@@ -781,7 +788,9 @@ Location is the sensitive item and is collected only through the explicit
 
 ### 2.4 Security measures (Art. 32)
 
-- TLS everywhere (workers.dev is HTTPS); Android release builds refuse cleartext.
+- TLS everywhere (workers.dev is HTTPS); Android release builds refuse cleartext
+  outright — the emulator-loopback exception lives in `src/debug/res/xml` and is
+  not part of a release variant.
 - PBKDF2 at the platform's maximum iterations, per-user salt, timing-safe
   compare, and the rate limiters in §1.4.
 - Bearer credentials — refresh tokens, verification and reset links — are stored
@@ -789,7 +798,23 @@ Location is the sensitive item and is collected only through the explicit
 - Secrets only via `wrangler secret` (`.dev.vars` is gitignored); JWT key ≥48
   random bytes; rotation is re-`put` + redeploy, which also invalidates every
   access token in flight.
-- Ingest and test endpoints gated by `INGEST_API_KEY`.
+- Ingest and test endpoints gated by `INGEST_API_KEY`, compared with
+  `crypto.subtle.timingSafeEqual` rather than `===`.
+- Response headers on everything served: `Content-Security-Policy`
+  (`default-src 'none'` plus inline styles — the browser-facing pages need no
+  scripts at all), `Referrer-Policy: no-referrer` so a reset link's token can
+  never leave in a `Referer`, `nosniff`, `X-Frame-Options: DENY`, HSTS, and
+  `Cache-Control: no-store` unless a route sets its own (only
+  `/api/alerts/recent` does, deliberately).
+- Every caller-supplied field is length-bounded, including the ones only reached
+  on the failure path: an unbounded login password is a way to choose how much
+  PBKDF2 the 10 ms CPU budget spends.
+- The ingest path treats each source website as hostile: responses are read
+  through a 4 MB cap (a slow, endless body cannot be timed out, only bounded),
+  and a message URL is fetched only if it resolves to the source's own host — a
+  tampered listing must not be able to pick what the Worker retrieves and
+  republishes as an outage. A city-wide broadcast, the widest thing ingestion
+  can trigger, is logged with its audience size.
 - Least privilege: the Firebase service account uploaded to OneSignal carries
   only the FCM role; the OneSignal REST key can send pushes but cannot read
   subscriber data.

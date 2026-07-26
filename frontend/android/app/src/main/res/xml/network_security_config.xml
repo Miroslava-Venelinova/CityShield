@@ -1,15 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Allows plain HTTP to the local dev API server (10.0.2.2 = emulator localhost).
-  OSM tile servers use HTTPS and are listed explicitly for clarity.
-  Remove the 10.0.2.2 entry before releasing to production.
+  Cleartext is denied outright: everything this app talks to is HTTPS (the
+  Worker, OneSignal, OSM tiles), so there is nothing to allow here and no
+  exception to remember to remove before a release.
+
+  The emulator's loopback alias (10.0.2.2) used to be permitted in this file,
+  which applied it to every variant — release included. It now lives in
+  src/debug/res/xml/network_security_config.xml, which shadows this one for
+  debug builds only.
 -->
 <network-security-config>
-  <!-- Local dev API (HTTP allowed) -->
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="false">10.0.2.2</domain>
-  </domain-config>
-  <!-- OpenStreetMap tile servers (HTTPS only) -->
+  <base-config cleartextTrafficPermitted="false" />
+  <!-- Listed for clarity; the base config already denies cleartext. -->
   <domain-config cleartextTrafficPermitted="false">
     <domain includeSubdomains="true">openstreetmap.org</domain>
     <domain includeSubdomains="true">tile.openstreetmap.org</domain>
