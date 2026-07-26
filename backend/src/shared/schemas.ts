@@ -1,4 +1,4 @@
-// AI output schemas (PLAN.MD §1.8). Two layers per source, same trick as
+// AI output schemas (SPEC.md §1.8). Two layers per source, same trick as
 // Pydantic's SkipJsonSchema: the JSON schema sent to Workers AI as the
 // constrained-decoding target (validated against the live models in the
 // Phase 0 eval — keep byte-identical), and the zod schema used as the

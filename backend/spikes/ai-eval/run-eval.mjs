@@ -1,4 +1,4 @@
-// Workers AI model eval (PLAN.MD §4 phase 0.2): replay the corpus through the
+// Workers AI model eval (Phase 0 spike 2): replay the corpus through the
 // candidate models with the UNTOUCHED production prompts + JSON-schema mode,
 // grade against expected outputs, report per-model regressions.
 //

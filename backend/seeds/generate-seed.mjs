@@ -1,4 +1,4 @@
-// streets.json / regions.json → seeds/seed.sql (PLAN.MD §1.2).
+// streets.json / regions.json → seeds/seed.sql (SPEC.md §1.2).
 //
 // Entries are either a bare name (the original hand-maintained form) or
 // { name, lat, lng } as written by tools/osm-seed-builder. Both are accepted so

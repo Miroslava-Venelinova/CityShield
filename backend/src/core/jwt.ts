@@ -1,4 +1,4 @@
-// HS256 JWT helpers (PLAN.MD §1.4). The app treats the token as opaque, so
+// HS256 JWT helpers (SPEC.md §1.4). The app treats the token as opaque, so
 // standard `sub`/`email` claims replace the .NET URI-style claim names.
 
 import { sign, verify } from "hono/jwt";

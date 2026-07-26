@@ -1,4 +1,4 @@
-// GDPR endpoints (PLAN.MD §1.10 / §2.3): erasure with cascade, portability
+// GDPR endpoints (SPEC.md §1.10 / §2.3): erasure with cascade, portability
 // export, location-consent withdrawal, and the /privacy page.
 
 import { env } from "cloudflare:test";

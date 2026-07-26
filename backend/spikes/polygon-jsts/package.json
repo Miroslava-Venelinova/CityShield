@@ -2,7 +2,7 @@
   "name": "cityshield-spike-polygon-jsts",
   "private": true,
   "type": "module",
-  "description": "Phase 0 spike (PLAN.MD §4.3): JSTS port of backend/processing/polygon.py",
+  "description": "Phase 0 spike 3: JSTS port of backend/processing/polygon.py",
   "dependencies": {
     "jsts": "^2.12.1"
   }

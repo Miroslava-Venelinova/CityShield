@@ -1,6 +1,6 @@
 // The three production prompts, copied CHARACTER-FOR-CHARACTER from
 // backend/services/common.py (OUTAGE_AI_PROMPT), roads_service.py and
-// varnatraffic_service.py. PLAN.MD §1.7: do not "improve" them.
+// varnatraffic_service.py. SPEC.md §1.7: do not "improve" them.
 
 export const OUTAGE_AI_PROMPT = `You are a system that outputs strictly valid JSON.
 

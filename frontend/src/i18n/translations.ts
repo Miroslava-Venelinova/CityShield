@@ -224,7 +224,7 @@ const en = {
   'profile.modalPin': 'Pin',
   'profile.modalNoPin': 'No pin placed yet — tap the map',
   'profile.modalConfirm': 'Set Location',
-  // Consent copy for the one third-country-ish transfer we make (PLAN.MD §2.2):
+  // Consent copy for the one third-country-ish transfer we make (SPEC.md §2.2):
   // the coordinates leave for OSMF's Nominatim, so say so before the user taps.
   'profile.modalConsent':
     'By confirming, you consent to your coordinates being sent to ' +
@@ -233,7 +233,7 @@ const en = {
     'to match alerts to your area, and you can clear it at any time.',
   'profile.modalConsentLink': 'OpenStreetMap privacy policy',
 
-  // ── Privacy & data (GDPR, PLAN.MD §1.10) ──
+  // ── Privacy & data (GDPR, SPEC.md §1.10) ──
   'profile.sectionPrivacy': 'Privacy & Data',
 
   'profile.privacyPolicy': 'Privacy Policy',

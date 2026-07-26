@@ -1,4 +1,4 @@
-# Phase 0 spike results (PLAN.MD §4)
+# Phase 0 spike results
 
 Ran 2026-07-19. Spike code lives next to this file; all of it is throwaway once Phase 0 sign-off happens.
 

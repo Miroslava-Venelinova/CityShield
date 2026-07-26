@@ -1,5 +1,5 @@
 // Contract tests for /api/preferences/* + the FK-cascade guarantee GDPR
-// deletion relies on (PLAN.MD §1.2 note).
+// deletion relies on (SPEC.md §1.2 note).
 
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";

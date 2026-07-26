@@ -1,4 +1,4 @@
-// Rate limiting on top of Cloudflare's Rate Limiting binding (PLAN.MD §2.4).
+// Rate limiting on top of Cloudflare's Rate Limiting binding (SPEC.md §2.4).
 //
 // Honest description of the guarantee, because it shapes how the limits are
 // picked: counters are local to the Cloudflare location serving the request and

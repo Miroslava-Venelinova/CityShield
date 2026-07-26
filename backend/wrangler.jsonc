@@ -1,4 +1,4 @@
-// CityShield Worker — PLAN.MD §1.1.
+// CityShield Worker — SPEC.md §1.1.
 {
   "name": "cityshield",
   "main": "src/index.ts",

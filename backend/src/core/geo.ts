@@ -1,4 +1,4 @@
-// Point-in-polygon and centroid helpers (PLAN.MD §1.3) — the TypeScript
+// Point-in-polygon and centroid helpers (SPEC.md §1.3) — the TypeScript
 // replacement for PostGIS `polygon.Contains(u.Location)`. Works on the outer
 // ring of a GeoJSON Polygon ([lng, lat] pairs), as the C# port did
 // (CreatePolygon over coordinates[0]).

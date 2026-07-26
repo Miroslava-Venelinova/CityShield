@@ -1,4 +1,4 @@
-// Nominatim client (PLAN.MD §1.5). Reverse geocoding backs PUT
+// Nominatim client (SPEC.md §1.5). Reverse geocoding backs PUT
 // /api/auth/location (one uncached call per request, matching the old
 // service — only forward lookups were cached). Forward geocoding backs alert
 // enrichment, with the cache moved from process memory to the D1

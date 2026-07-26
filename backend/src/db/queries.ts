@@ -1,4 +1,4 @@
-// All D1 SQL in one place (PLAN.MD §1.1 — no ORM). Timestamps are
+// All D1 SQL in one place (SPEC.md §1.1 — no ORM). Timestamps are
 // new Date().toISOString() strings, which sort correctly lexicographically.
 
 import type { Env } from "../env";
@@ -104,7 +104,7 @@ export async function markEmailVerified(env: Env, userId: string) {
  *
  * Existing JWTs stay valid — they carry no version we could bump, and checking
  * one would cost a DB read on every authenticated request. The exposure is
- * bounded by JWT_EXPIRE_MINUTES (60), which is the tradeoff PLAN.MD §1.4 already
+ * bounded by JWT_EXPIRE_MINUTES (60), which is the tradeoff SPEC.md §1.4 already
  * accepted for logout.
  */
 export async function updateUserPassword(env: Env, userId: string, passwordHash: string) {

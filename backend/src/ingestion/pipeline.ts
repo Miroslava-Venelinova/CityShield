@@ -1,4 +1,4 @@
-// Port of services/common.py's shared tail (PLAN.MD §1.7):
+// Port of services/common.py's shared tail (SPEC.md §1.7):
 // AI parse → validate → polygons → ingest. The old HTTP POST to the ASP.NET
 // API becomes a direct call into alert-service.ts, under the same
 // store-first / notification-failure-never-fails rule.

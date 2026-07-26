@@ -1,4 +1,4 @@
-// Workers AI wrapper (PLAN.MD §1.8) — port of ai_parser.py minus the debug
+// Workers AI wrapper (SPEC.md §1.8) — port of ai_parser.py minus the debug
 // disk cache. Returns null on any failure so a source skips the message and
 // retries next tick (identical contract to the Python version).
 

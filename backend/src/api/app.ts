@@ -9,7 +9,7 @@ import { globalRateLimit } from "./rate-limit";
 
 export const app = new Hono<AppEnv>();
 
-// Lazy startup guard: refuse to serve on missing/weak secrets (PLAN.MD §1.4).
+// Lazy startup guard: refuse to serve on missing/weak secrets (SPEC.md §1.4).
 app.use(async (c, next) => {
   assertConfig(c.env);
   await next();

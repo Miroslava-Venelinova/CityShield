@@ -61,7 +61,7 @@ for (const set of SETS) {
   console.log(`  CPU time (JSTS steps): ${t.cpuMs.toFixed(1)} ms ` +
               `(merge ${t.mergeMs.toFixed(1)} + union/polygonize ${t.unionPolygonizeMs.toFixed(1)} + filter ${t.filterMs.toFixed(1)})`);
 
-  // Coarser sampling (10 m) — the first mitigation lever from PLAN.MD §1.9.
+  // Coarser sampling (10 m) — the first mitigation lever from SPEC.md §1.9.
   const coarse = buildBlockPolygon(waysByName, resolved, set.extension, 10);
   if (coarse.polygon) {
     const same = coarse.touchedStreets === result.touchedStreets &&

@@ -1,4 +1,4 @@
-// pg_trgm-equivalent trigram similarity (PLAN.MD §1.3), promoted from the
+// pg_trgm-equivalent trigram similarity (SPEC.md §1.3), promoted from the
 // Phase 0 spike (spikes/polygon-jsts/fuzzy.mjs). Mirrors pg_trgm semantics:
 // lowercase, split into alphanumeric words, pad each word with two leading
 // spaces and one trailing space, extract 3-grams, Jaccard over the sets.

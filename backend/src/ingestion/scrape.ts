@@ -1,4 +1,4 @@
-// Port of scraping/scrape.py onto cheerio (PLAN.MD §1.7). Selector logic is
+// Port of scraping/scrape.py onto cheerio (SPEC.md §1.7). Selector logic is
 // kept near-identical; text extraction mirrors BeautifulSoup's
 // get_text(" ", strip=True) / get_text(strip=True) semantics.
 

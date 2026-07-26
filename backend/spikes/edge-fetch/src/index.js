@@ -1,4 +1,4 @@
-// Throwaway spike Worker (PLAN.MD §4 phase 0, risk #1): fetches all five
+// Throwaway spike Worker (Phase 0 spike 1, egress-block risk): fetches all five
 // CityShield source sites plus Overpass/Nominatim from Cloudflare's edge and
 // reports whether each responds with the structure the scrapers expect.
 import { runAllChecks } from "./checks.mjs";

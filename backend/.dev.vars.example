@@ -1,5 +1,5 @@
 # Copy to .dev.vars for `wrangler dev` (gitignored). Production values go in
-# via `wrangler secret put` (PLAN.MD §3.3).
+# via `wrangler secret put` (SPEC.md §3.3).
 JWT_KEY=dev-only-key-change-me-0123456789-0123456789-01234567
 INGEST_API_KEY=dev-only-ingest-key
 # OneSignal REST API key (dashboard → Settings → Keys & IDs). Without it, pushes

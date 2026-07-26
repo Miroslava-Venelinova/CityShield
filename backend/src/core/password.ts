@@ -1,4 +1,4 @@
-// PBKDF2-SHA-256 password hashing via WebCrypto (PLAN.MD §1.4). BCrypt can't
+// PBKDF2-SHA-256 password hashing via WebCrypto (SPEC.md §1.4). BCrypt can't
 // run inside the 10 ms CPU budget; PBKDF2 is native in workerd. The format is
 // self-describing so iterations can be raised later with lazy rehash on login.
 

@@ -1,5 +1,5 @@
 {
-  "comment": "Eval corpus for the Workers AI model selection spike (PLAN.MD §4 phase 0.2). Messages are realistic source texts in the exact shape each service feeds the LLM (title\\ncontent); expected outputs encode the semantics the pipeline and tests rely on. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin).",
+  "comment": "Eval corpus for the Workers AI model selection spike. Messages are realistic source texts in the exact shape each service feeds the LLM (title\\ncontent); expected outputs encode the semantics the pipeline and tests rely on. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin).",
   "cases": [
     {
       "id": "vik-two-streets",

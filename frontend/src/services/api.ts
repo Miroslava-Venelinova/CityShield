@@ -241,7 +241,7 @@ export const authApi = {
     request<void>('/api/auth/location',
       {method: 'PUT', body: JSON.stringify(body)}, authToken),
 
-  // ── GDPR (PLAN.MD §1.10 / §2.3) ────────────────────────────────────────────
+  // ── GDPR (SPEC.md §1.10 / §2.3) ────────────────────────────────────────────
 
   /** Art. 17 erasure. Cascades to device tokens and preferences server-side. */
   deleteAccount: (authToken: string): Promise<void> =>

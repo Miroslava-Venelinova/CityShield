@@ -1,4 +1,4 @@
-// Scheduled dispatcher (PLAN.MD §1.7): the asyncio loops collapse into
+// Scheduled dispatcher (SPEC.md §1.7): the asyncio loops collapse into
 // one cron tick. Sources run sequentially under a 180 s deadline guard, and
 // the start order rotates by tick number so a slow source can't starve the
 // others. Worst case is delayed — never lost — alerts (cursor semantics).

@@ -22,7 +22,7 @@ import LocationPickerMap from '../components/LocationPickerMap';
 //   Then import Geolocation from 'react-native-geolocation-service'
 //   and add ACCESS_FINE_LOCATION to AndroidManifest.xml
 
-// The policy is served by the Worker itself (PLAN.MD §1.10), so it always
+// The policy is served by the Worker itself (SPEC.md §1.10), so it always
 // matches the API the app is pointed at — dev, staging or production.
 const PRIVACY_POLICY_URL = `${API_BASE_URL}/privacy`;
 const OSM_PRIVACY_URL = 'https://osmfoundation.org/wiki/Privacy_Policy';
@@ -127,7 +127,7 @@ export default function ProfileScreen() {
     }
   };
 
-  // ── GDPR actions (PLAN.MD §1.10 / §2.3) ───────────────────────────────────
+  // ── GDPR actions (SPEC.md §1.10 / §2.3) ───────────────────────────────────
 
   const handleOpenPrivacyPolicy = async () => {
     try {

@@ -1,4 +1,4 @@
-// pg_trgm-equivalent trigram similarity (PLAN.MD §1.3) — spike version of the
+// pg_trgm-equivalent trigram similarity (SPEC.md §1.3) — spike version of the
 // future worker/src/core/fuzzy.ts. Mirrors pg_trgm semantics: lowercase,
 // split into alphanumeric words, pad each word with two leading spaces and
 // one trailing space, extract 3-grams, Jaccard over the trigram sets.

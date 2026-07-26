@@ -1,4 +1,4 @@
--- CityShield D1 schema — PLAN.MD §1.2 (port of the EF model + Python-side tables).
+-- CityShield D1 schema — SPEC.md §1.2 (port of the EF model + Python-side tables).
 -- Reference tables first so the users FKs resolve under PRAGMA foreign_keys.
 
 CREATE TABLE regions ( id INTEGER PRIMARY KEY AUTOINCREMENT, region_name TEXT NOT NULL UNIQUE );

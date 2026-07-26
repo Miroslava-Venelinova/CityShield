@@ -45,7 +45,7 @@ jobs:
   deploy:
     name: Deploy Worker
     # Requires the CLOUDFLARE_API_TOKEN repo secret ("Edit Cloudflare Workers"
-    # template, PLAN.MD §3.5). Remote D1 + secrets must be provisioned first (§3.3).
+    # template, SPEC.md §3.5). Remote D1 + secrets must be provisioned first (§3.3).
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [worker]
     runs-on: ubuntu-latest

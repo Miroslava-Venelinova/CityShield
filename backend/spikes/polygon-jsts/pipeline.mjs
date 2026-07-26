@@ -1,4 +1,4 @@
-// Phase 0 spike: JSTS port of backend/processing/polygon.py per PLAN.MD §1.9.
+// Phase 0 spike: JSTS port of backend/processing/polygon.py per SPEC.md §1.9.
 // Overpass fetch (I/O) is separated from the JSTS geometry pipeline (CPU) so
 // the 10 ms CPU budget question gets a clean measurement.
 

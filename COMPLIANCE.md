@@ -1,6 +1,6 @@
 # CityShield — GDPR compliance record
 
-Written record of the non-code compliance deliverables from [PLAN.MD](PLAN.MD)
+Written record of the non-code compliance deliverables from [SPEC.md](SPEC.md)
 §2.4–2.6. The code-side items (erasure/export/clear-location endpoints,
 retention cron, `/privacy` page, in-app privacy screen) live in the repo; this
 file holds the decisions that only exist as prose.

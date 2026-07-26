@@ -1,4 +1,4 @@
-// Port of AlertService.cs (PLAN.MD §1.5): store + enrich + match + notify.
+// Port of AlertService.cs (SPEC.md §1.5): store + enrich + match + notify.
 // Preserves every behavioral guard — store before notify, the city_wide=false
 // store-only rule, the bus-line narrowing, the 1,000-char push-body cap.
 

@@ -1,5 +1,5 @@
 // Port of processing/polygon.py via the Phase 0 JSTS spike
-// (spikes/polygon-jsts/pipeline.mjs), PLAN.MD §1.9. Overpass fetch (I/O) is
+// (spikes/polygon-jsts/pipeline.mjs), SPEC.md §1.9. Overpass fetch (I/O) is
 // separated from the JSTS geometry pipeline (CPU). Spike 3's CPU verdict is
 // baked in: 10 m ring sampling (halves cost, identical winners) and street
 // geometries clipped to a bbox around the shortest street (kills the
@@ -243,7 +243,7 @@ function samplesAlongRing(ring: any, step: number): any[] {
  * recomputed (and re-wrapped into JSTS Points) once per street per candidate
  * polygon, which multiplied the most CPU-heavy loop in the Worker by the street
  * count for no gain. This is the code the 10 ms free-plan budget is tightest
- * against (PLAN.MD §1.9).
+ * against (SPEC.md §1.9).
  */
 function streetTouchesSamples(
   samples: any[], streetGeom: any, step: number, tolerance = 1.0, minRun = 5,

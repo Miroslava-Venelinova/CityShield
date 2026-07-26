@@ -1,4 +1,4 @@
-// /api/auth/* — port of AuthController.cs + AuthService.cs (PLAN.MD §1.4).
+// /api/auth/* — port of AuthController.cs + AuthService.cs (SPEC.md §1.4).
 // Contract parity: exact routes, status codes, text bodies, camelCase DTOs.
 
 import { Hono } from "hono";
