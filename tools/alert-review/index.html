@@ -1,0 +1,964 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CityShield — alert review</title>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1a1f27; --line: #2b323d; --text: #e6e9ef;
+    --muted: #98a2b3; --accent: #4f9cf9; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    --star: #e3b341;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --panel: #fff; --line: #dfe3e8; --text: #1a1f27;
+      --muted: #5c6673; --accent: #1667d0; --ok: #1a7f37; --warn: #9a6700; --err: #cf222e;
+      --star: #9a6700;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .wrap { max-width: 1500px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 440px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  input, select, textarea, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%;
+  }
+  textarea { resize: vertical; }
+  button { background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+  button.yes { background: var(--ok); } button.no { background: var(--err); }
+  button.todo { background: var(--warn); }
+  button.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.ghost.on { border-color: var(--accent); }
+  button kbd { color: inherit; opacity: .75; border-color: currentColor; }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row > * { flex: 1; }
+  .row.tight { margin-top: 8px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .star { color: var(--star); }
+  .msg { padding: 9px 11px; border-radius: 6px; border: 1px solid var(--line); margin-bottom: 12px; font-size: 13px; white-space: pre-wrap; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; font-size: 12px; margin: 0; }
+  .hide { display: none !important; }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  kbd {
+    font-family: ui-monospace, Consolas, monospace; font-size: 11px; border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--muted); background: transparent;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .scroll { max-height: calc(100vh - 420px); min-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover td { background: rgba(127, 127, 127, .12); }
+  tr.pick.on td { background: rgba(79, 156, 249, .16); }
+  td.t { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.mark { white-space: nowrap; }
+
+  .badge {
+    display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .badge.warning { color: var(--warn); border-color: var(--warn); }
+
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .filters label { margin: 0 0 2px; }
+  .filters .wide { grid-column: 1 / -1; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .check input { width: auto; }
+
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0 14px; }
+  .title { font-size: 17px; font-weight: 600; margin: 0; }
+  .body {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+    max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .times { display: flex; gap: 24px; flex-wrap: wrap; margin: 12px 0; }
+  .times div small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .times div span { font-size: 15px; }
+  .loc { border-top: 1px solid var(--line); padding: 7px 0; }
+  .loc:first-child { border-top: none; }
+  .loc .n { font-weight: 600; }
+
+  .reasons { display: grid; gap: 6px; margin-top: 8px; }
+  .reason { display: flex; gap: 9px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+  .reason.on { border-color: var(--accent); background: rgba(79, 156, 249, .1); }
+  .reason input { width: auto; margin-top: 3px; }
+  .reason .rl { font-size: 13px; }
+  .reason .rh { color: var(--muted); font-size: 12px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); width: auto;
+  }
+  .chip.on { border-color: var(--accent); background: rgba(79, 156, 249, .16); }
+  .chip.small { font-size: 11px; padding: 2px 7px; }
+
+  .issue { border-top: 1px solid var(--line); padding: 8px 0; display: flex; gap: 8px; align-items: flex-start; }
+  .issue:first-child { border-top: none; }
+  .issue input[type=radio] { width: auto; margin-top: 4px; }
+  .issue .grow { flex: 1; min-width: 0; }
+  .issue .it { font-weight: 600; font-size: 13px; }
+  .issue .acts { display: flex; gap: 6px; }
+  .issue .acts button { width: auto; font-size: 11px; padding: 2px 7px; }
+
+  .stat { display: flex; gap: 18px; flex-wrap: wrap; }
+  .stat div span { display: block; font-size: 20px; font-weight: 600; }
+  .stat div small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>Alert review</h1>
+      <p class="sub">Judge what the LLM made of each source message, name the defects that repeat
+      and stamp them everywhere they appear, then export a report. Read-only against D1; verdicts
+      live in <code id="judgeFile">judgments.json</code>.</p>
+    </div>
+    <div class="stat" id="progress"></div>
+  </div>
+
+  <div class="card">
+    <h2>Source</h2>
+    <div class="row" style="margin-top:0">
+      <select id="source" style="flex:1.2">
+        <option value="local">D1 — local (wrangler --local)</option>
+        <option value="remote">D1 — remote (deployed database)</option>
+        <option value="csv">CSV export</option>
+      </select>
+      <input id="csvPath" class="hide mono" placeholder="alerts_export.csv" spellcheck="false" style="flex:2">
+      <button class="ghost" id="loadBtn" style="flex:.6">Load</button>
+    </div>
+    <div class="hint" id="sourceState">Nothing loaded yet.</div>
+  </div>
+
+  <div id="messages"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Filter</h2>
+        <div class="filters">
+          <div class="wide">
+            <label for="q">Search title and content <span class="muted">— <kbd>/</kbd></span></label>
+            <input id="q" placeholder="e.g. Аспарухово" spellcheck="false">
+          </div>
+          <div>
+            <label for="fCategory">Category</label>
+            <select id="fCategory"><option value="">any</option></select>
+          </div>
+          <div>
+            <label for="fSeverity">Severity</label>
+            <select id="fSeverity"><option value="">any</option></select>
+          </div>
+          <div>
+            <label for="fStatus">Review status</label>
+            <select id="fStatus"><option value="">any</option></select>
+          </div>
+          <div>
+            <label for="fReason">Inaccuracy reason</label>
+            <select id="fReason"><option value="">any</option></select>
+          </div>
+          <div>
+            <label for="fIssue">Issue</label>
+            <select id="fIssue"><option value="">any</option></select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <div class="check"><input type="checkbox" id="fImportant">
+              <label for="fImportant" style="margin:0">Important only</label></div>
+          </div>
+          <div>
+            <label for="fFrom">Created from</label>
+            <input id="fFrom" type="date">
+          </div>
+          <div>
+            <label for="fTo">Created to</label>
+            <input id="fTo" type="date">
+          </div>
+        </div>
+        <div class="row tight">
+          <button class="ghost" id="clearFilters">Clear filters</button>
+          <div class="hint" id="listCount" style="text-align:right;margin:0;align-self:center"></div>
+        </div>
+
+        <div class="scroll">
+          <table>
+            <thead><tr><th></th><th>Cat</th><th>Title</th><th>Sev</th><th>Created</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="head" style="margin-bottom:10px">
+          <h2 style="margin:0">Issues</h2>
+          <button class="ghost" id="newIssueBtn" style="width:auto">New issue</button>
+        </div>
+        <div class="hint" style="margin:0">Name a defect once, then stamp it on every alert it
+        appears in — <kbd>s</kbd> applies the selected issue and moves on.</div>
+
+        <div id="issueForm" class="hide" style="border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:10px">
+          <label for="issueTitle">Title</label>
+          <input id="issueTitle" placeholder="e.g. District pinned on one of its streets">
+          <label for="issueKind">Kind</label>
+          <select id="issueKind">
+            <option value="inaccurate">Inaccurate — the parse is wrong</option>
+            <option value="unimplemented">Not implemented yet</option>
+          </select>
+          <label>Reasons <span class="muted">— required for an inaccurate issue</span></label>
+          <div class="chips" id="issueReasons"></div>
+          <label for="issueDetail">Detail <span class="muted">— optional</span></label>
+          <textarea id="issueDetail" rows="2" placeholder="What is going wrong, and what would fix it."></textarea>
+          <div class="row">
+            <button id="issueSave">Save issue</button>
+            <button class="ghost" id="issueCancel" style="flex:.5">Cancel</button>
+          </div>
+        </div>
+
+        <div id="issueList" style="margin-top:10px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Report</h2>
+        <div class="hint" style="margin:0 0 10px">Covers the whole loaded dataset, not the current
+        filter: issues with their alerts, the important ones first, reason counts, category and
+        severity breakdowns. Alerts marked old are left out. Opens in the file manager when written.</div>
+        <div class="row" style="margin-top:0">
+          <button class="ghost" id="reportMd">Markdown</button>
+          <button class="ghost" id="reportJson">JSON</button>
+        </div>
+        <div id="reportOut" class="hide">
+          <div class="hint">Written to <code id="reportPath"></code></div>
+          <pre id="reportText" style="max-height:260px;margin-top:8px"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" id="detailCard">
+        <div id="empty" class="muted">Load a source, then pick an alert. <kbd>j</kbd> / <kbd>k</kbd>
+        move, <kbd>y</kbd> accurate, <kbd>n</kbd> inaccurate, <kbd>m</kbd> not implemented,
+        <kbd>o</kbd> old, <kbd>i</kbd> important, <kbd>1</kbd>–<kbd>8</kbd> reasons,
+        <kbd>s</kbd> stamp the selected issue, <kbd>Enter</kbd> save, <kbd>u</kbd> unreview.</div>
+
+        <div id="detail" class="hide">
+          <div class="head">
+            <p class="title" id="dTitle"></p>
+            <div class="row" style="margin:0;flex:0 0 auto;width:auto">
+              <button class="ghost" id="prevBtn" style="width:auto">← prev</button>
+              <button class="ghost" id="nextBtn" style="width:auto">next →</button>
+            </div>
+          </div>
+          <div class="meta" id="dMeta"></div>
+
+          <div class="times" id="dTimes"></div>
+
+          <h2 style="margin-bottom:6px">Content</h2>
+          <div class="body" id="dContent"></div>
+
+          <h2 style="margin:16px 0 6px">Locations</h2>
+          <div id="dLocations"></div>
+          <details style="margin-top:10px">
+            <summary class="muted" style="cursor:pointer;font-size:13px">locations_json</summary>
+            <pre id="dJson" style="max-height:260px;margin-top:8px"></pre>
+          </details>
+        </div>
+      </div>
+
+      <div class="card hide" id="judgeCard">
+        <h2>Verdict</h2>
+        <div class="row" style="margin-top:0">
+          <button class="yes" data-verdict="accurate">Accurate <kbd>y</kbd></button>
+          <button class="no" data-verdict="inaccurate">Inaccurate <kbd>n</kbd></button>
+        </div>
+        <div class="row tight">
+          <button class="todo" data-verdict="unimplemented">Not implemented <kbd>m</kbd></button>
+          <button class="ghost" data-verdict="stale">Old — ignore <kbd>o</kbd></button>
+          <button class="ghost" id="btnStar" style="flex:.8">☆ Important <kbd>i</kbd></button>
+        </div>
+
+        <div id="findingPane" class="hide">
+          <label>Issues <span class="muted">— shared with every other alert that has them</span></label>
+          <div class="chips" id="issueChips"></div>
+          <button class="ghost" id="issueFromAlert" style="width:auto;margin-top:8px;font-size:12px;padding:3px 9px">
+            New issue from this alert</button>
+
+          <label id="reasonLabel">What is wrong <span class="muted">— at least one</span></label>
+          <div class="reasons" id="reasons"></div>
+
+          <label for="note">Note <span class="muted">— optional, this alert only</span></label>
+          <textarea id="note" rows="2" placeholder="Anything specific to this one. Shared problems belong in an issue."></textarea>
+        </div>
+
+        <div class="row">
+          <button id="saveBtn">Save <kbd>Enter</kbd></button>
+          <button class="ghost" id="unreviewBtn" style="flex:.5">Unreview <kbd>u</kbd></button>
+        </div>
+        <div class="hint" id="judgeState"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = new URLSearchParams(location.search).get("t") || "";
+const $ = (id) => document.getElementById(id);
+
+let config = null;
+let alerts = [];
+let judgments = {};
+let issues = {};
+let filtered = [];
+let currentId = null;
+let activeIssue = null;      // the one `s` stamps
+let editingIssue = null;     // id being edited, or "" for a new one
+let attachOnSave = false;    // a new issue made from an alert attaches to it
+let formReasons = new Set();
+let draft = { verdict: "", reasons: new Set(), note: "", issues: new Set(), important: false };
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-Tool-Token": token },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function message(text, cls = "") {
+  const el = document.createElement("div");
+  el.className = `msg ${cls}`;
+  el.textContent = text;
+  $("messages").prepend(el);
+  setTimeout(() => el.remove(), 15000);
+}
+
+function busy(button, on, label) {
+  button.disabled = on;
+  if (on) { button.dataset.label = button.textContent; button.textContent = label; }
+  else if (button.dataset.label) button.textContent = button.dataset.label;
+}
+
+const esc = (value) => String(value ?? "").replace(/[&<>"]/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const isFinding = (verdict) => config.finding_verdicts.includes(verdict);
+
+// ── times ────────────────────────────────────────────────────────────────────
+// start_time / end_time are local wall-clock ISO strings with no offset, so they
+// are reformatted textually — parsing them as instants would shift the window by
+// the machine's offset. created_on_utc really is an instant and is converted.
+
+const WALL = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/;
+const pad = (n) => String(n).padStart(2, "0");
+
+function fmtWall(value) {
+  const m = WALL.exec(value || "");
+  return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : (value || "—");
+}
+
+function fmtInstant(value) {
+  const d = new Date(value);
+  if (!value || isNaN(d)) return value || "—";
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function localDay(value) {
+  const d = new Date(value);
+  if (!value || isNaN(d)) return "";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// ── setup ────────────────────────────────────────────────────────────────────
+
+async function init() {
+  config = await api("/api/config");
+  $("judgeFile").textContent = config.judgments_file;
+
+  $("fStatus").innerHTML = '<option value="">any</option><option value="unreviewed">unreviewed</option>'
+    + Object.entries(config.verdicts)
+        .map(([id, v]) => `<option value="${esc(id)}">${esc(v.label.toLowerCase())}</option>`).join("");
+  $("fReason").innerHTML = '<option value="">any</option>' + config.reasons
+    .map((r) => `<option value="${esc(r.id)}">${esc(r.label)}</option>`).join("");
+
+  $("reasons").innerHTML = config.reasons.map((r, i) => `
+    <div class="reason" data-reason="${esc(r.id)}">
+      <input type="checkbox">
+      <div><div class="rl"><kbd>${i + 1}</kbd> ${esc(r.label)}</div>
+      <div class="rh">${esc(r.hint)}</div></div>
+    </div>`).join("");
+  $("reasons").querySelectorAll("[data-reason]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (e.target.tagName !== "INPUT") e.preventDefault();
+      toggleReason(el.dataset.reason);
+    }));
+
+  $("issueReasons").innerHTML = config.reasons
+    .map((r) => `<button class="chip small" data-form-reason="${esc(r.id)}">${esc(r.label)}</button>`).join("");
+  $("issueReasons").querySelectorAll("[data-form-reason]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const id = el.dataset.formReason;
+      if (formReasons.has(id)) formReasons.delete(id); else formReasons.add(id);
+      renderIssueForm();
+    }));
+
+  $("note").maxLength = config.max_note_length;
+  $("issueDetail").maxLength = config.max_note_length;
+
+  applyDataset(await api("/api/alerts"));
+}
+
+async function load() {
+  const button = $("loadBtn");
+  busy(button, true, "…");
+  try {
+    applyDataset(await api("/api/load", { source: $("source").value, path: $("csvPath").value }));
+    message(`${alerts.length} alert(s) loaded.`, alerts.length ? "ok" : "warn");
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+function applyDataset(data) {
+  alerts = data.alerts;
+  $("sourceState").innerHTML = data.source
+    ? `${alerts.length} alert(s) from <code>${esc(data.detail)}</code> · loaded ${esc(data.loaded_at)}`
+      + (data.skipped ? ` · <span class="warn">${data.skipped} row(s) had no id and were skipped</span>` : "")
+      + (data.truncated ? ` · <span class="warn">capped at ${config.row_limit} rows — older alerts are not shown</span>` : "")
+    : "Nothing loaded yet.";
+
+  fillOptions("fCategory", [...new Set(alerts.map((a) => a.category))],
+    (v) => config.category_labels[v] ? `${v} — ${config.category_labels[v]}` : v);
+  fillOptions("fSeverity", [...new Set(alerts.map((a) => a.severity))], (v) => v);
+
+  applyState(data);
+  if (!alerts.some((a) => a.id === currentId)) select(filtered.length ? filtered[0].id : null);
+}
+
+/** Every mutation returns the whole judgment + issue state; this is the one
+ *  place the page adopts it, so nothing has to be patched by hand. */
+function applyState(data) {
+  judgments = data.judgments;
+  issues = data.issues;
+  if (activeIssue && !issues[activeIssue]) activeIssue = null;
+  renderProgress(data.counts);
+  renderIssues();
+  render();
+}
+
+function fillOptions(id, values, label) {
+  const select = $(id);
+  const keep = select.value;
+  select.innerHTML = '<option value="">any</option>' + values.filter(Boolean).sort()
+    .map((v) => `<option value="${esc(v)}">${esc(label(v))}</option>`).join("");
+  select.value = values.includes(keep) ? keep : "";
+}
+
+function renderProgress(counts) {
+  $("progress").innerHTML = `
+    <div><span>${counts.loaded}</span><small>loaded</small></div>
+    <div><span class="ok">${counts.accurate}</span><small>accurate</small></div>
+    <div><span class="err">${counts.inaccurate}</span><small>inaccurate</small></div>
+    <div><span class="warn">${counts.unimplemented}</span><small>not impl.</small></div>
+    <div><span class="star">${counts.important}</span><small>important</small></div>
+    <div><span class="muted">${counts.stale}</span><small>old</small></div>
+    <div><span class="${counts.unreviewed ? "warn" : "ok"}">${counts.unreviewed}</span><small>to review</small></div>`;
+}
+
+// ── issues ───────────────────────────────────────────────────────────────────
+
+function issueCounts() {
+  const tally = {};
+  for (const alert of alerts) {
+    for (const id of (judgments[alert.id] || {}).issues || []) tally[id] = (tally[id] || 0) + 1;
+  }
+  return tally;
+}
+
+function renderIssues() {
+  const tally = issueCounts();
+  const entries = Object.entries(issues)
+    .sort((a, b) => (tally[b[0]] || 0) - (tally[a[0]] || 0) || a[1].title.localeCompare(b[1].title));
+
+  $("fIssue").innerHTML = '<option value="">any</option><option value="none">no issue</option>'
+    + entries.map(([id, i]) => `<option value="${esc(id)}">${esc(i.title)} (${tally[id] || 0})</option>`).join("");
+  $("fIssue").value = $("fIssue").dataset.value || "";
+
+  $("issueList").innerHTML = entries.length ? entries.map(([id, issue]) => `
+    <div class="issue">
+      <input type="radio" name="activeIssue" data-active="${esc(id)}" ${id === activeIssue ? "checked" : ""}>
+      <div class="grow">
+        <div class="it">${esc(issue.title)} <span class="muted">— ${tally[id] || 0}</span></div>
+        <div class="hint" style="margin:0">${esc(config.verdicts[issue.kind].label.toLowerCase())}${
+          issue.reasons.length ? " · " + esc(issue.reasons.map(reasonLabel).join(", ")) : ""}</div>
+      </div>
+      <div class="acts">
+        <button class="ghost" data-stamp="${esc(id)}" title="Stamp on every alert matching the current filter">stamp all</button>
+        <button class="ghost" data-edit="${esc(id)}">edit</button>
+        <button class="ghost" data-del="${esc(id)}">×</button>
+      </div>
+    </div>`).join("")
+    : '<div class="muted" style="font-size:13px">No issues yet. When the same defect turns up twice, name it.</div>';
+
+  $("issueList").querySelectorAll("[data-active]").forEach((el) =>
+    el.addEventListener("change", () => { activeIssue = el.dataset.active; }));
+  $("issueList").querySelectorAll("[data-stamp]").forEach((el) =>
+    el.addEventListener("click", () => stampAll(el.dataset.stamp)));
+  $("issueList").querySelectorAll("[data-edit]").forEach((el) =>
+    el.addEventListener("click", () => openIssueForm(el.dataset.edit)));
+  $("issueList").querySelectorAll("[data-del]").forEach((el) =>
+    el.addEventListener("click", () => removeIssue(el.dataset.del)));
+
+  renderIssueChips();
+}
+
+const reasonLabel = (id) => (config.reasons.find((r) => r.id === id) || {}).label || id;
+const verdictLabel = (id) => (config.verdicts[id] || {}).label || id;
+
+function renderIssueChips() {
+  const entries = Object.entries(issues);
+  $("issueChips").innerHTML = entries.length
+    ? entries.map(([id, issue]) =>
+        `<button class="chip${draft.issues.has(id) ? " on" : ""}" data-issue="${esc(id)}">${esc(issue.title)}</button>`).join("")
+    : '<span class="muted" style="font-size:12px">None yet — “New issue from this alert” starts one.</span>';
+  $("issueChips").querySelectorAll("[data-issue]").forEach((el) =>
+    el.addEventListener("click", () => toggleIssue(el.dataset.issue)));
+}
+
+function openIssueForm(id) {
+  editingIssue = id || "";
+  const issue = id ? issues[id] : null;
+  $("issueTitle").value = issue ? issue.title : "";
+  $("issueKind").value = issue ? issue.kind : (isFinding(draft.verdict) ? draft.verdict : "inaccurate");
+  $("issueDetail").value = issue ? issue.detail : "";
+  formReasons = new Set(issue ? issue.reasons : []);
+  $("issueForm").classList.remove("hide");
+  renderIssueForm();
+  $("issueTitle").focus();
+}
+
+function renderIssueForm() {
+  $("issueReasons").querySelectorAll("[data-form-reason]").forEach((el) =>
+    el.classList.toggle("on", formReasons.has(el.dataset.formReason)));
+}
+
+function closeIssueForm() {
+  $("issueForm").classList.add("hide");
+  editingIssue = null;
+  attachOnSave = false;
+}
+
+async function saveIssue() {
+  try {
+    const data = await api("/api/issue", {
+      id: editingIssue, title: $("issueTitle").value, kind: $("issueKind").value,
+      reasons: [...formReasons], detail: $("issueDetail").value,
+    });
+    const created = !editingIssue;
+    const attach = attachOnSave;
+    closeIssueForm();
+    applyState(data);
+    // A freshly named issue is the one you are about to stamp everywhere.
+    activeIssue = data.issue_id;
+    renderIssues();
+    if (attach && currentId) toggleIssue(data.issue_id, true);
+    message(!created ? "Issue updated."
+      : attach ? "Issue saved and attached — Enter saves this alert, s stamps it on the next ones."
+               : "Issue saved and selected — press s to stamp it on an alert.", "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+async function removeIssue(id) {
+  if (!confirm(`Delete “${issues[id].title}”? It is unstamped from every alert; their verdicts and notes stay.`)) return;
+  try {
+    const data = await api("/api/issue/delete", { id });
+    draft.issues.delete(id);
+    applyState(data);
+    renderJudgment();
+    message(`Deleted — unstamped from ${data.unstamped} alert(s).`, "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+async function stampAll(id) {
+  const ids = filtered.map((a) => a.id);
+  if (!ids.length) return message("The current filter matches nothing.", "warn");
+  if (!confirm(`Stamp “${issues[id].title}” on all ${ids.length} alert(s) matching the current filter?\n\n`
+    + `Unjudged ones become "${config.verdicts[issues[id].kind].label.toLowerCase()}" with the issue's reasons. `
+    + `Alerts already judged accurate or old are left alone.`)) return;
+  try {
+    const data = await api("/api/stamp", { issue_id: id, ids });
+    applyState(data);
+    if (currentId) select(currentId);
+    message(`Stamped on ${data.stamped} alert(s)`
+      + (data.skipped ? `; ${data.skipped} left alone (accurate or old).` : "."), "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+// ── list ─────────────────────────────────────────────────────────────────────
+
+function matches(alert) {
+  const judgment = judgments[alert.id];
+  const status = judgment ? judgment.verdict : "unreviewed";
+  const needle = $("q").value.trim().toLowerCase();
+  if (needle && !(alert.title + " " + alert.content).toLowerCase().includes(needle)) return false;
+  if ($("fCategory").value && alert.category !== $("fCategory").value) return false;
+  if ($("fSeverity").value && alert.severity !== $("fSeverity").value) return false;
+  if ($("fStatus").value && status !== $("fStatus").value) return false;
+  if ($("fReason").value && !(judgment && (judgment.reasons || []).includes($("fReason").value))) return false;
+  if ($("fImportant").checked && !(judgment && judgment.important)) return false;
+  const issueFilter = $("fIssue").value;
+  if (issueFilter === "none") {
+    if (judgment && (judgment.issues || []).length) return false;
+  } else if (issueFilter && !(judgment && (judgment.issues || []).includes(issueFilter))) {
+    return false;
+  }
+  const day = localDay(alert.created_on_utc);
+  if ($("fFrom").value && (!day || day < $("fFrom").value)) return false;
+  if ($("fTo").value && (!day || day > $("fTo").value)) return false;
+  return true;
+}
+
+const MARKS = { accurate: ["✓", "ok"], inaccurate: ["✕", "err"], unimplemented: ["◌", "warn"], stale: ["–", "muted"] };
+
+function render() {
+  filtered = alerts.filter(matches);
+  $("listCount").textContent = `${filtered.length} of ${alerts.length}`;
+  $("rows").innerHTML = filtered.map((a) => {
+    const judgment = judgments[a.id] || {};
+    const [mark, cls] = MARKS[judgment.verdict] || ["·", "muted"];
+    return `<tr class="pick${a.id === currentId ? " on" : ""}" data-id="${esc(a.id)}">
+      <td class="mark ${cls}">${mark}${judgment.important ? '<span class="star">★</span>' : ""}</td>
+      <td class="muted">${esc(a.category)}</td>
+      <td class="t" title="${esc(a.title)}">${esc(a.title) || '<span class="muted">(no title)</span>'}</td>
+      <td class="muted">${esc(a.severity)}</td>
+      <td class="muted mono">${esc(fmtInstant(a.created_on_utc).slice(0, 10))}</td>
+    </tr>`;
+  }).join("");
+  $("rows").querySelectorAll("[data-id]").forEach((tr) =>
+    tr.addEventListener("click", () => select(tr.dataset.id)));
+}
+
+function select(id) {
+  currentId = id;
+  const alert = alerts.find((a) => a.id === id);
+  $("empty").classList.toggle("hide", !!alert);
+  $("detail").classList.toggle("hide", !alert);
+  $("judgeCard").classList.toggle("hide", !alert);
+  $("rows").querySelectorAll("[data-id]").forEach((tr) => {
+    const on = tr.dataset.id === id;
+    tr.classList.toggle("on", on);
+    if (on) tr.scrollIntoView({ block: "nearest" });
+  });
+  if (!alert) return;
+
+  renderDetail(alert);
+  const saved = judgments[id] || {};
+  draft = {
+    verdict: saved.verdict || "",
+    reasons: new Set(saved.reasons || []),
+    note: saved.note || "",
+    issues: new Set(saved.issues || []),
+    important: !!saved.important,
+  };
+  $("note").value = draft.note;
+  renderJudgment();
+}
+
+function step(delta) {
+  if (!filtered.length) return;
+  const index = filtered.findIndex((a) => a.id === currentId);
+  const next = index < 0 ? 0 : Math.min(Math.max(index + delta, 0), filtered.length - 1);
+  select(filtered[next].id);
+}
+
+// ── detail ───────────────────────────────────────────────────────────────────
+
+function renderDetail(alert) {
+  $("dTitle").textContent = alert.title || "(no title)";
+  const categoryLabel = config.category_labels[alert.category];
+  $("dMeta").innerHTML = [
+    `<span class="badge">${esc(alert.category)}${categoryLabel ? " · " + esc(categoryLabel) : ""}</span>`,
+    `<span class="badge ${alert.severity === "warning" ? "warning" : ""}">${esc(alert.severity) || "—"}</span>`,
+    `<span class="muted mono">${esc(alert.id)}</span>`,
+  ].join("");
+
+  $("dTimes").innerHTML = [
+    ["Created", fmtInstant(alert.created_on_utc), alert.created_on_utc],
+    ["Start", fmtWall(alert.start_time), alert.start_time],
+    ["End", fmtWall(alert.end_time), alert.end_time],
+  ].map(([label, human, raw]) => `
+    <div><small>${label}</small><span>${esc(human)}</span>
+    <span class="muted mono">${esc(raw) || "null"}</span></div>`).join("");
+
+  $("dContent").textContent = alert.content || "(empty)";
+
+  if (alert.locations_error) {
+    $("dLocations").innerHTML = `<div class="err">${esc(alert.locations_error)}</div>
+      <div class="hint">The Worker degrades an alert like this to no locations at all,
+      so nobody in that area is notified.</div>`;
+  } else if (!alert.locations.length) {
+    $("dLocations").innerHTML = '<div class="muted">No locations. The alert either went out '
+      + 'city-wide or was stored without notifying anyone (SPEC §1.5).</div>';
+  } else {
+    $("dLocations").innerHTML = alert.locations.map((loc) => {
+      const hasPin = typeof loc.lat === "number" && typeof loc.lng === "number";
+      const pin = hasPin
+        ? `<span class="mono">${loc.lat}, ${loc.lng}</span>
+           <a href="https://www.openstreetmap.org/?mlat=${loc.lat}&mlon=${loc.lng}#map=16/${loc.lat}/${loc.lng}"
+              target="_blank" rel="noreferrer noopener">map ↗</a>`
+        : '<span class="warn">no coordinates — nobody is matched by proximity</span>';
+      const subs = (loc.sublocations || []).filter((s) => typeof s === "string");
+      return `<div class="loc">
+        <div class="n">${esc(loc.location_name) || '<span class="muted">(unnamed)</span>'}
+          ${loc.is_polygon ? '<span class="badge">polygon</span>' : ""}</div>
+        <div>${pin}</div>
+        ${subs.length ? `<div class="muted">${esc(subs.join(" · "))}</div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  $("dJson").textContent = alert.locations_error
+    ? alert.locations_json
+    : JSON.stringify(alert.locations, null, 2);
+}
+
+// ── judging ──────────────────────────────────────────────────────────────────
+
+function renderJudgment() {
+  document.querySelectorAll("[data-verdict]").forEach((el) =>
+    el.classList.toggle("on", el.dataset.verdict === draft.verdict));
+  $("findingPane").classList.toggle("hide", !isFinding(draft.verdict));
+  $("reasonLabel").innerHTML = draft.verdict === "unimplemented"
+    ? 'What is wrong <span class="muted">— optional here</span>'
+    : 'What is wrong <span class="muted">— at least one</span>';
+  $("btnStar").innerHTML = (draft.important ? '<span class="star">★</span> Important'
+    : "☆ Important") + " <kbd>i</kbd>";
+  $("btnStar").classList.toggle("on", draft.important);
+  $("reasons").querySelectorAll("[data-reason]").forEach((el) => {
+    const on = draft.reasons.has(el.dataset.reason);
+    el.classList.toggle("on", on);
+    el.querySelector("input").checked = on;
+  });
+  renderIssueChips();
+
+  const saved = judgments[currentId];
+  const [, cls] = MARKS[(saved || {}).verdict] || ["", "muted"];
+  $("judgeState").innerHTML = saved
+    ? `Saved as <span class="${cls}">${esc(verdictLabel(saved.verdict))}</span>
+       on <span class="mono">${esc(saved.judged_at)}</span>`
+      + (saved.issues || []).map((id) =>
+          ` · <span class="badge">${esc((issues[id] || {}).title || id)}</span>`).join("")
+    : '<span class="muted">Not judged yet.</span>';
+}
+
+function setVerdict(verdict) {
+  draft.verdict = verdict;
+  renderJudgment();
+}
+
+function toggleReason(id) {
+  if (!isFinding(draft.verdict)) draft.verdict = "inaccurate";
+  if (draft.reasons.has(id)) draft.reasons.delete(id); else draft.reasons.add(id);
+  renderJudgment();
+}
+
+/** Attaching an issue carries its verdict and reasons over, so stamping a
+ *  named finding on an untouched alert is one keystroke. */
+function toggleIssue(id, force) {
+  const issue = issues[id];
+  if (!issue) return;
+  if (draft.issues.has(id) && !force) {
+    draft.issues.delete(id);
+  } else {
+    draft.issues.add(id);
+    if (!isFinding(draft.verdict)) draft.verdict = issue.kind;
+    for (const reason of issue.reasons) draft.reasons.add(reason);
+  }
+  renderJudgment();
+}
+
+async function save(verdict, advance = true) {
+  if (!currentId) return;
+  if (verdict) draft.verdict = verdict;
+  if (!draft.verdict) return message("Pick a verdict first.", "warn");
+  if (draft.verdict === "inaccurate" && !draft.reasons.size) {
+    renderJudgment();
+    return message("Pick at least one reason — number keys 1–8.", "warn");
+  }
+
+  // Remember where we were: a saved alert usually drops out of an "unreviewed"
+  // filter, and the next one should slide into its place rather than the list
+  // jumping back to the top.
+  const index = filtered.findIndex((a) => a.id === currentId);
+  try {
+    const data = await api("/api/judge", {
+      id: currentId, verdict: draft.verdict, reasons: [...draft.reasons],
+      note: $("note").value, issues: [...draft.issues], important: draft.important,
+    });
+    applyState(data);
+    if (advance) advanceFrom(index); else renderJudgment();
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+function advanceFrom(index) {
+  const stillHere = filtered.findIndex((a) => a.id === currentId);
+  if (stillHere >= 0) return step(1);
+  if (!filtered.length) return select(null);
+  select(filtered[Math.min(index, filtered.length - 1)].id);
+}
+
+function toggleImportant() {
+  draft.important = !draft.important;
+  renderJudgment();
+  // Already judged, or judgeable as it stands: persist without moving on, so a
+  // star never depends on remembering to press Enter afterwards.
+  if (isFinding(draft.verdict) && (draft.verdict !== "inaccurate" || draft.reasons.size)) {
+    save(null, false);
+  }
+}
+
+function stampActive() {
+  if (!activeIssue) return message("Select an issue on the left first (the radio button).", "warn");
+  toggleIssue(activeIssue, true);
+  save();
+}
+
+async function unreview() {
+  if (!currentId) return;
+  try {
+    const data = await api("/api/judge", { id: currentId, verdict: "" });
+    draft = { verdict: "", reasons: new Set(), note: "", issues: new Set(), important: false };
+    $("note").value = "";
+    applyState(data);
+    renderJudgment();
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+// ── report ───────────────────────────────────────────────────────────────────
+
+async function report(format) {
+  const button = format === "md" ? $("reportMd") : $("reportJson");
+  busy(button, true, "…");
+  try {
+    const result = await api("/api/report", { format });
+    $("reportOut").classList.remove("hide");
+    $("reportPath").textContent = result.relative;
+    $("reportText").textContent = result.text;
+    message(`Report written to ${result.relative}`
+      + (result.revealed ? " — opening it in the file manager." : "."), "ok");
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    busy(button, false);
+  }
+}
+
+// ── wiring ───────────────────────────────────────────────────────────────────
+
+$("source").addEventListener("change", () =>
+  $("csvPath").classList.toggle("hide", $("source").value !== "csv"));
+$("loadBtn").addEventListener("click", load);
+$("csvPath").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+
+const FILTERS = ["q", "fCategory", "fSeverity", "fStatus", "fReason", "fIssue", "fImportant", "fFrom", "fTo"];
+for (const id of FILTERS) {
+  $(id).addEventListener("input", () => {
+    if (id === "fIssue") $("fIssue").dataset.value = $("fIssue").value;
+    render();
+    if (!filtered.some((a) => a.id === currentId)) select(filtered.length ? filtered[0].id : null);
+  });
+}
+$("clearFilters").addEventListener("click", () => {
+  for (const id of FILTERS) { const el = $(id); if (el.type === "checkbox") el.checked = false; else el.value = ""; }
+  $("fIssue").dataset.value = "";
+  render();
+});
+
+$("prevBtn").addEventListener("click", () => step(-1));
+$("nextBtn").addEventListener("click", () => step(1));
+document.querySelectorAll("[data-verdict]").forEach((el) =>
+  el.addEventListener("click", () => {
+    // Accurate and old are terminal — nothing more to say, so they save and move on.
+    const verdict = el.dataset.verdict;
+    if (isFinding(verdict)) setVerdict(verdict); else save(verdict);
+  }));
+$("btnStar").addEventListener("click", toggleImportant);
+$("saveBtn").addEventListener("click", () => save());
+$("unreviewBtn").addEventListener("click", unreview);
+$("note").addEventListener("input", () => { draft.note = $("note").value; });
+$("newIssueBtn").addEventListener("click", () => { attachOnSave = false; openIssueForm(""); });
+$("issueFromAlert").addEventListener("click", () => { attachOnSave = true; openIssueForm(""); });
+$("issueSave").addEventListener("click", saveIssue);
+$("issueCancel").addEventListener("click", closeIssueForm);
+$("reportMd").addEventListener("click", () => report("md"));
+$("reportJson").addEventListener("click", () => report("json"));
+
+// The point of the tool is going through a lot of alerts, so every judgment is
+// reachable without the mouse. Typing in a field is never a shortcut.
+document.addEventListener("keydown", (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if (typing) {
+    if (e.key === "Escape") e.target.blur();
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+    if (e.key === "Enter" && e.target.id === "issueTitle") { e.preventDefault(); saveIssue(); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  if (e.key === "/") { e.preventDefault(); $("q").focus(); return; }
+  if (!currentId) return;
+
+  const digit = /^[1-9]$/.test(e.key) ? Number(e.key) : 0;
+  if (digit && digit <= config.reasons.length) { toggleReason(config.reasons[digit - 1].id); return; }
+
+  switch (e.key) {
+    case "j": case "ArrowDown": e.preventDefault(); step(1); break;
+    case "k": case "ArrowUp": e.preventDefault(); step(-1); break;
+    case "y": save("accurate"); break;
+    case "n": setVerdict("inaccurate"); break;
+    case "m": setVerdict("unimplemented"); break;
+    case "o": save("stale"); break;
+    case "i": toggleImportant(); break;
+    case "s": stampActive(); break;
+    case "u": unreview(); break;
+    case "Enter": e.preventDefault(); save(); break;
+  }
+});
+
+init().catch((e) => message(`Could not start: ${e.message}`, "err"));
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# One reviewer's verdicts and their issue library, rewritten on every change.
+# Reports under reports/ are the shareable artefact and stay tracked.
+judgments.json
+issues.json
+*.json.tmp
+__pycache__/
