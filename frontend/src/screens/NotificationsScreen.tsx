@@ -20,7 +20,9 @@ import {
   deleteNotification, StoredNotification, getCategoryMeta, getCategoryLabelKey,
   categoryOrder,
 } from '../services/notifications';
-import {formatTimeRange} from '../utils/datetime';
+import {
+  formatTimeRange, formatClock, formatDayMonth, formatDateTime,
+} from '../utils/datetime';
 
 type Tab = 'inbox' | 'settings';
 
@@ -384,8 +386,8 @@ function NotificationCard({item, onPress, onDelete}: {
   const styles       = useThemedStyles(makeStyles);
   const meta         = getCategoryMeta(item.category);
   const receivedDate = new Date(item.receivedAt);
-  const timeStr      = receivedDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  const dateStr      = receivedDate.toLocaleDateString([], {day: '2-digit', month: 'short'});
+  const timeStr      = formatClock(receivedDate);
+  const dateStr      = formatDayMonth(receivedDate);
 
   return (
     <TouchableOpacity
@@ -463,11 +465,7 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
   if (!item) return null;
 
   const meta         = getCategoryMeta(item.category);
-  const receivedDate = new Date(item.receivedAt);
-  const fullDateTime = receivedDate.toLocaleString([], {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const fullDateTime = formatDateTime(new Date(item.receivedAt));
 
   return (
     <Modal
@@ -519,10 +517,13 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
               <Text style={modal.bodyText}>{item.body}</Text>
             </View>
 
-            {/* Received at */}
-            <Text style={modal.receivedAt}>
-              {t('notif.received').replace('{date}', fullDateTime)}
-            </Text>
+            {/* Received at — hidden rather than showing a half-empty sentence
+                if the stored timestamp is unreadable. */}
+            {fullDateTime ? (
+              <Text style={modal.receivedAt}>
+                {t('notif.received').replace('{date}', fullDateTime)}
+              </Text>
+            ) : null}
 
           </ScrollView>
 

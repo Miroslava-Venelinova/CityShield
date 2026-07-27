@@ -55,12 +55,39 @@ export function parseAlertTime(
   return null;
 }
 
+// ── Display formats ───────────────────────────────────────────────────────────
+// All numeric and 24-hour, so they read the same whatever the device locale is
+// set to — `toLocaleString` would render English month names and a 12-hour clock
+// next to Bulgarian UI text, and would drift from the windows shown by
+// `formatTimeRange`.
+
+/** 24-hour clock, e.g. "14:35". Empty string for an unusable date. */
+export function formatClock(date: Date): string {
+  return Number.isNaN(date.getTime())
+    ? ''
+    : `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Day and month, e.g. "27.07". Empty string for an unusable date. */
+export function formatDayMonth(date: Date): string {
+  return Number.isNaN(date.getTime())
+    ? ''
+    : `${pad(date.getDate())}.${pad(date.getMonth() + 1)}`;
+}
+
+/** Full stamp, e.g. "27.07.2026, 14:35". Empty string for an unusable date. */
+export function formatDateTime(date: Date): string {
+  return Number.isNaN(date.getTime())
+    ? ''
+    : `${formatDayMonth(date)}.${date.getFullYear()}, ${formatClock(date)}`;
+}
+
 function clock(p: AlertTime): string {
-  return `${pad(p.at.getHours())}:${pad(p.at.getMinutes())}`;
+  return formatClock(p.at);
 }
 
 function dayMonth(p: AlertTime): string {
-  return `${pad(p.at.getDate())}.${pad(p.at.getMonth() + 1)}`;
+  return formatDayMonth(p.at);
 }
 
 /**

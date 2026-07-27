@@ -598,7 +598,16 @@ export default function HomeScreen() {
         transparent
         animationType="none"
         onRequestClose={closeSheet}>
-        <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={closeSheet}>
+        {/* The backdrop is a sibling of the sheet, not its parent: wrapping the
+            sheet in the touchable (and blocking it with
+            `onStartShouldSetResponder`) meant the sheet claimed every touch
+            that started inside it, so its ScrollView never got the drag. */}
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={closeSheet}
+          />
           <Animated.View
             style={[
               styles.sheet,
@@ -606,15 +615,13 @@ export default function HomeScreen() {
               // to clear the gesture bar itself.
               {paddingBottom: spacing.xl + insets.bottom},
               {transform: [{translateY: sheetTranslate}]},
-            ]}
-            // Prevent backdrop close when tapping the sheet itself
-            onStartShouldSetResponder={() => true}>
+            ]}>
             {selectedAlert && (
               <>
                 {/* Handle */}
                 <View style={styles.sheetHandle} />
 
-                {/* Header */}
+                {/* Header — stays pinned so close is always reachable */}
                 <View style={styles.sheetHeader}>
                   <View style={[styles.sheetSourceBadge, {backgroundColor: SEVERITY_BG[selectedAlert.severity]}]}>
                     <Icon
@@ -631,45 +638,53 @@ export default function HomeScreen() {
                   </TouchableOpacity>
                 </View>
 
-                <Text style={styles.sheetTitle}>{getAlertTitle(selectedAlert, t)}</Text>
-                <Text style={styles.sheetBody}>{getAlertBody(selectedAlert)}</Text>
+                {/* Long messages (some ViK notices run for paragraphs) used to
+                    be clipped at the sheet's max height with no way to reach
+                    the rest. */}
+                <ScrollView
+                  style={styles.sheetScroll}
+                  contentContainerStyle={styles.sheetScrollContent}
+                  bounces={false}>
+                  <Text style={styles.sheetTitle}>{getAlertTitle(selectedAlert, t)}</Text>
+                  <Text style={styles.sheetBody}>{getAlertBody(selectedAlert)}</Text>
 
-                {/* Meta row */}
-                <View style={styles.sheetMeta}>
-                  {formatTime(selectedAlert, t) ? (
+                  {/* Meta row */}
+                  <View style={styles.sheetMeta}>
+                    {formatTime(selectedAlert, t) ? (
+                      <View style={styles.sheetMetaChip}>
+                        <Icon name="clock" size={12} color={colors.textSecondary} />
+                        <Text style={styles.sheetMetaText}>{formatTime(selectedAlert, t)}</Text>
+                      </View>
+                    ) : null}
                     <View style={styles.sheetMetaChip}>
-                      <Icon name="clock" size={12} color={colors.textSecondary} />
-                      <Text style={styles.sheetMetaText}>{formatTime(selectedAlert, t)}</Text>
+                      <Text style={styles.sheetMetaText}>{timeAgo(selectedAlert.created_at, t)}</Text>
                     </View>
-                  ) : null}
-                  <View style={styles.sheetMetaChip}>
-                    <Text style={styles.sheetMetaText}>{timeAgo(selectedAlert.created_at, t)}</Text>
-                  </View>
-                  <View style={[styles.sheetMetaChip, {backgroundColor: SEVERITY_BG[selectedAlert.severity]}]}>
-                    <Text style={[styles.sheetMetaText, {color: SEVERITY_COLOR[selectedAlert.severity]}]}>
-                      {severityLabel(selectedAlert.severity, t)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Locations */}
-                {selectedAlert.processed_data.locations.map((loc, i) => (
-                  <View key={i} style={styles.sheetLocRow}>
-                    <View style={styles.sheetLocTitleRow}>
-                      <Icon name="map-pin" size={14} color={colors.primary} />
-                      <Text style={styles.sheetLocName}>{loc.location_name}</Text>
-                    </View>
-                    {loc.sublocations.length > 0 && (
-                      <Text style={styles.sheetSubLocs}>
-                        {loc.sublocations.join(' · ')}
+                    <View style={[styles.sheetMetaChip, {backgroundColor: SEVERITY_BG[selectedAlert.severity]}]}>
+                      <Text style={[styles.sheetMetaText, {color: SEVERITY_COLOR[selectedAlert.severity]}]}>
+                        {severityLabel(selectedAlert.severity, t)}
                       </Text>
-                    )}
+                    </View>
                   </View>
-                ))}
+
+                  {/* Locations */}
+                  {locationsOf(selectedAlert).map((loc, i) => (
+                    <View key={i} style={styles.sheetLocRow}>
+                      <View style={styles.sheetLocTitleRow}>
+                        <Icon name="map-pin" size={14} color={colors.primary} />
+                        <Text style={styles.sheetLocName}>{loc.location_name}</Text>
+                      </View>
+                      {loc.sublocations?.length > 0 && (
+                        <Text style={styles.sheetSubLocs}>
+                          {loc.sublocations.join(' · ')}
+                        </Text>
+                      )}
+                    </View>
+                  ))}
+                </ScrollView>
               </>
             )}
           </Animated.View>
-        </TouchableOpacity>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -864,6 +879,10 @@ const makeStyles = (colors: Colors, elevation: Elevation) => StyleSheet.create({
     maxHeight: SCREEN_HEIGHT * 0.65,
     ...elevation.lg,
   },
+  // `flexShrink` lets the scroller give way to the sheet's maxHeight instead of
+  // growing past it with the tail of a long message unreachable.
+  sheetScroll:        {flexShrink: 1},
+  sheetScrollContent: {paddingBottom: spacing.xs},
   sheetHandle: {
     width: 40, height: 4, backgroundColor: colors.border,
     borderRadius: 2, alignSelf: 'center', marginBottom: spacing.md,
