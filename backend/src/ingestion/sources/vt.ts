@@ -91,6 +91,7 @@ export async function run(env: Env, deadline: number): Promise<void> {
       locations: [],
       start_time: null,
       end_time: null,
+      windows: null,
       city_wide: true,
       bus_lines: parsed.bus_lines,
     }, `id=${id}`, deadline);

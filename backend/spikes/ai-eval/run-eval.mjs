@@ -1,6 +1,12 @@
-// Workers AI model eval (Phase 0 spike 2): replay the corpus through the
-// candidate models with the UNTOUCHED production prompts + JSON-schema mode,
-// grade against expected outputs, report per-model regressions.
+// Workers AI eval: replay the corpus through the candidate models with the
+// production prompts + JSON-schema mode, grade against expected outputs, report
+// per-model regressions.
+//
+// Started as Phase 0's model-selection spike, where the point was to grade the
+// models against an untouched prompt. It is now also how a prompt CHANGE is
+// measured (fix-plan Phase E) — so prompts.mjs re-exports the real constants
+// rather than copying them, and the grader normalizes times through the real
+// normalizeSchedule.
 //
 // Two transports:
 //   1. Direct REST: set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN
@@ -13,6 +19,8 @@ import {
   OUTAGE_AI_PROMPT, ROADS_AI_PROMPT, VT_AI_PROMPT,
   OUTAGE_SCHEMA, ROADS_SCHEMA, VT_SCHEMA,
 } from "./prompts.mjs";
+// The production normalizer, so times are graded on what would be stored.
+import { normalizeSchedule } from "../../src/shared/datetime.ts";
 
 // Verified against the live catalog (list-models.mjs, July 2026):
 // llama-3.1-8b-instruct was deprecated 2026-05-30 → fp8 variant instead.
@@ -29,6 +37,9 @@ const KINDS = {
 };
 
 const corpus = JSON.parse(readFileSync(new URL("./corpus.json", import.meta.url), "utf-8"));
+// Pinned in the corpus and repeated in every outage input's CURRENT_DATE line,
+// so a case that relies on the default date grades the same on any day.
+const CURRENT_DATE = corpus.current_date;
 const models = process.argv.slice(2).length ? process.argv.slice(2) : CANDIDATES;
 
 // --- transport --------------------------------------------------------------
@@ -75,11 +86,23 @@ const CYR = { А: "A", В: "B", Е: "E", К: "K", М: "M", Н: "H", О: "O", Р:
 const normLine = (s) => String(s).trim().toUpperCase().replace(/[АВЕКМНОРСТХБ]/g, (c) => CYR[c]);
 const normText = (s) => (s === null || s === undefined ? null : String(s).replace(/\s+/g, " ").trim());
 
-function gradeOutage(expected, actual, lenient = {}) {
+function gradeOutage(testCase, actual) {
+  const { expected, lenient = {}, forbidden_location_names: forbidden = [] } = testCase;
   const diffs = [];
   if (typeof actual !== "object" || actual === null) return ["output is not an object"];
   const expLocs = expected.locations ?? [];
   const actLocs = Array.isArray(actual.locations) ? actual.locations : [];
+
+  // A non-place emitted as a location fails the case regardless of the rest:
+  // that is exactly what the deterministic guards then have to clean up, and
+  // what these prompt rules exist to prevent.
+  const banned = forbidden.map(normText);
+  for (const l of actLocs) {
+    if (banned.includes(normText(l.location_name))) {
+      diffs.push(`location_name: "${l.location_name}" is not a place`);
+    }
+  }
+
   if (expLocs.length !== actLocs.length) {
     diffs.push(`locations count: expected ${expLocs.length}, got ${actLocs.length}`);
   } else {
@@ -90,16 +113,26 @@ function gradeOutage(expected, actual, lenient = {}) {
     const act = actLocs.map(useKey).sort();
     if (JSON.stringify(exp) !== JSON.stringify(act)) diffs.push(`locations: expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`);
   }
+
+  // Times are graded on what the pipeline would STORE, not on the strings the
+  // model wrote: normalizeSchedule is what turns the schedule into the envelope
+  // plus windows, and "8:00" vs "08:00" is not a difference worth failing on.
+  const want = normalizeSchedule(expected.schedule, CURRENT_DATE);
+  const got = normalizeSchedule(actual.schedule, CURRENT_DATE);
   for (const f of ["start_time", "end_time"]) {
-    if (normText(expected[f]) !== normText(actual[f])) diffs.push(`${f}: expected ${expected[f]}, got ${actual[f]}`);
+    if (want[f] !== got[f]) diffs.push(`${f}: expected ${want[f]}, got ${got[f]}`);
   }
+  if (JSON.stringify(want.windows) !== JSON.stringify(got.windows)) {
+    diffs.push(`windows: expected ${JSON.stringify(want.windows)}, got ${JSON.stringify(got.windows)}`);
+  }
+
   if (Boolean(expected.city_wide) !== Boolean(actual.city_wide)) {
     diffs.push(`city_wide: expected ${expected.city_wide}, got ${actual.city_wide}`);
   }
   return diffs;
 }
 
-function gradeRoads(expected, actual) {
+function gradeRoads({ expected }, actual) {
   const diffs = [];
   if (typeof actual !== "object" || actual === null) return ["output is not an object"];
   if (Boolean(expected.is_relevant) !== Boolean(actual.is_relevant)) {
@@ -111,7 +144,7 @@ function gradeRoads(expected, actual) {
   return diffs;
 }
 
-function gradeVt(expected, actual) {
+function gradeVt({ expected }, actual) {
   if (typeof actual !== "object" || actual === null) return ["output is not an object"];
   const exp = expected.bus_lines;
   const act = actual.bus_lines;
@@ -158,7 +191,7 @@ for (const model of models) {
         outcome = { status: "error", detail: `unparseable output: ${JSON.stringify(res).slice(0, 200)}` };
         entry.errors++;
       } else {
-        const diffs = GRADERS[testCase.kind](testCase.expected, parsed, testCase.lenient ?? {});
+        const diffs = GRADERS[testCase.kind](testCase, parsed);
         if (diffs.length === 0) {
           outcome = { status: "pass", output: parsed };
           entry.passed++;

@@ -18,7 +18,7 @@ only — no pip install. Nothing here writes to D1: the only statement is a cons
 
 1. **Source** — `wrangler d1 execute` against the local or the remote database, or a CSV export
    with the columns `id, category, title, content, severity, start_time, end_time,
-   locations_json, created_on_utc`. `--csv` loads one at startup; the same picker reloads from
+   windows_json, locations_json, created_on_utc`. `--csv` loads one at startup; the same picker reloads from
    either database without restarting. D1 reads are capped at 2000 rows, newest first, and the
    UI says so when the cap bites.
 2. **List and filters** — free text over title and content, plus category, severity, review
@@ -127,7 +127,7 @@ the category is wrong, or that the map is; no prompt change will move it.
 **Title and content are not the LLM's either.** They are the scraped page text, passed straight
 through. *Truncated or garbled content* is a scraper finding — look at the source in
 `ingestion/sources/`, not at the prompt. What the model actually produced is
-`locations_json`, `start_time`, `end_time` (and `city_wide`, see below).
+`locations_json`, `start_time`, `end_time`, `windows_json` (and `city_wide`, see below).
 
 **`city_wide` is not stored.** It decides targeting at ingest time and is then gone, so an alert
 with no locations is ambiguous here: either the model correctly said city-wide, or it produced
@@ -143,6 +143,13 @@ app shows it with no map pins at all.
 strings with no offset and are reformatted textually — parsing them as instants would shift
 every window by your machine's offset. `created_on_utc` really is an instant and is converted to
 local time. Both are shown next to their raw value so you can see what is stored.
+
+**`start_time` / `end_time` are only the envelope.** When `windows_json` is set (migration 0012)
+it is what the alert actually means, and the envelope is just its outer bound: a `Windows` row
+appears in the detail pane rendering `30.07–31.07, 08:30 – 17:00 daily`. Judge the alert on
+that row when it is there — an envelope of 30.07 08:30 → 31.07 17:00 looks like a 55-hour outage
+and is not one. `windows_json` is NULL for every alert whose envelope does say everything: one
+window on one day.
 
 ## Why the loopback guards
 

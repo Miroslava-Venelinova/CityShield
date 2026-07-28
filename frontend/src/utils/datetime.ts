@@ -4,6 +4,7 @@
 // alert is still active and to render its window. Legacy rows may still carry a
 // bare "HH:MM" clock time with no date; both shapes are handled here.
 
+import type {AlertWindows, TimeWindow} from '../services/api';
 import {TranslationKey} from '../i18n/translations';
 
 type T = (key: TranslationKey) => string;
@@ -90,16 +91,109 @@ function dayMonth(p: AlertTime): string {
   return formatDayMonth(p.at);
 }
 
+// ── Windows ───────────────────────────────────────────────────────────────────
+// The server sends `windows` when the flat start/end pair loses the alert's
+// real shape (backend migration 0012): a window repeating on every day of a
+// range, or several windows in one day. Everything below treats the pair as the
+// fallback and `windows`, when present, as the truth.
+
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const CLOCK_RE = /^(\d{1,2}):(\d{2})$/;
+
+/** Tolerant reader — the payload is server JSON, not something to trust blindly. */
+export function readWindows(raw: unknown): AlertWindows | null {
+  if (!raw || typeof raw !== 'object') { return null; }
+  const w = raw as Partial<AlertWindows>;
+  if (
+    typeof w.from_date !== 'string' || !DATE_ONLY_RE.test(w.from_date) ||
+    typeof w.to_date !== 'string' || !DATE_ONLY_RE.test(w.to_date) ||
+    !Array.isArray(w.daily)
+  ) {
+    return null;
+  }
+  const daily = w.daily.filter(
+    (d): d is TimeWindow =>
+      !!d && typeof d.start === 'string' && CLOCK_RE.test(d.start) &&
+      typeof d.end === 'string' && CLOCK_RE.test(d.end),
+  );
+  return daily.length > 0 ? {from_date: w.from_date, to_date: w.to_date, daily} : null;
+}
+
+/** "2026-07-30" → "30.07". */
+function dayMonthOf(date: string): string {
+  const m = DATE_ONLY_RE.exec(date);
+  return m ? `${m[3]}.${m[2]}` : date;
+}
+
+/** Local calendar date as "YYYY-MM-DD" — comparable to from_date/to_date. */
+function localDate(at: Date): string {
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
+
+/** Local wall clock as "HH:MM" — comparable to a window's bounds. */
+function localClock(at: Date): string {
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+/** Yesterday's local date, for a window that started before midnight. */
+function previousDate(at: Date): string {
+  const d = new Date(at);
+  d.setDate(d.getDate() - 1);
+  return localDate(d);
+}
+
+const inRange = (date: string, w: AlertWindows) =>
+  date >= w.from_date && date <= w.to_date;
+
+/**
+ * Whether `at` falls inside the schedule: a day within the range AND a clock
+ * inside one of that day's windows.
+ *
+ * A window whose end is not after its start runs past midnight, so it is also
+ * live in the small hours of the day after one in range.
+ */
+export function inWindows(w: AlertWindows, at: Date = new Date()): boolean {
+  const date = localDate(at);
+  const now = localClock(at);
+  const today = inRange(date, w);
+  const yesterday = inRange(previousDate(at), w);
+
+  for (const {start, end} of w.daily) {
+    if (end > start) {
+      if (today && now >= start && now < end) { return true; }
+    } else {
+      // Crosses midnight: the evening half belongs to a day in range, the
+      // morning half to the day after one.
+      if (today && now >= start) { return true; }
+      if (yesterday && now < end) { return true; }
+    }
+  }
+  return false;
+}
+
 /**
  * Human-readable window for display, e.g. "27.07 08:00 – 17:00" (end date shown
  * only when it differs from the start's) or "От 08:00" for an open-ended one.
  * Empty string when neither bound is usable.
+ *
+ * With `windows`, the envelope is not what the alert means and is not shown:
+ * a recurrence reads "30.07–31.07, 08:30 – 17:00 всеки ден" and several windows
+ * in one day read "30.07 09:00 – 11:00, 15:00 – 17:00".
  */
 export function formatTimeRange(
   startStr: string | null | undefined,
   endStr: string | null | undefined,
   t: T,
+  windows?: AlertWindows | null,
 ): string {
+  if (windows && windows.daily.length > 0) {
+    const clocks = windows.daily.map(w => `${w.start} – ${w.end}`).join(', ');
+    const from = dayMonthOf(windows.from_date);
+    return windows.from_date === windows.to_date
+      ? `${from} ${clocks}`
+      : `${from}–${dayMonthOf(windows.to_date)}, ${clocks} ${t('common.daily')}`;
+  }
+
   const s = parseAlertTime(startStr);
   const e = parseAlertTime(endStr);
   const withDate = (p: AlertTime, showDate: boolean) =>
@@ -131,4 +225,23 @@ export function activeUntil(endTime: string | null | undefined, createdAt: strin
   let ms = end.at.getTime();
   if (!end.dated && ms < created.getTime()) { ms += DEFAULT_ACTIVE_MS; }
   return ms;
+}
+
+/**
+ * Whether an alert is on right now.
+ *
+ * With `windows` this is the exact question — a day in the range and a clock in
+ * one of its windows — which is the whole reason the server sends them: the
+ * envelope of "8:30–17:00 on each of two days" is 30.07 08:30 → 31.07 17:00,
+ * and reading that literally left the alert showing as active all night.
+ * Without them, the envelope's end is all there is, as before.
+ */
+export function isAlertActive(
+  endTime: string | null | undefined,
+  createdAt: string,
+  windows?: AlertWindows | null,
+  now: Date = new Date(),
+): boolean {
+  if (windows && windows.daily.length > 0) { return inWindows(windows, now); }
+  return activeUntil(endTime, createdAt) > now.getTime();
 }

@@ -1,12 +1,21 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { app } from "../src/api/app";
 
-let ipCounter = 0;
-
-/** A caller IP no other test has used, so the rate limiters stay out of the way. */
+/**
+ * A caller IP no other test has used, so the rate limiters stay out of the way.
+ *
+ * Random rather than a counter: vitest gives each test FILE its own copy of this
+ * module, so a counter starting at zero handed the first request of every file
+ * the same address. RL_REGISTER_IP allows five registrations per key per minute,
+ * so once five files had spent it, the sixth file to register got a 429 that had
+ * nothing to do with what it was testing — a flake that only showed up in a full
+ * suite run, and moved around as files were added.
+ *
+ * The value is a rate-limiter bucket key, never parsed as an address (see
+ * clientIp), so uniqueness is the only property that matters.
+ */
 export function freshIp(): string {
-  const n = ++ipCounter;
-  return `203.0.113.${n % 256}.${Math.floor(n / 256)}`;
+  return `203.0.113.${crypto.randomUUID()}`;
 }
 
 /**

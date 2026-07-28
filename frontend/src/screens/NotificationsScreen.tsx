@@ -21,7 +21,7 @@ import {
   categoryOrder,
 } from '../services/notifications';
 import {
-  formatTimeRange, formatClock, formatDayMonth, formatDateTime,
+  formatTimeRange, formatClock, formatDayMonth, formatDateTime, readWindows,
 } from '../utils/datetime';
 
 type Tab = 'inbox' | 'settings';
@@ -422,7 +422,7 @@ function NotificationCard({item, onPress, onDelete}: {
           <View style={styles.timeRow}>
             <Icon name="clock" size={11} color={colors.textMuted} />
             <Text style={styles.timeText}>
-              {formatTimeRange(item.startTime, item.endTime, t)}
+              {formatTimeRange(item.startTime, item.endTime, t, readWindows(item.windows))}
             </Text>
           </View>
         )}
@@ -506,7 +506,7 @@ function DetailModal({item, onClose, onMarkRead, onDelete}: {
                 <View>
                   <Text style={modal.timeBoxLabel}>{t('notif.scheduledWindow')}</Text>
                   <Text style={modal.timeBoxValue}>
-                    {formatTimeRange(item.startTime, item.endTime, t)}
+                    {formatTimeRange(item.startTime, item.endTime, t, readWindows(item.windows))}
                   </Text>
                 </View>
               </View>

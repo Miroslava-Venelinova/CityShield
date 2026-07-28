@@ -18,7 +18,14 @@ export function trigrams(text: string): Set<string> {
   return grams;
 }
 
-function jaccard(ta: Set<string>, tb: Set<string>): number {
+/**
+ * Jaccard over two trigram sets — `similarity` without the tokenization.
+ *
+ * Exported for core/place-names.ts, which compares pre-tokenized *cores*
+ * (the name minus its kind prefix) and would otherwise re-tokenize every
+ * candidate on every call.
+ */
+export function gramSimilarity(ta: Set<string>, tb: Set<string>): number {
   if (ta.size === 0 && tb.size === 0) return 0;
   // Iterate the smaller set — the lookups are what cost.
   const [small, large] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
@@ -26,6 +33,8 @@ function jaccard(ta: Set<string>, tb: Set<string>): number {
   for (const g of small) if (large.has(g)) shared++;
   return shared / (ta.size + tb.size - shared);
 }
+
+const jaccard = gramSimilarity;
 
 export function similarity(a: string, b: string): number {
   return jaccard(trigrams(a), trigrams(b));

@@ -4,14 +4,16 @@
 // store-first / notification-failure-never-fails rule.
 
 import {
-  incrementPushAttempts, markAlertNotified, sendUsersNotification, storeAlert,
+  type AlertPayload, incrementPushAttempts, markAlertNotified, sendUsersNotification, storeAlert,
 } from "../core/alert-service";
+import { getRegions, getStreets } from "../db/queries";
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
 import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../shared/schemas";
-import { normalizeDateTime, sofiaToday } from "../shared/datetime";
+import { normalizeSchedule, sofiaToday } from "../shared/datetime";
 import { expired } from "../shared/deadline";
 import { aiParse } from "./ai";
+import { normalizeParse } from "./normalize";
 import { buildPolygonForStreets } from "./polygon";
 
 // Overpass round-trip plus the JSTS pipeline; below this there is no point
@@ -50,11 +52,21 @@ export async function ingestAlert(
   // numeric id — so prefix the category, e.g. "vik:id=17148".
   const sourceRef = `${category}:${msgRef}`;
 
+  const alert: AlertPayload = {
+    category,
+    title,
+    content,
+    locations: processed.locations,
+    startTime: processed.start_time,
+    endTime: processed.end_time,
+    windows: processed.windows,
+    cityWide: processed.city_wide,
+    busLines: processed.bus_lines ?? null,
+  };
+
   let stored;
   try {
-    stored = await storeAlert(
-      env, category, title, content, processed.start_time, processed.end_time,
-      processed.locations, sourceRef, deadline);
+    stored = await storeAlert(env, alert, sourceRef, deadline);
   } catch (e) {
     console.error(`[${tag}] Failed to store alert for ${msgRef}: ${e}`);
     return false;
@@ -69,10 +81,7 @@ export async function ingestAlert(
 
   let delivered = false;
   try {
-    ({ delivered } = await sendUsersNotification(
-      env, processed.locations, title, content, category,
-      processed.start_time, processed.end_time, processed.city_wide,
-      processed.bus_lines ?? null));
+    ({ delivered } = await sendUsersNotification(env, alert));
   } catch (e) {
     console.error(`[${tag}] Notification dispatch errored for alert ${stored.id}; will retry. ${e}`);
     return false;
@@ -101,24 +110,8 @@ export async function ingestAlert(
 }
 
 /**
- * Deterministic guard for spike 2's known qwen3 deviation: ~1/5 runs the
- * model emits a single location "град Варна" with no sublocations instead of
- * city_wide=true + empty locations. Same shape every time — normalize it.
- */
-export function applyCityWideGuard(output: ProcessedData): ProcessedData {
-  if (output.locations.length === 1) {
-    const only = output.locations[0]!;
-    const name = (only.location_name ?? "").trim();
-    if (only.sublocations.length === 0 && !only.is_polygon && /^(гр\.\s*|град\s+)?варна$/iu.test(name)) {
-      return { ...output, locations: [], city_wide: true };
-    }
-  }
-  return output;
-}
-
-/**
  * Full shared tail for one outage-style message (vik, epro, heating):
- * AI parse → city-wide guard → polygons → ingest. Returns true on success.
+ * AI parse → deterministic guards → polygons → ingest. Returns true on success.
  */
 export async function processOutageMessage(
   env: Env,
@@ -133,22 +126,32 @@ export async function processOutageMessage(
   // Pinned once here so both the prompt input and the normalization below agree
   // even if the message is processed across a midnight boundary.
   const today = sofiaToday();
-  const msgContent = `CURRENT_DATE: ${today}\n${title}\n${content}`;
+  const message = `${title}\n${content}`;
   const aiOutput = await aiParse(
-    env, OUTAGE_AI_PROMPT, msgContent, OUTAGE_JSON_SCHEMA, outageAiSchema, deadline);
+    env, OUTAGE_AI_PROMPT, `CURRENT_DATE: ${today}\n${message}`,
+    OUTAGE_JSON_SCHEMA, outageAiSchema, deadline);
   if (aiOutput === null) {
     console.error(`[${tag}] AI parsing failed (${msgRef}).`);
     return false;
   }
 
-  const processed = applyCityWideGuard({
-    ...aiOutput,
+  // The model gives a schedule (a date range plus the clock windows inside it);
+  // the flat start/end pair every reader still uses is the envelope derived from
+  // it here, and a malformed field degrades to "no time" rather than a wrong
+  // active window.
+  const { start_time, end_time, windows } = normalizeSchedule(aiOutput.schedule, today);
+
+  // Deterministic guards over what the model produced, decided from the source
+  // text and the seeded rows rather than from the parse (ingestion/normalize.ts).
+  // Both reference reads are served by the same 6-hour cache the enrichment and
+  // polygon steps below already use, so this costs no extra D1 query.
+  const processed = normalizeParse({
     locations: [...aiOutput.locations],
-    // Coerce the model's times to canonical ISO local datetimes (or null); a
-    // malformed value degrades to "no time" rather than a wrong active window.
-    start_time: normalizeDateTime(aiOutput.start_time, today),
-    end_time: normalizeDateTime(aiOutput.end_time, today),
-  });
+    city_wide: aiOutput.city_wide,
+    start_time,
+    end_time,
+    windows,
+  }, message, { regions: await getRegions(env), streets: await getStreets(env) });
 
   // For every location marked is_polygon, build a GeoJSON polygon from its
   // street list. Polygon failures leave polygon_geojson unset — never fail

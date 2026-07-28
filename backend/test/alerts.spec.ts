@@ -167,6 +167,48 @@ describe("targeting decision tree", () => {
     expect(body.user_ids).not.toContain(noLocation);
   });
 
+  // A6 — "в района на ул. X": the streets say where the area is, not who is in
+  // it. normalize.ts sets region_wide from the source text; this is the half
+  // that acts on it.
+  it("region_wide location ignores its streets and targets the whole region", async () => {
+    const onNamedStreet = await createUser({ region: "Аспарухово", street: "Дубровник" });
+    const otherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+    const regionOnly = await createUser({ region: "Аспарухово" });
+    const otherRegion = await createUser({ region: "Левски", street: "Дубровник" });
+
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{
+          location_name: "кв. Аспарухово", sublocations: ["ул. Дубровник"],
+          is_polygon: false, region_wide: true,
+        }],
+      },
+    }));
+    const body = await res.json() as SubmitResponse;
+    // The neighbour on Розова долина is exactly who this rule exists for.
+    expect(new Set(body.user_ids)).toEqual(new Set([onNamedStreet, otherStreet, regionOnly]));
+    expect(body.user_ids).not.toContain(otherRegion);
+  });
+
+  it("region_wide with no region to widen to keeps street targeting", async () => {
+    const onStreet = await createUser({ region: "Аспарухово", street: "Дубровник" });
+    const otherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+
+    const res = await submit(basePayload({
+      processed_data: {
+        // Vik's shape: streets and no district at all. There is no street→region
+        // link to widen through, so the streets beat notifying nobody.
+        locations: [{
+          location_name: "", sublocations: ["ул. Дубровник"],
+          is_polygon: false, region_wide: true,
+        }],
+      },
+    }));
+    const body = await res.json() as SubmitResponse;
+    expect(new Set(body.user_ids)).toEqual(new Set([onStreet]));
+    expect(body.user_ids).not.toContain(otherStreet);
+  });
+
   it("streets that match nothing in our table fall back to region-wide targeting", async () => {
     const onOtherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
     const regionOnly = await createUser({ region: "Аспарухово" });
@@ -372,6 +414,31 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
     const row2 = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
       .bind(id2).first<{ locations_json: string }>();
     expect(JSON.parse(row2!.locations_json)[0].lat).toBeCloseTo(43.2141);
+  });
+
+  // 8360abda: OSM tags a bus shelter with the same name as the area around it,
+  // and Nominatim ranked it first — an outage across five Provadia villages was
+  // pinned on a shelter in Варна. The area behind it is what the alert means.
+  it("skips a Nominatim hit that names an object rather than a place", async () => {
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(200, JSON.stringify([
+        { lat: "43.2394368", lon: "27.9881014", class: "highway", type: "bus_stop" },
+        { lat: "43.1786369", lon: "27.4438702", class: "boundary", type: "administrative" },
+      ]), { headers: { "Content-Type": "application/json" } });
+
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "Вилна зона", sublocations: [], is_polygon: false }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.1786369); // the boundary, not the bus stop
+    fetchMock.assertNoPendingInterceptors();
   });
 
   // The user-facing rule this priority exists for: an alert that names a region

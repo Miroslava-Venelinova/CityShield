@@ -21,7 +21,7 @@ import AlertMap, {AlertMapHandle, MapMarker, MapPolygon} from '../components/Ale
 import Icon from '../components/icons';
 import {alertsApi, Alert, AlertLocation} from '../services/api';
 import {getCategoryMeta, getCategoryLabelKey} from '../services/notifications';
-import {formatTimeRange, activeUntil as activeUntilMs} from '../utils/datetime';
+import {formatTimeRange, isAlertActive, readWindows} from '../utils/datetime';
 import {useAuth} from '../context/AuthContext';
 import {useI18n} from '../context/LanguageContext';
 import {TranslationKey} from '../i18n/translations';
@@ -65,7 +65,12 @@ function getAlertBody(alert: Alert): string {
 
 function formatTime(alert: Alert, t: T): string {
   const {start_time, end_time} = alert.processed_data;
-  return formatTimeRange(start_time, end_time, t);
+  return formatTimeRange(start_time, end_time, t, windowsOf(alert));
+}
+
+/** The alert's schedule detail, tolerating a malformed `processed_data`. */
+function windowsOf(alert: Alert) {
+  return readWindows(alert.processed_data?.windows);
 }
 
 // ── Untrusted map geometry ────────────────────────────────────────────────────
@@ -119,13 +124,14 @@ function severityLabel(severity: string, t: T): string {
 }
 
 // ── Active window ─────────────────────────────────────────────────────────────
-// An alert stays "active" until its end datetime (ISO 8601 local — see
-// utils/datetime.ts). Messages that state no end time stay active for 24h.
-// Transport (vt) route changes are never "active" — they are notification-only
-// and appear just under Recent.
+// An alert with `windows` is active on a day in its range during one of that
+// day's clock windows; otherwise it stays active until its end datetime (ISO
+// 8601 local — see utils/datetime.ts), and messages that state no end time stay
+// active for 24h. Transport (vt) route changes are never "active" — they are
+// notification-only and appear just under Recent.
 function isActive(alert: Alert): boolean {
   return alert.source !== 'vt' &&
-    activeUntilMs(alert.processed_data.end_time, alert.created_at) > Date.now();
+    isAlertActive(alert.processed_data.end_time, alert.created_at, windowsOf(alert));
 }
 
 function timeAgo(iso: string, t: T): string {

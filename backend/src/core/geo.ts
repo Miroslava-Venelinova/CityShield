@@ -50,6 +50,23 @@ export function pointInRing(lat: number, lng: number, ring: Ring): boolean {
   return inside;
 }
 
+const EARTH_RADIUS_KM = 6371;
+const RAD = Math.PI / 180;
+
+/**
+ * Equirectangular great-circle approximation, in kilometres.
+ *
+ * Used only to ask "is this seeded place inside Varna or out in the district"
+ * (core/place-names.ts), where the error of the flat-earth shortcut is metres
+ * over the tens of kilometres being compared — and it costs two multiplies
+ * instead of a haversine against the 10 ms CPU budget.
+ */
+export function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const dLat = (bLat - aLat) * RAD;
+  const dLng = (bLng - aLng) * RAD * Math.cos(((aLat + bLat) / 2) * RAD);
+  return Math.hypot(dLat, dLng) * EARTH_RADIUS_KM;
+}
+
 /** Average of the outer-ring vertices — "good enough for a map pin" (AlertService.PolygonCentroid). */
 export function ringCentroid(ring: Ring): { lat: number; lng: number } | null {
   if (ring.length === 0) return null;

@@ -147,8 +147,21 @@ function loadRef(env: Env, slot: RefSlot, sql: string): Promise<NamedRow[]> {
   return slot.pending;
 }
 
+/**
+ * Region rows plus their aliases (migration 0013), as one list.
+ *
+ * An alias is returned as an ordinary row carrying its target's id and
+ * coordinates, so every caller — targeting, the map pin, the reverse-geocode
+ * assignment in auth.ts — resolves an alternative spelling to the same
+ * region_id as the canonical name, with no call-site changes and no second
+ * cached array.
+ */
 export function getRegions(env: Env): Promise<NamedRow[]> {
-  return loadRef(env, regionsRef, "SELECT id, region_name AS name, lat, lng FROM regions");
+  return loadRef(env, regionsRef,
+    `SELECT id, region_name AS name, lat, lng FROM regions
+     UNION ALL
+     SELECT r.id, a.alias AS name, r.lat, r.lng
+       FROM region_aliases a JOIN regions r ON r.id = a.region_id`);
 }
 
 export function getStreets(env: Env): Promise<NamedRow[]> {
@@ -322,6 +335,9 @@ export interface AlertRow {
   severity: string;
   start_time: string | null;
   end_time: string | null;
+  /** Serialized AlertWindows when the envelope above loses detail, else NULL
+   *  (migration 0012). See shared/datetime.ts. */
+  windows_json: string | null;
   locations_json: string;
   created_on_utc: string;
   /** Stable "<category>:id=<n>" key back to the source message; NULL for
@@ -347,11 +363,11 @@ export interface StoredAlert {
 export async function insertAlert(env: Env, row: AlertRow): Promise<StoredAlert> {
   // The conflict target repeats the partial index's WHERE so SQLite matches it.
   await env.DB.prepare(
-    `INSERT INTO alerts (id, category, title, content, severity, start_time, end_time, locations_json, created_on_utc, source_ref, notified_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO alerts (id, category, title, content, severity, start_time, end_time, windows_json, locations_json, created_on_utc, source_ref, notified_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source_ref) WHERE source_ref IS NOT NULL DO NOTHING`,
   ).bind(row.id, row.category, row.title, row.content, row.severity,
-    row.start_time, row.end_time, row.locations_json, row.created_on_utc,
+    row.start_time, row.end_time, row.windows_json, row.locations_json, row.created_on_utc,
     row.source_ref, row.notified_at).run();
 
   // No source_ref → no dedup key (NULLs never conflict under the partial index),

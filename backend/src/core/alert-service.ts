@@ -3,12 +3,12 @@
 // store-only rule, the bus-line narrowing, the 1,000-char push-body cap.
 
 import * as q from "../db/queries";
-import { bestMatch, SIMILARITY_THRESHOLD } from "./fuzzy";
+import { matchRegion, matchStreet, parseName } from "./place-names";
 import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
 import { pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
 import { type PushNotification, sendPushToUsers } from "./onesignal";
-import { formatWindow } from "../shared/datetime";
+import { type AlertWindows, formatWindow, parseWindows } from "../shared/datetime";
 import type { Env } from "../env";
 
 // Push payloads are size-limited by the provider (and by Android below it);
@@ -39,6 +39,10 @@ export interface AlertLocationDTO {
   location_name: string;
   sublocations: string[];
   is_polygon: boolean;
+  /** Set when the message hedged ("в района на …") and the streets below were
+   *  used to locate the area rather than to bound it (normalize.ts A6). Display
+   *  is unchanged; this records why targeting was region-wide. */
+  region_wide?: boolean;
   polygon_geojson?: unknown; // bare GeoJSON Polygon geometry
   lat?: number;
   lng?: number;
@@ -49,8 +53,13 @@ export interface AlertDTO {
   original_message: { title: string; content: string };
   processed_data: {
     locations: AlertLocationDTO[];
+    /** Envelope — what a client that ignores `windows` still gets right for a
+     *  single-day alert, and approximately right for anything else. */
     start_time: string | null;
     end_time: string | null;
+    /** Present (non-null) only when the envelope loses detail: a window that
+     *  repeats each day of a range, or several windows in one day. */
+    windows: AlertWindows | null;
   };
   source: string;
   severity: string;
@@ -110,20 +119,30 @@ function allGeometries(polygonJson: Json): Json[] {
 
 async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
   const locationName = typeof location.location_name === "string" ? location.location_name : "";
-  const region = bestMatch(locationName, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD);
+  const region = matchRegion(locationName, await q.getRegions(env));
 
   const sublocations = Array.isArray(location.sublocations)
     ? location.sublocations.filter((s): s is string => typeof s === "string")
     : [];
 
+  // "в района на ул. X, ул. Y" (A6) names streets to say where the outage is,
+  // not who is in it: a resident one street over is affected just as much, and
+  // the message never says how far it reaches. Target the whole region instead.
+  //
+  // Only when a region actually resolved, though. Vik routinely names streets
+  // and no district at all, and there is no street→region link in the schema to
+  // recover one — so with nothing to widen *to*, the named streets are still a
+  // far better audience than nobody.
+  const areaOnly = location.region_wide === true && region !== null;
+
   // Streets resolve independently of the region: scraped alerts often name only
   // a street, and street_name is globally unique, so an unmatched region must
   // not discard an otherwise perfectly good street match.
-  if (sublocations.length > 0) {
+  if (sublocations.length > 0 && !areaOnly) {
     const streets = await q.getStreets(env);
     const streetIds = new Set<number>();
     for (const streetName of sublocations) {
-      const street = bestMatch(streetName, streets, (s) => s.name, SIMILARITY_THRESHOLD);
+      const street = matchStreet(streetName, streets);
       if (street) streetIds.add(street.id);
     }
     // All matched streets resolve in one query rather than one query each.
@@ -162,21 +181,37 @@ export interface NotifyResult {
 }
 
 /**
+ * One alert, as both halves of the store-then-notify pair see it.
+ *
+ * An object rather than the positional list this used to be: the two functions
+ * take the same nine values, `windows` made it ten, and four of them are
+ * `string | null` in a row — a swapped pair would have typechecked.
+ */
+export interface AlertPayload {
+  category: string;
+  title: string;
+  content: string;
+  /** Raw scraper locations; enriched on store, matched on notify. */
+  locations: unknown;
+  /** Envelope bounds — ISO local datetimes (shared/datetime.ts). */
+  startTime: string | null;
+  endTime: string | null;
+  /** Daily recurrence / multiple windows, when the envelope loses them. */
+  windows: AlertWindows | null;
+  /** Notify-only: null means "legacy payload", which broadcasts. */
+  cityWide: boolean | null;
+  /** Notify-only: narrows a route-change alert to subscribers of those lines. */
+  busLines: string[] | null;
+}
+
+/**
  * Port of SendUsersNotificationAsync — same decision tree, returns the
  * notified user ids plus whether delivery succeeded (so a caller that owns
  * retry can distinguish "sent" from "send failed, try again").
  */
-export async function sendUsersNotification(
-  env: Env,
-  locations: unknown,
-  title: string,
-  body: string,
-  category: string,
-  startTime: string | null,
-  endTime: string | null,
-  cityWide: boolean | null,
-  busLines: string[] | null,
-): Promise<NotifyResult> {
+export async function sendUsersNotification(env: Env, alert: AlertPayload): Promise<NotifyResult> {
+  const { category, title, content: body, locations, cityWide, busLines } = alert;
+
   // ── 1. Gather target users ─────────────────────────────────────────────
   let userIds: string[] = [];
   const locationArray = Array.isArray(locations) ? locations : [];
@@ -246,15 +281,17 @@ export async function sendUsersNotification(
   // ── 3. Push data payload — all values must be strings ──────────────────
   const pushData = {
     category,
-    startTime: startTime ?? "",
-    endTime: endTime ?? "",
+    startTime: alert.startTime ?? "",
+    endTime: alert.endTime ?? "",
   };
 
   // ── 4. Notification body with time info appended ───────────────────────
   // start/end are ISO local datetimes; render them compactly (e.g.
-  // "27.07 08:00 – 17:00") rather than pasting the raw ISO into the push.
+  // "27.07 08:00 – 17:00") rather than pasting the raw ISO into the push. A
+  // daily recurrence renders from `windows` instead — its envelope would read
+  // as one 55-hour outage.
   let fullBody = body;
-  const window = formatWindow(startTime, endTime);
+  const window = formatWindow(alert.startTime, alert.endTime, alert.windows);
   if (window) fullBody += ` (${window})`;
   // Scraped content is unbounded, but oversized payloads are rejected —
   // cap both fields the source controls.
@@ -284,25 +321,18 @@ export async function sendUsersNotification(
  * they have no source message and always store a fresh row.
  */
 export async function storeAlert(
-  env: Env,
-  category: string,
-  title: string,
-  content: string,
-  startTime: string | null,
-  endTime: string | null,
-  locations: unknown,
-  sourceRef: string | null,
-  deadline?: number,
+  env: Env, alert: AlertPayload, sourceRef: string | null, deadline?: number,
 ): Promise<q.StoredAlert> {
-  const enriched = await enrichLocations(env, locations, deadline);
+  const enriched = await enrichLocations(env, alert.locations, deadline);
   return q.insertAlert(env, {
     id: crypto.randomUUID(),
-    category,
-    title,
-    content,
-    severity: CATEGORY_SEVERITY[category] ?? "info",
-    start_time: startTime,
-    end_time: endTime,
+    category: alert.category,
+    title: alert.title,
+    content: alert.content,
+    severity: CATEGORY_SEVERITY[alert.category] ?? "info",
+    start_time: alert.startTime,
+    end_time: alert.endTime,
+    windows_json: alert.windows === null ? null : JSON.stringify(alert.windows),
     locations_json: JSON.stringify(enriched),
     created_on_utc: new Date().toISOString(),
     source_ref: sourceRef,
@@ -330,6 +360,7 @@ export async function getRecentAlerts(env: Env, maxAgeMs: number, limit: number)
       locations: deserializeLocations(row),
       start_time: row.start_time,
       end_time: row.end_time,
+      windows: parseWindows(row.windows_json),
     },
     source: row.category,
     severity: row.severity,
@@ -374,6 +405,7 @@ async function enrichLocations(
         : [],
       is_polygon: location.is_polygon === true,
     };
+    if (location.region_wide === true) dto.region_wide = true;
 
     // Normalize the polygon to a bare GeoJSON geometry — the scraper sends a
     // FeatureCollection, the app expects {type, coordinates}.
@@ -401,13 +433,16 @@ async function enrichLocations(
   return result;
 }
 
-const LOCATION_PREFIXES = ["ул. ", "бул. ", "ж.к. ", "кв. ", "с. ", "гр. ", "м-т ", "к.к. "];
-
-function stripLocationPrefix(name: string): string {
-  const lower = name.toLowerCase();
-  for (const prefix of LOCATION_PREFIXES)
-    if (lower.startsWith(prefix)) return name.slice(prefix.length).trim();
-  return name.trim();
+/**
+ * The name to hand Nominatim when our own tables did not recognise it.
+ *
+ * Nominatim indexes places by their plain name, so the written kind is noise
+ * that costs matches — and `parseName` knows every spelling the sources use,
+ * where the old hardcoded prefix list only knew the canonical eight.
+ */
+function geocodableName(name: string): string {
+  const { core } = parseName(name);
+  return core || name.trim();
 }
 
 /**
@@ -437,11 +472,11 @@ function seededPoint(row: q.NamedRow | null): GeoPoint | null {
 async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: number) {
   // 1. District / locality level: a named region pins the whole area.
   if (dto.location_name.trim()) {
-    const match = bestMatch(dto.location_name, await q.getRegions(env), (r) => r.name, SIMILARITY_THRESHOLD);
+    const match = matchRegion(dto.location_name, await q.getRegions(env));
     const seeded = seededPoint(match);
     if (seeded) return seeded;
 
-    const point = await geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(dto.location_name)), deadline);
+    const point = await geocode(env, buildGeocodeQuery(match?.name ?? geocodableName(dto.location_name)), deadline);
     if (point) return point;
     // Region named but unresolvable — fall through to the streets rather than
     // leaving the alert with no pin at all.
@@ -452,11 +487,11 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
   if (candidates.length > 0) {
     const streets = await q.getStreets(env); // hoisted: constant across the loop
     for (const raw of candidates) {
-      const match = bestMatch(raw, streets, (s) => s.name, SIMILARITY_THRESHOLD);
+      const match = matchStreet(raw, streets);
       const seeded = seededPoint(match);
       if (seeded) return seeded;
 
-      const point = await geocode(env, buildGeocodeQuery(match?.name ?? stripLocationPrefix(raw)), deadline);
+      const point = await geocode(env, buildGeocodeQuery(match?.name ?? geocodableName(raw)), deadline);
       if (point) return point;
     }
   }

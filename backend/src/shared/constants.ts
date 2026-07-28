@@ -10,14 +10,26 @@ export const KNOWN_CATEGORIES = new Map<string, string>([
 ]);
 
 // ── AI prompts ────────────────────────────────────────────────────────────────
-// The location-extraction rules are copied CHARACTER-FOR-CHARACTER from
-// backend/services/common.py (OUTAGE_AI_PROMPT) and varnatraffic_service.py —
-// they're tuned for Bulgarian abbreviation handling; do not "improve" them
-// (§1.7). The time handling deliberately diverges from the Python original:
-// start_time/end_time are now full ISO 8601 local datetimes (see
-// shared/datetime.ts), not bare "HH:MM", so outages scheduled days ahead get a
-// correct active window. The pipeline prepends a "CURRENT_DATE:" line the model
-// uses to default the date, and normalizeDateTime backstops the model's output.
+// The location-extraction rules started as a CHARACTER-FOR-CHARACTER copy of
+// backend/services/common.py (OUTAGE_AI_PROMPT) and varnatraffic_service.py
+// (§1.7). Two rounds of divergence since, each driven by production output
+// rather than by taste:
+//
+//  1. Times became a `schedule` object — a date range plus the clock windows
+//     inside it (shared/datetime.ts). A flat start/end pair could express
+//     neither shape the sources actually publish, and asking for a schedule AND
+//     a pair invites the model to contradict itself, so the pair is derived.
+//  2. The rules the 28.07.2026 review found the model losing were spelled out:
+//     epro's "гр. X - кв. Y" shape, the bare abbreviations and shop names it
+//     emitted as locations, and the "карето" polygon cue it ignored.
+//
+// Everything here is a SECOND line of defence. The model is nondeterministic,
+// so ingestion/normalize.ts enforces the same rules from the source text and
+// is what actually holds; changes here are measured with
+// spikes/ai-eval/run-eval.mjs, which imports this constant directly.
+//
+// The pipeline prepends a "CURRENT_DATE:" line the model uses to default the
+// date, and normalizeSchedule backstops everything it produces.
 
 export const OUTAGE_AI_PROMPT = `You are a system that outputs strictly valid JSON.
 
@@ -38,6 +50,12 @@ List of abbreviations and their meaning:
 If something isn't from the things listed assume it's a building or something else and do not include it.
 If there are details regarding what happened and who caused it - ignore it.
 
+These are NEVER locations. Leave them out entirely - do not put them in "location_name" and do not put them in "sublocations":
+- a shop or a company: "м-н ..." /магазин/, "... ООД", "... ЕООД", "... АД", "фирма ..."
+- an electrical installation: "ТП 726" /трафопост/, "БКТП ...", a substation, a transformer
+- an abbreviation with NO name after it: a lone "м-т", "местност", "м.", "кв." or "ж.к." names no place
+- a word that describes a place instead of naming one: "карето", "зона", "квартал", "улица", "блок"
+
 ## Requirements
 - Output ONLY valid JSON.
 - Do not include explanations, comments, or markdown.
@@ -50,23 +68,34 @@ If there are details regarding what happened and who caused it - ignore it.
             "is_polygon": bool
         }
     ],
-    "start_time": ISO 8601 local datetime "YYYY-MM-DDTHH:MM:00" or null,
-    "end_time": ISO 8601 local datetime "YYYY-MM-DDTHH:MM:00" or null,
+    "schedule": {
+        "from_date": "YYYY-MM-DD" or null,
+        "to_date": "YYYY-MM-DD" or null,
+        "windows": [ { "start": "HH:MM" or null, "end": "HH:MM" or null } ]
+    },
     "city_wide": bool
 }
 
 ## Dates and times
 - The first line of the message is "CURRENT_DATE: YYYY-MM-DD". Use that date whenever the message states a time but no date of its own.
-- Output "start_time" and "end_time" as ISO 8601 local datetimes in the EXACT format "YYYY-MM-DDTHH:MM:00". The seconds are ALWAYS 00.
-- Bulgarian dates are written day.month.year. Example: "На 27.07.2026 г. В периода 8:00 ч. до 13:30 ч." gives start_time "2026-07-27T08:00:00" and end_time "2026-07-27T13:30:00".
-- A date without a year (e.g. "27.07") takes the year from CURRENT_DATE.
-- For a date range with a single daily window (e.g. "От 27.07.2026 г. до 29.07.2026 г. В периода 8:00 ч. до 17:00 ч."), set "start_time" to the FIRST date at the start clock ("2026-07-27T08:00:00") and "end_time" to the LAST date at the end clock ("2026-07-29T17:00:00").
-- If a start or end time is not stated at all, use null for that field.
+- "from_date" is the FIRST day the outage affects, "to_date" the LAST. For a single day they are the SAME date.
+- Bulgarian dates are written day.month.year; output them as "YYYY-MM-DD". A date without a year (e.g. "27.07") takes the year from CURRENT_DATE.
+- "windows" holds the clock times as 24-hour "HH:MM". EVERY window applies to EVERY day between "from_date" and "to_date". Never stretch one window across the range.
+- Example: "На 27.07.2026 г. В периода 8:00 ч. до 13:30 ч." gives {"from_date": "2026-07-27", "to_date": "2026-07-27", "windows": [{"start": "08:00", "end": "13:30"}]}
+- Example: "От 30.07.2026 г. до 31.07.2026 г. В периода 8:30 ч. до 17:00 ч." gives {"from_date": "2026-07-30", "to_date": "2026-07-31", "windows": [{"start": "08:30", "end": "17:00"}]} - ONE window, because 8:30-17:00 is what happens on each of the two days.
+- Example: "На 25.07.2026 г. от 9:00 до 11:00 ч. и от 15:00 до 17:00 ч." gives {"from_date": "2026-07-25", "to_date": "2026-07-25", "windows": [{"start": "09:00", "end": "11:00"}, {"start": "15:00", "end": "17:00"}]}
+- If no time is stated at all, "windows" is an empty array. If only one side of a window is stated, use null for the other side.
 
+## Locations
 The "location_name" field must contain the name of the city/village/locality/district/residential complex.
 The "sublocations" array includes streets/boulevards, each as a separate entry.
+- List EVERY place the message names. A message naming five villages must produce five locations - do not stop early and do not merge them.
+- Many messages are written as "гр. X - кв. Y", "гр. X - ж.к. Y" or "гр. X - м-т Y". The district, complex or locality AFTER the dash is its own "location_name". The city before the dash is only context: it must NOT become a location of its own, and it must NOT go into "sublocations".
+- Example: "Прекъсване на електрозахранването гр. Варна - кв. Владислав Варненчик" gives "locations": [{"location_name": "кв. Владислав Варненчик", "sublocations": [], "is_polygon": false}]
 If you have multiple streets listed and stuff along the lines of: "затворени", "в карето", "между"; it means that the streets form a polygon and the "is_polygon" field must be set to true. In every other case leave it false.
 In case there is a polygon assume all the things listed are streets.
+- "карето" is the SIGNAL that "is_polygon" is true. It is never a "location_name".
+- Example: "Без вода ще бъдат: в карето между бул. Владислав Варненчик, ул. Беласица, ул. Хан Пресиян и бул. Левски" gives "locations": [{"location_name": null, "sublocations": ["бул. Владислав Варненчик", "ул. Беласица", "ул. Хан Пресиян", "бул. Левски"], "is_polygon": true}]
 If the message affects all clients city-wide and lists no specific locations, leave the "locations" array empty and set "city_wide" to true. In every other case "city_wide" must be false.
 
 ## Constraints
@@ -76,6 +105,7 @@ If the message affects all clients city-wide and lists no specific locations, le
 - The abbreviations must be written EXACTLY like from the list (the variant in the leftmost position) AND CONSIDER THE DOTS.
 - Leave spaces between each word (including abbreviations).
 - Remove all quotation marks from the locations.
+- A street name never carries a house number, a block, an entrance or a floor: "ул. Пловдив 25" is "ул. Пловдив", "бул. Чаталджа 20 вх. Б." is "бул. Чаталджа".
 `;
 
 export const VT_AI_PROMPT = `You are a system that outputs strictly valid JSON.

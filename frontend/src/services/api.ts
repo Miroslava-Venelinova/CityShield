@@ -293,10 +293,33 @@ export interface AlertLocation {
   lng?: number;
 }
 
+/** One clock window, "HH:MM" both ends. */
+export interface TimeWindow {
+  start: string;
+  end:   string;
+}
+
+/**
+ * The detail `start_time`/`end_time` cannot hold (backend migration 0012).
+ *
+ * The sources publish two shapes the flat pair flattens: a window repeating on
+ * every day of a range ("От 30.07 до 31.07 В периода 8:30 до 17:00", which the
+ * pair reads as 55 continuous hours), and several windows in one day. When this
+ * is present it — not the pair — says when the alert is on.
+ */
+export interface AlertWindows {
+  from_date: string;   // "YYYY-MM-DD"
+  to_date:   string;   // "YYYY-MM-DD", inclusive
+  daily:     TimeWindow[];
+}
+
 export interface ProcessedData {
   locations:  AlertLocation[];
+  /** Envelope: from_date at the first start clock → to_date at the last end. */
   start_time: string | null;
   end_time:   string | null;
+  /** Null (or absent, on a pre-0012 server) whenever the envelope says it all. */
+  windows?:   AlertWindows | null;
 }
 
 export type AlertSource = 'vik' | 'vt' | 'epro' | 'heating';

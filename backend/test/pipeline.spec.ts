@@ -1,40 +1,16 @@
-// Pipeline tests: the city-wide guard for spike 2's known qwen3 deviation,
-// and processOutageMessage end-to-end with a mocked AI binding against D1.
+// processOutageMessage end-to-end with a mocked AI binding against D1.
+//
+// The deterministic guards it now runs — including the city-wide guard, which
+// moved out of this file with the rest of them — are covered as pure functions
+// in normalize.spec.ts. What is tested here is that the pipeline actually
+// applies them, and the store/notify contract around it.
 
 import { env, fetchMock } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearRefCaches } from "../src/db/queries";
-import {
-  applyCityWideGuard, ingestAlert, MAX_PUSH_ATTEMPTS, processOutageMessage,
-} from "../src/ingestion/pipeline";
+import { ingestAlert, MAX_PUSH_ATTEMPTS, processOutageMessage } from "../src/ingestion/pipeline";
 import type { ProcessedData } from "../src/shared/schemas";
 import { sofiaToday } from "../src/shared/datetime";
-
-const location = (name: string | null, subs: string[] = [], poly = false) =>
-  ({ location_name: name, sublocations: subs, is_polygon: poly });
-
-const output = (locations: ProcessedData["locations"], cityWide = false): ProcessedData =>
-  ({ locations, start_time: null, end_time: null, city_wide: cityWide });
-
-describe("applyCityWideGuard (qwen3 deviation №2)", () => {
-  it.each(["град Варна", "гр. Варна", "Варна", "гр.Варна"])(
-    "normalizes a lone sublocation-less '%s' location to city_wide",
-    (name) => {
-      const fixed = applyCityWideGuard(output([location(name)]));
-      expect(fixed.city_wide).toBe(true);
-      expect(fixed.locations).toEqual([]);
-    });
-
-  it("leaves real locations alone", () => {
-    for (const out of [
-      output([location("Тополи")]),                      // different locality
-      output([location("Варна", ["ул. Дубровник"])]),    // has streets
-      output([location("Варна"), location("Тополи")]),   // multiple locations
-    ]) {
-      expect(applyCityWideGuard(out)).toEqual(out);
-    }
-  });
-});
 
 describe("processOutageMessage (mocked AI)", () => {
   const realAI = env.AI;
@@ -60,8 +36,7 @@ describe("processOutageMessage (mocked AI)", () => {
     await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Аспарухово')").run();
     const captured = mockAI({
       locations: [{ location_name: "кв. Аспарухово", sublocations: [], is_polygon: false }],
-      start_time: "09:00",
-      end_time: "17:00",
+      schedule: { from_date: null, to_date: null, windows: [{ start: "09:00", end: "17:00" }] },
       city_wide: false,
     });
 
@@ -77,26 +52,98 @@ describe("processOutageMessage (mocked AI)", () => {
     const row = await env.DB.prepare("SELECT * FROM alerts").first<Record<string, string>>();
     expect(row!.category).toBe("vik");
     expect(row!.severity).toBe("warning");
-    // Bare "09:00"/"17:00" get dated to today (Sofia) as ISO local datetimes.
+    // A dateless schedule is dated to today (Sofia); one window on one day is
+    // fully described by the envelope, so windows_json stays NULL.
     expect(row!.start_time).toBe(`${today}T09:00:00`);
     expect(row!.end_time).toBe(`${today}T17:00:00`);
+    expect(row!.windows_json).toBeNull();
     const locations = JSON.parse(row!.locations_json!);
     expect(locations[0].location_name).toBe("кв. Аспарухово");
+  });
+
+  // "От 30.07 до 31.07 В периода 8:30 до 17:00" is 08:30–17:00 on each day.
+  // The envelope alone read as 55 continuous hours (13 alerts, 28.07 review).
+  it("stores the daily windows a date range implies (migration 0012)", async () => {
+    mockAI({
+      locations: [{ location_name: "кв. Аспарухово", sublocations: [], is_polygon: false }],
+      schedule: {
+        from_date: "2026-07-30", to_date: "2026-07-31",
+        windows: [{ start: "08:30", end: "17:00" }],
+      },
+      city_wide: false,
+    });
+
+    await processOutageMessage(
+      env, "EPRO", "epro", "Прекъсване", "От 30.07 до 31.07 В периода 8:30 до 17:00", "id=w");
+    const row = await env.DB.prepare(
+      "SELECT start_time, end_time, windows_json FROM alerts WHERE source_ref = 'epro:id=w'")
+      .first<{ start_time: string; end_time: string; windows_json: string }>();
+
+    // The envelope still bounds the alert, for every reader that only knows it.
+    expect(row!.start_time).toBe("2026-07-30T08:30:00");
+    expect(row!.end_time).toBe("2026-07-31T17:00:00");
+    expect(JSON.parse(row!.windows_json)).toEqual({
+      from_date: "2026-07-30",
+      to_date: "2026-07-31",
+      daily: [{ start: "08:30", end: "17:00" }],
+    });
   });
 
   it("applies the city-wide guard before storing", async () => {
     mockAI({
       locations: [{ location_name: "град Варна", sublocations: [], is_polygon: false }],
-      start_time: null,
-      end_time: null,
+      schedule: { from_date: null, to_date: null, windows: [] },
       city_wide: false,
     });
 
-    const ok = await processOutageMessage(env, "EPRO", "epro", "Прекъсване", "За цяла Варна", "id=x");
+    const ok = await processOutageMessage(
+      env, "EPRO", "epro", "Прекъсване", "Без ток остава цялата Варна", "id=x");
     expect(ok).toBe(true);
     const row = await env.DB.prepare("SELECT locations_json FROM alerts ORDER BY created_on_utc DESC")
       .first<{ locations_json: string }>();
     expect(JSON.parse(row!.locations_json)).toEqual([]); // guard emptied the fake location
+  });
+
+  // The same parse from a message that never says city-wide is a lost district,
+  // not a broadcast — the alert must keep its location (fix-plan A3).
+  it("keeps a lone Варна when the message does not say city-wide", async () => {
+    mockAI({
+      locations: [{ location_name: "град Варна", sublocations: [], is_polygon: false }],
+      schedule: { from_date: null, to_date: null, windows: [] },
+      city_wide: false,
+    });
+
+    const ok = await processOutageMessage(
+      env, "EPRO", "epro", "Прекъсване", "гр. Варна - кв. Владислав Варненчик", "id=y");
+    expect(ok).toBe(true);
+    const row = await env.DB.prepare(
+      "SELECT locations_json FROM alerts WHERE source_ref = 'epro:id=y'")
+      .first<{ locations_json: string }>();
+    expect(JSON.parse(row!.locations_json)).toHaveLength(1);
+  });
+
+  // 406268df +8: the district arrives in the street array and has to be lifted
+  // out into a location of its own before enrichment pins the city centre.
+  it("promotes a district out of the street array (fix-plan A4)", async () => {
+    clearRefCaches();
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES ('ж.к. Младост', 43.2309578, 27.879652)",
+    ).run();
+    mockAI({
+      locations: [{ location_name: "Варна", sublocations: ["Младост"], is_polygon: false }],
+      schedule: { from_date: null, to_date: null, windows: [] },
+      city_wide: false,
+    });
+
+    await processOutageMessage(
+      env, "EPRO", "epro", "Прекъсване", "гр. Варна - кв. Младост", "id=z");
+    const row = await env.DB.prepare(
+      "SELECT locations_json FROM alerts WHERE source_ref = 'epro:id=z'")
+      .first<{ locations_json: string }>();
+    const locations = JSON.parse(row!.locations_json) as Array<Record<string, unknown>>;
+    expect(locations).toHaveLength(1);
+    expect(locations[0]!.location_name).toBe("Младост");
+    expect(locations[0]!.lat).toBeCloseTo(43.2309578);
   });
 
   it("returns false (message retried next tick) when the AI keeps failing", async () => {
@@ -108,7 +155,11 @@ describe("processOutageMessage (mocked AI)", () => {
   }, 15_000); // retry backoff sleeps 1s + 2s
 
   it("recovers when the AI fails transiently (retry succeeds)", async () => {
-    mockAI({ locations: [], start_time: null, end_time: null, city_wide: true }, { failTimes: 2 });
+    mockAI({
+      locations: [],
+      schedule: { from_date: null, to_date: null, windows: [] },
+      city_wide: true,
+    }, { failTimes: 2 });
     const ok = await processOutageMessage(env, "VIK", "vik", "t", "c", "id=3");
     expect(ok).toBe(true);
   }, 15_000);
@@ -164,7 +215,7 @@ describe("ingestAlert idempotency + push retry (migration 0009)", () => {
   }
 
   const cityWide = (): ProcessedData => ({
-    locations: [], start_time: null, end_time: null, city_wide: true,
+    locations: [], start_time: null, end_time: null, windows: null, city_wide: true,
   });
 
   it("holds the cursor on a failed send, then re-drives without duplicating or re-storing", async () => {

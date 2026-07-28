@@ -63,14 +63,15 @@ D1_DATABASE = "cityshield-db"
 D1_ROW_LIMIT = 2000
 ALERTS_SQL = (
     "SELECT id, category, title, content, severity, start_time, end_time, "
-    "locations_json, created_on_utc FROM alerts "
+    "windows_json, locations_json, created_on_utc FROM alerts "
     f"ORDER BY created_on_utc DESC LIMIT {D1_ROW_LIMIT}"
 )
 
 # The CSV export's columns, which are the alerts table's columns minus the
 # ingestion bookkeeping (source_ref, notified_at) a reviewer has no use for.
 CSV_COLUMNS = ("id", "category", "title", "content", "severity",
-               "start_time", "end_time", "locations_json", "created_on_utc")
+               "start_time", "end_time", "windows_json", "locations_json",
+               "created_on_utc")
 
 # Mirrors backend/src/shared/constants.ts. Only used for labels — an unknown
 # category still loads and still shows up in the filters.
@@ -436,6 +437,9 @@ def normalize(row: dict) -> dict | None:
         "severity": text("severity"),
         "start_time": text("start_time"),
         "end_time": text("end_time"),
+        # Migration 0012: the daily recurrence / extra windows the start-end
+        # envelope cannot hold. NULL on every alert whose envelope says it all.
+        "windows_json": text("windows_json"),
         "locations_json": raw,
         "locations": locations,
         "locations_error": error,
@@ -617,6 +621,7 @@ def summarize() -> dict:
             "created_on_utc": alert["created_on_utc"],
             "start_time": alert["start_time"],
             "end_time": alert["end_time"],
+            "windows_json": alert["windows_json"],
             "verdict": verdict,
             "reasons": judgment.get("reasons", []),
             "issues": [i for i in judgment.get("issues", []) if i in issues],
@@ -628,6 +633,7 @@ def summarize() -> dict:
                     "lat": location.get("lat"),
                     "lng": location.get("lng"),
                     "is_polygon": bool(location.get("is_polygon")),
+                    "region_wide": bool(location.get("region_wide")),
                     "sublocations": [str(s) for s in location.get("sublocations", [])
                                      if isinstance(s, (str, int, float))],
                 }
@@ -765,6 +771,10 @@ def render_markdown(summary: dict) -> str:
             "",
             f"**Window:** `{finding['start_time'] or '—'}` → `{finding['end_time'] or '—'}`",
         ]
+        # Only set when the envelope above loses detail (migration 0012): a
+        # window repeating over a date range, or several windows in one day.
+        if finding.get("windows_json"):
+            lines += ["", f"**Windows:** `{finding['windows_json']}`"]
         if finding["locations"]:
             lines += ["", "**Locations:**", ""]
             for location in finding["locations"]:
@@ -773,7 +783,10 @@ def render_markdown(summary: dict) -> str:
                        else "no coordinates")
                 subs = (" — " + ", ".join(location["sublocations"])) if location["sublocations"] else ""
                 polygon = " · polygon" if location["is_polygon"] else ""
-                lines.append(f"- {location['location_name'] or '(unnamed)'} → {pin}{polygon}{subs}")
+                # The streets below were listed but not targeted — say so, or the
+                # line reads as street-level targeting that it deliberately isn't.
+                wide = " · region-wide" if location["region_wide"] else ""
+                lines.append(f"- {location['location_name'] or '(unnamed)'} → {pin}{polygon}{wide}{subs}")
         elif finding["locations_error"]:
             lines += ["", f"**Locations:** {finding['locations_error']}"]
         else:

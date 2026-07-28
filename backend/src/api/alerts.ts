@@ -3,10 +3,13 @@
 // storeAlert/sendUsersNotification functions directly.
 
 import { Hono } from "hono";
-import { getRecentAlerts, sendUsersNotification, storeAlert } from "../core/alert-service";
+import {
+  type AlertPayload, getRecentAlerts, sendUsersNotification, storeAlert,
+} from "../core/alert-service";
 import { sendPushToUsers } from "../core/onesignal";
 import * as q from "../db/queries";
 import { KNOWN_CATEGORIES } from "../shared/constants";
+import { normalizeSchedule, sofiaToday } from "../shared/datetime";
 import { detach } from "./background";
 import type { AppEnv } from "./middleware";
 import { requireAuth, requireIngestKey } from "./middleware";
@@ -54,17 +57,33 @@ export const alertRoutes = new Hono<AppEnv>()
     if (!KNOWN_CATEGORIES.has(category))
       return c.json({ error: `Unknown category: ${category}` }, 400);
 
-    const startTime = typeof processedData.start_time === "string" ? processedData.start_time : null;
-    const endTime = typeof processedData.end_time === "string" ? processedData.end_time : null;
-
     const locations = processedData.locations;
     if (!Array.isArray(locations))
       return c.json({ error: "processed_data.locations must be an array." }, 400);
 
-    const cityWide = typeof processedData.city_wide === "boolean" ? processedData.city_wide : null;
-    const busLines = Array.isArray(processedData.bus_lines)
-      ? processedData.bus_lines.filter((l): l is string => typeof l === "string")
-      : null;
+    // Times may arrive either way: as the flat pair older injectors send, or —
+    // since migration 0012 — as the `schedule` object the crawler's model now
+    // produces. normalizeSchedule derives the pair from the latter, so a caller
+    // that sends both gets the schedule's answer.
+    const schedule = normalizeSchedule(processedData.schedule, sofiaToday());
+    const startTime = schedule.start_time
+      ?? (typeof processedData.start_time === "string" ? processedData.start_time : null);
+    const endTime = schedule.end_time
+      ?? (typeof processedData.end_time === "string" ? processedData.end_time : null);
+
+    const alert: AlertPayload = {
+      category,
+      title,
+      content,
+      locations,
+      startTime,
+      endTime,
+      windows: schedule.windows,
+      cityWide: typeof processedData.city_wide === "boolean" ? processedData.city_wide : null,
+      busLines: Array.isArray(processedData.bus_lines)
+        ? processedData.bus_lines.filter((l): l is string => typeof l === "string")
+        : null,
+    };
 
     // Persist BEFORE notifications go out: if the store fails the scraper
     // gets a 500 and can safely re-submit, because no push has been sent yet.
@@ -72,15 +91,13 @@ export const alertRoutes = new Hono<AppEnv>()
     // always store a fresh row (the idempotency path is for cursor-driven
     // sources; see ingestAlert).
     const deadline = Date.now() + SUBMIT_BUDGET_MS;
-    const { id: alertId } = await storeAlert(
-      c.env, category, title, content, startTime, endTime, locations, null, deadline);
+    const { id: alertId } = await storeAlert(c.env, alert, null, deadline);
 
     // Never fail the request once the alert is stored: a non-2xx here would
     // make the scraper re-submit a message whose pushes already went out.
     let notifiedIds: string[] = [];
     try {
-      ({ recipients: notifiedIds } = await sendUsersNotification(
-        c.env, locations, title, content, category, startTime, endTime, cityWide, busLines));
+      ({ recipients: notifiedIds } = await sendUsersNotification(c.env, alert));
     } catch (e) {
       console.error(`Notification dispatch failed for alert ${alertId}; the alert is stored. ${e}`);
     }

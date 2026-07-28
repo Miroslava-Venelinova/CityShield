@@ -50,24 +50,25 @@ crons `*/15 * * * *` (ingest) and `30 3 * * *` (cleanup).
 CityShield/
 ├── backend/                    the Worker — the entire server side
 │   ├── wrangler.jsonc          bindings, crons, vars
-│   ├── migrations/             D1 SQL migrations (0001–0011)
-│   ├── seeds/                  regions.json / streets.json + generate-seed.mjs
+│   ├── migrations/             D1 SQL migrations (0001–0014)
+│   ├── seeds/                  regions/streets/aliases.json + generate-seed.mjs
 │   ├── src/
 │   │   ├── index.ts            exports { fetch, scheduled }
 │   │   ├── env.ts              Env interface + assertConfig
 │   │   ├── api/                Hono routes, middleware, rate limiting, /privacy
-│   │   ├── core/               alert service, fuzzy, geo, geocoding, onesignal,
-│   │   │                       jwt, password, auth-tokens, refresh-tokens,
-│   │   │                       mailer, bus-lines
+│   │   ├── core/               alert service, fuzzy, place-names, geo, geocoding,
+│   │   │                       onesignal, jwt, password, auth-tokens,
+│   │   │                       refresh-tokens, mailer, bus-lines
 │   │   ├── db/queries.ts       every prepared statement, in one place
-│   │   ├── ingestion/          runner, schedule, pipeline, ai, polygon, scrape,
-│   │   │                       state, sources/
+│   │   ├── ingestion/          runner, schedule, pipeline, normalize, ai,
+│   │   │                       polygon, scrape, state, sources/
 │   │   └── shared/             schemas, constants (prompts), datetime, deadline
-│   ├── test/                   vitest suite (19 files, 204 tests) + fixtures
+│   ├── test/                   vitest suite (22 files, 359 tests) + fixtures
 │   └── spikes/                 Phase 0 de-risking spikes + RESULTS.md
 ├── frontend/                   React Native Android app
 ├── tools/osm-seed-builder/     local UI that builds reference data from Overpass
 ├── tools/push-tester/          local UI that fires a test push
+├── tools/alert-review/         local UI for judging what the pipeline stored
 └── setup.bat                   Windows dependency installer
 ```
 
@@ -109,11 +110,12 @@ design — nothing is correct only because a cache is warm:
 
 ### 1.2 Data model (D1)
 
-SQLite, migrations `0001`–`0011`. Current shape:
+SQLite, migrations `0001`–`0014`. Current shape:
 
 ```sql
 regions ( id INTEGER PK, region_name TEXT UNIQUE, lat REAL, lng REAL )
 streets ( id INTEGER PK, street_name TEXT UNIQUE, lat REAL, lng REAL )
+region_aliases ( alias TEXT PK, region_id → regions ON DELETE CASCADE )  -- §1.3
 
 users (
   user_id TEXT PK,                 -- uuid v4; also the OneSignal external_id
@@ -135,7 +137,8 @@ user_notification_preferences ( id, user_id → users ON DELETE CASCADE,
 alerts (
   id TEXT PK, category TEXT, title TEXT, content TEXT,
   severity TEXT DEFAULT 'info',
-  start_time TEXT, end_time TEXT,          -- ISO local datetimes, §1.7
+  start_time TEXT, end_time TEXT,          -- ISO local datetimes (envelope), §1.7
+  windows_json TEXT,                       -- daily recurrence / extra windows, §1.7
   locations_json TEXT DEFAULT '[]',        -- enriched locations, §1.5
   created_on_utc TEXT,
   source_ref TEXT,                         -- "<category>:id=<n>" — idempotency key
@@ -186,9 +189,12 @@ for the fan-out filter to examine.
 | 0009 | `alerts.source_ref` + `notified_at` + unique index (lost-push fix) |
 | 0010 | `alerts.push_attempts` |
 | 0011 | Targeting indexes (`ix_prefs_category_optout`, `ix_users_bus_lines`) |
+| 0012 | `alerts.windows_json` — the schedule detail a flat start/end pair loses |
+| 0013 | `region_aliases` — one region, several written forms |
+| 0014 | Rename the five regions that collided with a like-named Varna district |
 
 **Seeding.** `seeds/generate-seed.mjs` turns `regions.json` / `streets.json`
-(245 regions, 1,333 streets, all with coordinates) into upserts:
+(252 regions, 1,333 streets, all with coordinates) plus `aliases.json` into upserts:
 `INSERT … ON CONFLICT DO UPDATE SET lat = COALESCE(excluded.lat, …)`. Re-applying
 adds new rows and backfills missing coordinates, and never blanks coordinates
 already stored — pinned by `test/seed-upsert.spec.ts`. The data is produced by
@@ -205,12 +211,40 @@ so match behaviour does not drift from the SQL it replaced:
 2. Extract all 3-grams into a `Set`.
 3. `similarity(a,b) = |A ∩ B| / |A ∪ B|`.
 4. `bestMatch(name, rows, nameOf, threshold)` → highest scorer above the
-   threshold, else `null`.
+   threshold, else `null`. Threshold **0.3** (pg_trgm's default `%`), or **0.4**
+   for polygon street resolution. Used directly by the polygon resolver and the
+   reverse-geocode assignment in `api/auth.ts`.
 
-Thresholds: **0.3** for region/street matching (pg_trgm's default `%`) and
-**0.4** for polygon street resolution. Candidate rows come from the 6-hour
-module cache (§1.1); a linear scan over a few thousand names with Set
-intersection stays well under a millisecond.
+**Kind-aware place matching (`core/place-names.ts`)** — what resolves an alert's
+*place* name, layered on top of the trigrams. Comparing whole names made the
+written kind prefix noise the trigrams had to average away: bare `Аспарухово`
+scored **1.000** on the village 55 km out and 0.786 on `кв. Аспарухово`, the
+district in the city — so those alerts pinned a village and, because a user's
+`region_id` comes from the same table, reached nobody.
+
+1. `parseName(raw)` → `{kind, core}`, recognising every spelling the sources
+   actually write (`ЖК`, `ж.к`, `м.`, `м-ст`, `ж.к "Младост"`, `ул.7`), not just
+   the canonical one the prompt asks for.
+2. Match on `core`, with the kind as a **filter**: a `к.к.` is never a `кв.`
+   (`кв.` and `ж.к.` deliberately share a class — the sources use them
+   interchangeably), and a kindless seeded row stays compatible with anything.
+3. **Threshold 0.40**, not 0.30 — stripping the prefix raises every score, and
+   over the 102 distinct location names the pipeline has produced every wanted
+   match lands ≥ 0.417 and every false positive ≤ 0.357.
+4. Ties inside a **0.2 band** go to the row inside Varna (within 9 km of the
+   seeded `Варна` centroid): every source is Varna-scoped, and a like-named
+   district carries orders of magnitude more users than a village. A remaining
+   exact tie goes to whichever name is written most like the query, then to seed
+   order — so `Младост` resolves deterministically.
+5. `region_aliases` (migration 0013) is unioned into `getRegions` as ordinary
+   rows carrying the target's id and coordinates, so an alternative spelling
+   (`Владислав Варненчик` → `кв. Владиславово`, which scores 0.375 and is
+   otherwise unreachable) resolves to the **same** `region_id` — a second region
+   row would split the district's users instead of joining them.
+
+Parsed kinds, core trigrams and the in-city flag are memoized against the
+candidate array the same way `fuzzy.ts` memoizes trigrams, so the 6-hour ref
+cache pays for them once rather than per alert (§1.1's 10 ms CPU budget).
 
 **Point-in-polygon (`core/geo.ts`)** — `ringBBox` → SQL bbox prefilter
 (`latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?`) → exact ray-cast test
@@ -248,8 +282,11 @@ and field casing are locked in by `frontend/src/services/api.ts`. Note the split
 | `GET /privacy` | — | Bilingual privacy policy (§2.5) |
 
 `AlertDTO`: `{id, original_message:{title, content}, processed_data:{locations,
-start_time, end_time}, source, severity, created_at}`, where each location is
-`{location_name, sublocations, is_polygon, polygon_geojson?, lat?, lng?}`.
+start_time, end_time, windows}, source, severity, created_at}`, where each
+location is `{location_name, sublocations, is_polygon, polygon_geojson?, lat?,
+lng?}`. `windows` is `{from_date, to_date, daily:[{start, end}]}` or `null` —
+non-null only when the `start_time`/`end_time` envelope loses detail (§1.7), so a
+client that ignores it keeps today's behaviour.
 
 **Categories** (`shared/constants.ts`): `vik` (Water/ВиК), `vt` (Traffic),
 `epro` (Power/ЕРП Север), `heating` (Heating/Веолия). Adding a source means
@@ -340,22 +377,36 @@ records that the push landed; `push_attempts` counts failures (§1.7).
   usually lists several streets inside it, and pinning one of those reads as "the
   outage is *here*" when it spans the whole area. Streets are the fallback (first
   three sublocations, first hit wins).
-- Each candidate name is first fuzzy-matched against our own tables. A matched
-  row with seeded coordinates (migration 0005) needs **no network call at all** —
-  which keeps Nominatim's 1,100 ms throttle and 8 s timeout off the ingest budget
-  on the common path. Unseeded names fall back to Nominatim with the Bulgarian
-  prefixes (`ул.`, `бул.`, `ж.к.`, `кв.`, `с.`, `гр.`, `м-т`, `к.к.`) stripped.
+- `region_wide` (guard A6, §1.7) is carried onto the DTO when set, so a stored
+  alert records *why* its targeting was region-wide despite naming streets. The
+  app ignores it; the review tool badges it.
+- Each candidate name is first matched against our own tables (§1.3's kind-aware
+  matcher for regions, `matchStreet` for streets). A matched row with seeded
+  coordinates (migration 0005) needs **no network call at all** — which keeps
+  Nominatim's 1,100 ms throttle and 8 s timeout off the ingest budget on the
+  common path. Unseeded names fall back to Nominatim with the written kind
+  stripped by `parseName`.
+- Nominatim hits that name an *object* rather than a place are skipped
+  (`amenity`, `shop`, `office`, `tourism`, `historic`, `railway`, … and the
+  point-like `highway` types). OSM tags a bus shelter with the same `name` as the
+  area around it, and Nominatim ranked one first: an outage across five Provadia
+  villages was pinned on the shelter `Вилна зона /Виница/` in Варна. The query
+  asks for five results and takes the first that is a place; a street is still a
+  place, so street geocoding is unaffected.
 
 Enrichment never throws: an alert without coordinates is still worth storing.
 
 **Targeting** (`sendUsersNotification`) — the decision tree, in order:
 
 1. **Locations present** → per location: polygon → bbox + ray-cast (§1.3);
-   otherwise fuzzy region match, and fuzzy street matches resolved
+   otherwise a kind-aware region match, and street matches resolved
    **independently of the region** (scraped alerts often name only a street, and
    `street_name` is globally unique, so an unmatched region must not discard a
    good street match). All matched streets resolve in one query. No usable
    street → region-wide; unknown region too → nobody.
+   A location marked `region_wide` (guard A6, §1.7) skips the street branch
+   entirely — but only if a region resolved, since there is no street→region link
+   to widen through otherwise.
 2. **No locations and `city_wide === false`** → **store only, never broadcast.**
    The scraper explicitly said this is not city-wide yet produced no locations,
    which is almost certainly an LLM misparse of a street-level outage. This guard
@@ -506,18 +557,55 @@ leaves a street just as dry.
 | `vt` | VarnaTraffic accordion → LLM bus-line extraction → city-wide `vt` alert narrowed by §1.5's bus-line filter. `null` = irrelevant (marked seen, skipped), `["0"]` = a route change with no line named (full audience). Named lines are appended to the content as `Засегнати линии: …` |
 
 **Pipeline** (`pipeline.ts`) for outage-style messages (`vik`, `epro`,
-`heating`): AI parse → zod → **city-wide guard** → polygons → `ingestAlert`.
+`heating`): AI parse → zod → schedule normalization → **deterministic guards** →
+polygons → `ingestAlert`.
 
-- The city-wide guard is a deterministic fix for a known model deviation
-  (§1.8): roughly one run in five, qwen3 emits a single location `град Варна`
-  with no sublocations instead of `city_wide: true` with an empty list. Same
-  shape every time, so it is normalized rather than re-prompted.
-- Times are normalized to canonical ISO local datetimes
-  (`shared/datetime.ts`): the prompt is prefixed with a `CURRENT_DATE:` line
-  pinned to the Sofia calendar day, and `normalizeDateTime` backstops the model's
-  output — a malformed value degrades to "no time", never to a wrong window.
-  Times carry no offset on purpose: the audience is in Bulgaria, so
-  `new Date("2026-07-27T08:00:00")` parses correctly in device-local time.
+**The guards (`ingestion/normalize.ts`)** are a pure module decided from the
+source text and the seeded rows, never from what the model happened to emit.
+The prompt carries the same rules (§1.8), but the prompt is nondeterministic and
+these are not, so this is what actually holds. Each one answers a failure found
+in production output:
+
+| | Rule | What it fixes |
+|---|---|---|
+| A1 | A bare kind (`м-т`, `местност`), a generic noun (`карето`, `зона`) or a shop/company/substation (`м-н …`, `… ООД`, `ТП 726`) is not a place — drop it before enrichment | The matcher always answers with *something*: `м-т` scored 0.364 on `м-т Фичоза` and pinned five villages' outage 40 km away |
+| A2 | A polygon cue in the message (`карето`, `затворени`, `между`) plus ≥3 sublocations forces `is_polygon`, whatever the model said | The pin fell back to the first street's centroid, 1.4 km off |
+| A3 | A lone `Варна` only becomes `city_wide` when the message *says* city-wide (`всички абонати`, `цялата Варна`, …) | The guard fired on the same shape a **dropped district** produces, and `city_wide` fans out via `getAllUserIds` — five extraction failures were broadcast to every user |
+| A4 | A sublocation carrying a region kind, ending in `зона`, or (under a bare city parent) matching a region row, is lifted out into a location of its own; the city before epro's `гр. X - кв. Y` dash is context and is dropped | The flat `(location_name, sublocations)` schema has no slot for that shape, so the district landed in the street array and targeted nobody |
+| A5 | Trailing house/block/entrance detail is stripped from `ул.`/`бул.` names (`ул. Пловдив 25` → `ул. Пловдив`), never when the strip would empty the core (`ул.7` is a truncated ordinal) | House numbers dragged the street match around |
+| A6 | An area cue in the message (`в района на`, `района около`, `прилежащите улици`, `в близост до`, `околните/съседните улици`) plus ≥1 street sets `region_wide` on the location | The streets in a hedged message say *where* the outage is, not who is in it — targeting only those exact streets asserted a precision the source never gave, and missed the resident one street over |
+
+**A6 changes targeting only.** The street list stays on the location, so the feed,
+the pin and the review tool still show the most specific thing the message said;
+what widens is `getUserIdsInRange`, which takes the region branch instead of the
+street branch. It is deliberately conditional on a region having *resolved*: vik
+routinely names streets and no district at all, and there is no street→region link
+in the schema to recover one, so with nothing to widen to the named streets remain
+a better audience than nobody. A2 wins over A6 — a `карето` block is the more
+specific claim, and a bounded shape is exactly what A6 declines to assert.
+
+Both cues are read once per message, so a hedge marks every location the message
+produced. The sources publish one outage per message, so that is the right grain.
+
+A3 is what remains of the original city-wide guard, a deterministic fix for a
+known model deviation (§1.8): roughly one run in five, qwen3 emits a single
+location `град Варна` instead of `city_wide: true` with an empty list. The shape
+is the same either way — what tells the two apart is the message.
+
+**Times** come back from the model as a `schedule` object — a date range plus the
+clock windows inside it — because a flat start/end pair could express neither
+shape the sources publish: `От 30.07 до 31.07 В периода 8:30 до 17:00` means
+08:30–17:00 *on each day* (stored flat, it read as 55 continuous hours), and
+`от 9 до 11 и от 15 до 17` is two windows in one day (stored flat, 09:00–17:00).
+`normalizeSchedule` (`shared/datetime.ts`) derives `start_time`/`end_time` as the
+**envelope** — first date at the first start clock, last date at the last end —
+and stores the detail in `windows_json` only when the envelope loses some. Asking
+the model for both a schedule and a pair would invite it to contradict itself, so
+the pair is never requested. The prompt is prefixed with a `CURRENT_DATE:` line
+pinned to the Sofia calendar day, and every field is coerced or rejected here — a
+malformed value degrades to "no time", never to a wrong window. Times carry no
+offset on purpose: the audience is in Bulgaria, so
+`new Date("2026-07-27T08:00:00")` parses correctly in device-local time.
 - Polygon building is skipped when under **6 s** of budget remain — a polygon is
   an enhancement, storing and notifying is not.
 - `ingestAlert` returns true only once the alert is stored **and** its push has
@@ -662,14 +750,16 @@ Build and toolchain details: [frontend/SETUP.md](frontend/SETUP.md).
 
 `vitest` with `@cloudflare/vitest-pool-workers` — tests execute inside workerd
 against a real local D1, with Workers AI and outbound `fetch` mocked.
-**19 files, 204 tests**, covering: scrape parsers against fixture HTML; the fuzzy
-matcher (including Cyrillic cases); crawler cursor semantics (retry/blocking, the
-per-success persistence rule); the alert targeting decision tree; polygon
-building against a fixture Overpass response, reproducing the Python
-implementation's test point; API contract round-trips; GDPR cascade; refresh
-rotation and replay detection; email verification and reset; the seed upsert;
-schedule staggering; deadline helpers; datetime normalization; and targeting at
-scale.
+**22 files, 359 tests**, covering: scrape parsers against fixture HTML; the fuzzy
+matcher (including Cyrillic cases) and the kind-aware place matcher over the real
+collisions from the seed; the deterministic ingestion guards, each against the
+parse and source text it was written for; crawler cursor semantics
+(retry/blocking, the per-success persistence rule); the alert targeting decision
+tree; polygon building against a fixture Overpass response, reproducing the
+Python implementation's test point; API contract round-trips; GDPR cascade;
+refresh rotation and replay detection; email verification and reset; the seed
+upsert; schedule staggering; deadline helpers; datetime and schedule
+normalization; and targeting at scale.
 
 `.github/workflows/ci.yml` runs on every push and PR:
 
@@ -953,6 +1043,12 @@ DNS rebinding.
   `overpass/`) is recommended — the public endpoints rate-limit mid-extract. See
   its README for the five load-bearing compose settings and the Cyrillic filter's
   known lossiness.
+- **`tools/alert-review`** (`python tools/alert-review/app.py`) loads what the
+  pipeline actually stored — from local or remote D1 — and lets you mark each
+  alert accurate / inaccurate / not-implemented, tag shared issues, and write a
+  markdown report. It is the measurement behind the ingestion guards (§1.7) and
+  the place matcher (§1.3): every rule in those two exists because a review run
+  named the alert it got wrong.
 - **`tools/push-tester`** (`python tools/push-tester/app.py`) drives
   `POST /api/alerts/test-push` against the local or deployed Worker, addressing
   one user or everyone. The useful trick: load the user list from **remote** D1

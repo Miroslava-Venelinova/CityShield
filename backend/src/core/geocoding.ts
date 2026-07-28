@@ -105,6 +105,43 @@ function reserveNominatimSlot(deadline?: number): Promise<boolean> {
   return result;
 }
 
+interface NominatimHit {
+  lat?: string;
+  lon?: string;
+  class?: string;
+  type?: string;
+}
+
+// Enough results to skip past the point-of-interest noise and still reach the
+// place; the response is small and this is one request either way.
+const SEARCH_LIMIT = 5;
+
+// OSM tags a bus stop, a shop and a monument with the same `name` as the
+// district or street they sit in, and Nominatim happily ranks one of those
+// first: "Вилна зона" came back as the bus stop "Вилна зона /Виница/" and
+// pinned an outage in five Provadia villages onto a shelter in Варна.
+//
+// A denylist rather than an allowlist, because the same function geocodes both
+// districts and streets and the shapes they legitimately come back as are
+// open-ended (place/*, boundary/administrative, landuse/*, leisure/resort for
+// к.к. Св. св. Константин и Елена, highway/residential for a street). What is
+// never meant is a single addressable object.
+const NON_PLACE_CLASSES = new Set([
+  "amenity", "shop", "office", "craft", "tourism", "historic",
+  "railway", "aeroway", "emergency", "healthcare", "man_made",
+]);
+const NON_PLACE_HIGHWAY_TYPES = new Set([
+  "bus_stop", "platform", "crossing", "traffic_signals", "stop", "give_way",
+  "street_lamp", "turning_circle", "milestone", "speed_camera",
+]);
+
+/** Whether a Nominatim hit is a place (or a street) rather than an object standing in one. */
+function namesAPlace(hit: NominatimHit): boolean {
+  if (hit.class && NON_PLACE_CLASSES.has(hit.class)) return false;
+  if (hit.class === "highway" && hit.type && NON_PLACE_HIGHWAY_TYPES.has(hit.type)) return false;
+  return true;
+}
+
 /**
  * Forward geocode with the D1-backed cache (misses cached too, so repeated
  * alerts for the same unresolvable name don't hammer Nominatim).
@@ -124,7 +161,7 @@ export async function geocode(env: Env, query: string, deadline?: number): Promi
       console.warn(`Skipping uncached geocode of '${query}' — not enough time budget left.`);
       return null;
     }
-    const url = `${env.NOMINATIM_URL}/search?format=json&limit=1&countrycodes=bg&q=${encodeURIComponent(query)}`;
+    const url = `${env.NOMINATIM_URL}/search?format=json&limit=${SEARCH_LIMIT}&countrycodes=bg&q=${encodeURIComponent(query)}`;
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT },
       signal: abortIn(REQUEST_TIMEOUT_MS, deadline),
@@ -134,12 +171,18 @@ export async function geocode(env: Env, query: string, deadline?: number): Promi
       return null; // transient failure — not cached
     }
 
-    const body = (await res.json()) as Array<{ lat?: string; lon?: string }>;
+    const body = (await res.json()) as NominatimHit[];
     let point: GeoPoint | null = null;
-    if (Array.isArray(body) && body.length > 0) {
-      const lat = Number(body[0]?.lat);
-      const lng = Number(body[0]?.lon);
-      if (Number.isFinite(lat) && Number.isFinite(lng)) point = { lat, lng };
+    if (Array.isArray(body)) {
+      for (const hit of body) {
+        if (!namesAPlace(hit)) continue;
+        const lat = Number(hit?.lat);
+        const lng = Number(hit?.lon);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          point = { lat, lng };
+          break;
+        }
+      }
     }
 
     await env.DB.prepare(

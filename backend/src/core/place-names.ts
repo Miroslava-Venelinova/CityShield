@@ -1,0 +1,278 @@
+// Kind-aware place-name matching.
+//
+// `bestMatch` compares whole names, which makes a written kind prefix pure
+// noise the trigrams have to average away: bare "Аспарухово" scored 1.000 on
+// the *village* Аспарухово (55 km out) and only 0.786 on "кв. Аспарухово", the
+// district in the city — so alerts about the district pinned a village and, via
+// region_id, notified nobody. The same shape produced "ж.к. Чайка" → the resort
+// "Чайка" and "ж.к. Младост" → the Девня one.
+//
+// So: parse the kind off the name, compare only the cores, and use the kind as
+// a *filter* (a к.к. is never a кв.). Where two candidates still tie on the core
+// — the district and the village really are both "Аспарухово" — prefer the one
+// inside Varna: every source we crawl is Varna-scoped, and a like-named district
+// carries orders of magnitude more users than a village 55 km away.
+//
+// `bestMatch` itself is unchanged and still serves the polygon resolver and the
+// reverse-geocode path; this module is a layer on top for the two call sites
+// that resolve a *place* name (targeting and the map pin).
+
+import type { NamedRow } from "../db/queries";
+import { gramSimilarity, similarity, trigrams } from "./fuzzy";
+import { distanceKm } from "./geo";
+
+/** Canonical kind token, keyed by the form the prompt asks the model for. */
+export type PlaceKind =
+  | "ул." | "бул." | "ал." | "пл."
+  | "ж.к." | "кв." | "к.к." | "м-т" | "с.о." | "с." | "гр.";
+
+/**
+ * What a kind says the place *is*. Two names only match when their classes
+ * agree or one of them is unstated — "к.к. Чайка" and "кв. Чайка" are two
+ * different places that happen to share a core.
+ */
+export type PlaceClass = "street" | "district" | "resort" | "locality" | "village" | "city" | "so";
+
+const KIND_CLASS: Record<PlaceKind, PlaceClass> = {
+  "ул.": "street", "бул.": "street", "ал.": "street", "пл.": "street",
+  // кв. (квартал) and ж.к. (жилищен комплекс) are used interchangeably by the
+  // sources for the same city districts — "ж.к. Чайка" and "кв. Чайка" are one
+  // place — so they deliberately share a class.
+  "ж.к.": "district", "кв.": "district",
+  "к.к.": "resort",
+  "м-т": "locality",
+  "с.о.": "so",
+  "с.": "village",
+  "гр.": "city",
+};
+
+export function placeClass(kind: PlaceKind | null): PlaceClass | null {
+  return kind === null ? null : KIND_CLASS[kind];
+}
+
+// Every spelling the model has actually produced, not just the canonical one
+// the prompt asks for: "ЖК", "ж.к", "ж.к \"Младост\"", "м.", "м-ст", "ул.7".
+//
+// Each abbreviation requires its dot (or a following space, or a dash) so a
+// real name that merely starts with the same letters is left alone — "Младост"
+// must not parse as м. + "ладост", "Булаир" not as бул. + "аир", "Пловдив" not
+// as пл. + "овдив". Spelled-out kinds carry `(?![\p{L}])` for the same reason
+// ("Градинарово" is not град + "инарово"); `\b` would not do — JavaScript
+// defines it over ASCII \w, so it never fires between two Cyrillic letters.
+//
+// Order matters where one pattern could swallow another's prefix, which is why
+// "с.о." is tried before "с." — and why it insists on BOTH its dots, or
+// "с. Осеново" would come back as с.о. + "сеново".
+const KIND_PATTERNS: Array<{ re: RegExp; kind: PlaceKind }> = [
+  { re: /^(?:улица(?![\p{L}])|ул\s*\.|ул(?=\s))\s*/iu, kind: "ул." },
+  { re: /^(?:булевард(?![\p{L}])|бул\s*\.|бул(?=\s))\s*/iu, kind: "бул." },
+  { re: /^(?:алея(?![\p{L}])|ал\s*\.)\s*/iu, kind: "ал." },
+  { re: /^(?:площад(?![\p{L}])|пл\s*\.)\s*/iu, kind: "пл." },
+  { re: /^(?:жилищен\s+комплекс(?![\p{L}])|ж\s*\.?\s*к\s*\.?)\s*/iu, kind: "ж.к." },
+  { re: /^(?:квартал(?![\p{L}])|кв\s*\.|кв(?=\s))\s*/iu, kind: "кв." },
+  { re: /^(?:курортен\s+комплекс(?![\p{L}])|к\s*\.\s*к(?:\s*-\s*с)?\s*\.?|кк(?=\s))\s*/iu, kind: "к.к." },
+  { re: /^(?:местност(?![\p{L}])|м\s*-\s*с?т|м\s*\.)\s*/iu, kind: "м-т" },
+  { re: /^(?:с\s*\.\s*о\s*\.|со(?=\s))\s*/iu, kind: "с.о." },
+  { re: /^(?:село(?![\p{L}])|с\s*\.)\s*/iu, kind: "с." },
+  { re: /^(?:град(?![\p{L}])|гр\s*\.)\s*/iu, kind: "гр." },
+];
+
+export interface ParsedName {
+  /** The kind the written prefix declares, or null when the name carries none. */
+  kind: PlaceKind | null;
+  /** The name with its kind prefix, quotes and doubled whitespace removed. */
+  core: string;
+}
+
+// Sources quote district names ('кв."Аспарухово"', 'ж.к "Младост"'). A space
+// rather than nothing, so a quote used as a separator does not fuse two words.
+const QUOTES = /["'„“”«»‘’]+/gu;
+
+/** Strip decorative quotes and collapse whitespace. */
+export function cleanName(raw: string): string {
+  return raw.replace(QUOTES, " ").replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * Split a written place name into its kind and its core.
+ *
+ * A name with no recognised prefix comes back `{ kind: null, core: <name> }`,
+ * which stays compatible with every kind — most seeded street rows and a good
+ * half of the region rows carry no prefix at all.
+ */
+export function parseName(raw: string): ParsedName {
+  const cleaned = cleanName(raw);
+  for (const { re, kind } of KIND_PATTERNS) {
+    const m = re.exec(cleaned);
+    if (m) return { kind, core: cleaned.slice(m[0].length).trim() };
+  }
+  return { kind: null, core: cleaned };
+}
+
+/** True when two kinds could name the same place (an unstated kind fits anything). */
+export function kindsCompatible(a: PlaceClass | null, b: PlaceClass | null): boolean {
+  return a === null || b === null || a === b;
+}
+
+// ── Matching ─────────────────────────────────────────────────────────────────
+
+/**
+ * Score a core has to clear to count as a match — higher than `bestMatch`'s 0.3
+ * because stripping the kind prefix removes trigrams that were only ever
+ * diluting the score, so everything lands higher. Over the 102 distinct
+ * location_name values the pipeline has produced, every wanted match scores
+ * ≥ 0.417 and every false positive ≤ 0.357, so 0.40 separates them cleanly —
+ * 0.3 on cores starts admitting junk like "Св.св.Константин и Елена" →
+ * "Константиново" (0.385), which is exactly what this replaces.
+ */
+export const CORE_MATCH_THRESHOLD = 0.4;
+
+/**
+ * Two candidates within this much of the top score are treated as a tie, and
+ * the tie is broken in favour of the one inside the city. Wide enough to cover
+ * "Младост" scoring 1.000 on the Девня ж.к. and 0.800 on "ж.к. Младост 1".
+ */
+const NEAR_TIE_BAND = 0.2;
+
+/** How far from the Варна centroid still counts as "in the city". */
+const IN_CITY_RADIUS_KM = 9;
+
+/** Used only if the regions table has no row for Варна (it does — seeds/regions.json). */
+const VARNA_CENTER = { lat: 43.2073873, lng: 27.9166653 };
+
+interface Prepared {
+  row: NamedRow;
+  cls: PlaceClass | null;
+  grams: Set<string>;
+  inCity: boolean;
+}
+
+/**
+ * Parsed kind + core trigrams per candidate, memoized against the array
+ * identity — the same trick, and the same reason, as fuzzy.ts's candidateGrams:
+ * the regions/streets arrays come from a 6-hour module-scope cache while the
+ * matchers run several times per alert, so without this every call re-parses
+ * and re-tokenizes all 245 regions (or 1,300 streets) against a 10 ms budget.
+ * Keying on the cached array drops the memo when the ref cache turns over.
+ */
+const preparedRows = new WeakMap<object, Prepared[]>();
+
+function prepare(rows: readonly NamedRow[]): Prepared[] {
+  const memo = preparedRows.get(rows as object);
+  if (memo) return memo;
+
+  // The city centre the in-city preference measures from, taken from the same
+  // seed data as everything else rather than hardcoded.
+  let center = VARNA_CENTER;
+  for (const row of rows) {
+    if (row.lat === null || row.lng === null) continue;
+    if (parseName(row.name).core.toLowerCase() === "варна") {
+      center = { lat: row.lat, lng: row.lng };
+      break;
+    }
+  }
+
+  const prepared = rows.map((row) => {
+    const { kind, core } = parseName(row.name);
+    return {
+      row,
+      cls: placeClass(kind),
+      grams: trigrams(core),
+      // A row seeded without coordinates cannot be placed, so it never wins a
+      // near-tie on location — but it still competes on score.
+      inCity: row.lat !== null && row.lng !== null
+        && distanceKm(row.lat, row.lng, center.lat, center.lng) <= IN_CITY_RADIUS_KM,
+    };
+  });
+  preparedRows.set(rows as object, prepared);
+  return prepared;
+}
+
+function matchCore(
+  raw: string,
+  rows: readonly NamedRow[],
+  accepts: (cls: PlaceClass | null) => boolean,
+  threshold: number,
+  preferInCity: boolean,
+): NamedRow | null {
+  const { kind, core } = parseName(raw);
+  const queryClass = placeClass(kind);
+  // A bare kind abbreviation ("м-т", "местност") has no core to match on — it
+  // names no place, so it matches nothing rather than whatever it scores over.
+  if (!core || !accepts(queryClass)) return null;
+
+  const queryGrams = trigrams(core);
+  if (queryGrams.size === 0) return null;
+
+  let top = 0;
+  const scored: Array<{ p: Prepared; score: number }> = [];
+  for (const p of prepare(rows)) {
+    if (!kindsCompatible(queryClass, p.cls)) continue;
+    const score = gramSimilarity(queryGrams, p.grams);
+    if (score < threshold) continue;
+    if (score > top) top = score;
+    scored.push({ p, score });
+  }
+  if (scored.length === 0) return null;
+
+  // In-city preference, applied only among candidates close enough to the top
+  // score to be genuine alternatives — a distant place that simply scores much
+  // better is still the better answer.
+  let pool = scored.filter((s) => s.score >= top - NEAR_TIE_BAND);
+  if (preferInCity) {
+    const inCity = pool.filter((s) => s.p.inCity);
+    if (inCity.length > 0) pool = inCity;
+  }
+
+  let winner = pool[0]!;
+  for (const s of pool) if (s.score > winner.score) winner = s;
+
+  // Cores can tie exactly — the seed carries both "Боровец" and "Бул. Боровец",
+  // both "Свети Никола" and "м-т Свети Никола". Fall back to the whole written
+  // names, so a query that spelled the kind out lands on the row that spelled it
+  // out too rather than on whichever came first. Comparing the full names is
+  // what `bestMatch` did all along, so this is only ever the last word.
+  const tied = pool.filter((s) => s.score === winner.score);
+  if (tied.length > 1) {
+    let literalBest = -1;
+    for (const s of tied) {
+      // Strictly greater, so a still-unbroken tie keeps seed order — that is
+      // what makes "Младост" resolve to "ж.к. Младост 1" rather than "2"
+      // deterministically instead of by iteration order.
+      const literal = similarity(raw, s.p.row.name);
+      if (literal > literalBest) {
+        literalBest = literal;
+        winner = s;
+      }
+    }
+  }
+  return winner.p.row;
+}
+
+const isRegionClass = (cls: PlaceClass | null) => cls !== "street";
+const isStreetClass = (cls: PlaceClass | null) => cls === null || cls === "street";
+
+/**
+ * The regions row a written place name refers to, or null.
+ *
+ * A name carrying a street kind ("ул. Пловдив") is never a region, and a name
+ * whose kind disagrees with the row's ("к.к. Чайка" vs "кв. Чайка") is never
+ * that row.
+ */
+export function matchRegion(
+  raw: string, rows: readonly NamedRow[], threshold = CORE_MATCH_THRESHOLD,
+): NamedRow | null {
+  return matchCore(raw, rows, isRegionClass, threshold, true);
+}
+
+/**
+ * The streets row a written street name refers to, or null.
+ *
+ * No in-city preference: street_name is unique across the table and every row
+ * in it is already inside the crawled area, so there is no ambiguity to break.
+ */
+export function matchStreet(
+  raw: string, rows: readonly NamedRow[], threshold = CORE_MATCH_THRESHOLD,
+): NamedRow | null {
+  return matchCore(raw, rows, isStreetClass, threshold, false);
+}

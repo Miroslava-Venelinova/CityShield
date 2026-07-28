@@ -378,6 +378,22 @@ function fmtWall(value) {
   return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : (value || "—");
 }
 
+// "{"from_date":"2026-07-30","to_date":"2026-07-31","daily":[{"start":"08:30",
+// "end":"17:00"}]}"  →  "30.07–31.07, 08:30 – 17:00 daily"
+function fmtWindows(json) {
+  let w;
+  try { w = JSON.parse(json); } catch { return json; }
+  if (!w || !Array.isArray(w.daily) || !w.daily.length) return json;
+  const dayMonth = (date) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || "");
+    return m ? `${m[3]}.${m[2]}` : (date || "—");
+  };
+  const clocks = w.daily.map((d) => `${d.start} – ${d.end}`).join(", ");
+  return w.from_date === w.to_date
+    ? `${dayMonth(w.from_date)} ${clocks}`
+    : `${dayMonth(w.from_date)}–${dayMonth(w.to_date)}, ${clocks} daily`;
+}
+
 function fmtInstant(value) {
   const d = new Date(value);
   if (!value || isNaN(d)) return value || "—";
@@ -711,11 +727,15 @@ function renderDetail(alert) {
     `<span class="muted mono">${esc(alert.id)}</span>`,
   ].join("");
 
-  $("dTimes").innerHTML = [
+  // start/end are the ENVELOPE; when windows_json is set, IT is what the alert
+  // actually means and the envelope is just its outer bound (migration 0012).
+  const rows = [
     ["Created", fmtInstant(alert.created_on_utc), alert.created_on_utc],
     ["Start", fmtWall(alert.start_time), alert.start_time],
     ["End", fmtWall(alert.end_time), alert.end_time],
-  ].map(([label, human, raw]) => `
+  ];
+  if (alert.windows_json) rows.push(["Windows", fmtWindows(alert.windows_json), alert.windows_json]);
+  $("dTimes").innerHTML = rows.map(([label, human, raw]) => `
     <div><small>${label}</small><span>${esc(human)}</span>
     <span class="muted mono">${esc(raw) || "null"}</span></div>`).join("");
 
@@ -739,7 +759,8 @@ function renderDetail(alert) {
       const subs = (loc.sublocations || []).filter((s) => typeof s === "string");
       return `<div class="loc">
         <div class="n">${esc(loc.location_name) || '<span class="muted">(unnamed)</span>'}
-          ${loc.is_polygon ? '<span class="badge">polygon</span>' : ""}</div>
+          ${loc.is_polygon ? '<span class="badge">polygon</span>' : ""}
+          ${loc.region_wide ? '<span class="badge">region-wide</span>' : ""}</div>
         <div>${pin}</div>
         ${subs.length ? `<div class="muted">${esc(subs.join(" · "))}</div>` : ""}
       </div>`;

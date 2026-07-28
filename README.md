@@ -93,12 +93,12 @@ Workers-AI binding, and one push client.
 CityShield/
 ├── backend/                  Cloudflare Worker — the entire server side
 │   ├── wrangler.jsonc        Bindings, cron triggers, vars
-│   ├── migrations/           D1 SQL migrations (0001–0011)
+│   ├── migrations/           D1 SQL migrations (0001–0014)
 │   ├── seeds/                regions/streets seed data + generator
 │   ├── src/
 │   │   ├── index.ts          Exports { fetch, scheduled }
 │   │   ├── api/              Hono routes (auth, alerts, preferences, privacy) + rate limiting
-│   │   ├── core/             Alert service, fuzzy match, geo, geocoding, onesignal, jwt, tokens, password
+│   │   ├── core/             Alert service, fuzzy + place-name match, geo, geocoding, onesignal, jwt, tokens, password
 │   │   └── ingestion/        Scheduled pipeline + one module per source
 │   ├── test/                 Vitest suite (runs against local D1)
 │   └── spikes/               Phase 0 de-risking spikes + RESULTS.md

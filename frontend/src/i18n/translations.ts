@@ -10,6 +10,9 @@ const en = {
   'common.error': 'Error',
   'common.from': 'From',
   'common.until': 'Until',
+  // Suffix on a window that repeats every day of a date range, e.g.
+  // "30.07–31.07, 08:30 – 17:00 daily".
+  'common.daily': 'daily',
   'common.retry': 'Try again',
 
   // ── API errors ──
@@ -296,6 +299,7 @@ const bg: Record<TranslationKey, string> = {
   'error.generic': 'Нещо се обърка. Моля, опитайте отново.',
   'common.from': 'От',
   'common.until': 'До',
+  'common.daily': 'всеки ден',
   'common.retry': 'Опитай отново',
 
   // ── Долна лента ──

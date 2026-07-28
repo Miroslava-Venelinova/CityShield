@@ -1,5 +1,6 @@
 // ─── src/services/notifications.ts ───────────────────────────────────────────
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type {AlertWindows} from './api';
 import type {IconName} from '../components/icons';
 import type {TranslationKey} from '../i18n/translations';
 import {alertsApi} from './api';
@@ -24,6 +25,9 @@ export interface StoredNotification {
   category:   NotificationCategory;
   startTime:  string | null;
   endTime:    string | null;
+  /** Schedule detail the start/end pair loses; only the feed sync has it — a
+   *  push payload carries just the envelope, so this stays undefined there. */
+  windows?:   AlertWindows | null;
   receivedAt: string;   // ISO timestamp
   read:       boolean;
 }
@@ -115,6 +119,7 @@ export async function syncFromRecentAlerts(authToken: string): Promise<StoredNot
         category:   (alert.source as NotificationCategory) ?? 'general',
         startTime:  alert.processed_data.start_time,
         endTime:    alert.processed_data.end_time,
+        windows:    alert.processed_data.windows ?? null,
         receivedAt: alert.created_at,
         read:       readIds.has(alert.id),
       }));

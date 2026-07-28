@@ -1,6 +1,6 @@
 # CityShield — remaining work
 
-The Cloudflare migration is finished: the Worker is code-complete, tested (204 tests
+The Cloudflare migration is finished: the Worker is code-complete, tested (346 tests
 green) and deployed, and the app is built against OneSignal. What the system *does* is
 specified in [SPEC.md](SPEC.md); this file is only what is still open.
 
@@ -40,11 +40,14 @@ attached. Note the Android build has not been run since the Firebase SDK and the
 
 ## 2. Deployment hygiene
 
-- [ ] **Redeploy.** The live Worker predates several changes — migrations 0009–0011, the
+- [ ] **Redeploy.** The live Worker predates several changes — migrations 0009–0014, the
       erpsever.bg contract fix, the ViK id-probe crawler, ISO datetimes, the 4-hour VT
-      interval — unless `npx wrangler deployments list` says otherwise. Apply the
-      migrations remotely first (`npm run db:remote`) and confirm with
-      `npx wrangler d1 migrations list --remote`.
+      interval, and everything from the 28.07 review fix — unless
+      `npx wrangler deployments list` says otherwise. Apply the migrations remotely
+      **first** (`npm run db:remote`) and confirm with
+      `npx wrangler d1 migrations list --remote`. Ordering is load-bearing now:
+      `getRegions` reads `region_aliases` (0013), so a Worker deployed ahead of its
+      migrations fails every alert it tries to target.
 - [ ] **Merge `cloudflare-migration` into `main`.** `main` still holds the retired
       pre-Cloudflare stack (50 commits behind), and CI's `deploy` job only runs on `main`,
       so nothing auto-deploys until this happens.
@@ -139,3 +142,4 @@ Each of these has a trigger; none is worth doing before it fires.
 | Paid/self-hosted map tiles | Traffic grows enough to matter under the OSM tile usage policy |
 | Hard email-verification enforcement | Signup spam appears; login works unverified today by design |
 | Per-source polling changes | A source's publishing rhythm changes — intervals live in `src/ingestion/schedule.ts` |
+| A street→region link, so guard A6 can widen a street-only alert | Real users show that vik's "в района на ул. X" with no district named is reaching too few of them. Nearest-region-centroid is the cheap version and is a crude Voronoi — a street near a boundary targets the wrong district — so it needs users to measure against before it is worth shipping |

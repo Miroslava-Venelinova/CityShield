@@ -1,81 +1,393 @@
 {
-  "comment": "Eval corpus for the Workers AI model selection spike. Messages are realistic source texts in the exact shape each service feeds the LLM (title\\ncontent); expected outputs encode the semantics the pipeline and tests rely on. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin).",
+  "comment": "Eval corpus for the outage/vt prompts. Messages are realistic source texts in the exact shape each service feeds the LLM — outage inputs carry the CURRENT_DATE line processOutageMessage prepends, so dates are graded the way production resolves them. Outage times are graded through the production normalizeSchedule(), i.e. on what would actually be stored rather than on the literal strings the model wrote. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin). `forbidden_location_names` fails a case that emits a non-place as a location, whatever else it got right.",
+  "current_date": "2026-07-27",
   "cases": [
     {
       "id": "vik-two-streets",
       "kind": "outage",
-      "input": "Авария на водопровод\nПоради отстраняване на авария на уличен водопровод е нарушено водоподаването на ул. Дубровник и ул. Студентска в гр. Варна. Очаквано възстановяване на водоподаването до 17:00 часа.",
+      "input": "CURRENT_DATE: 2026-07-27\nАвария на водопровод\nПоради отстраняване на авария на уличен водопровод е нарушено водоподаването на ул. Дубровник и ул. Студентска в гр. Варна. Очаквано възстановяване на водоподаването до 17:00 часа.",
       "expected": {
         "locations": [
-          { "location_name": "гр. Варна", "sublocations": ["ул. Дубровник", "ул. Студентска"], "is_polygon": false }
+          {
+            "location_name": "гр. Варна",
+            "sublocations": [
+              "ул. Дубровник",
+              "ул. Студентска"
+            ],
+            "is_polygon": false
+          }
         ],
-        "start_time": null,
-        "end_time": "17:00",
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": null,
+              "end": "17:00"
+            }
+          ]
+        },
         "city_wide": false
       }
     },
     {
       "id": "vik-polygon-kare",
       "kind": "outage",
-      "input": "Авария\nБез вода са клиентите в карето между ул. Русе, ул. Бачо Киро, ул. Козлодуй и ул. Ал. Дякович от 09:00 до 17:00 часа днес.",
+      "input": "CURRENT_DATE: 2026-07-27\nАвария\nБез вода са клиентите в карето между ул. Русе, ул. Бачо Киро, ул. Козлодуй и ул. Ал. Дякович от 09:00 до 17:00 часа днес.",
       "expected": {
         "locations": [
-          { "location_name": null, "sublocations": ["ул. Русе", "ул. Бачо Киро", "ул. Козлодуй", "ул. Ал. Дякович"], "is_polygon": true }
+          {
+            "location_name": null,
+            "sublocations": [
+              "ул. Русе",
+              "ул. Бачо Киро",
+              "ул. Козлодуй",
+              "ул. Ал. Дякович"
+            ],
+            "is_polygon": true
+          }
         ],
-        "start_time": "09:00",
-        "end_time": "17:00",
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "17:00"
+            }
+          ]
+        },
         "city_wide": false
       },
-      "lenient": { "location_name": true }
+      "lenient": {
+        "location_name": true
+      },
+      "forbidden_location_names": [
+        "карето",
+        "каре",
+        "зона",
+        "квартал"
+      ]
     },
     {
       "id": "epro-single-street",
       "kind": "outage",
-      "input": "Прекъсване на електрозахранването\n10.06 09:00-17:00\nгр. Варна ул. Дубровник",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n10.06 09:00-17:00\nгр. Варна ул. Дубровник",
       "expected": {
         "locations": [
-          { "location_name": "гр. Варна", "sublocations": ["ул. Дубровник"], "is_polygon": false }
+          {
+            "location_name": "гр. Варна",
+            "sublocations": [
+              "ул. Дубровник"
+            ],
+            "is_polygon": false
+          }
         ],
-        "start_time": "09:00",
-        "end_time": "17:00",
+        "schedule": {
+          "from_date": "2026-06-10",
+          "to_date": "2026-06-10",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "17:00"
+            }
+          ]
+        },
         "city_wide": false
       }
     },
     {
       "id": "heating-district",
       "kind": "outage",
-      "input": "Спиране на топлоподаването\nПоради отстраняване на авария на топлопровод се преустановява топлоподаването към абонатите в кв. Чайка от 08:30 часа до приключване на ремонтните дейности.",
+      "input": "CURRENT_DATE: 2026-07-27\nСпиране на топлоподаването\nПоради отстраняване на авария на топлопровод се преустановява топлоподаването към абонатите в кв. Чайка от 08:30 часа до приключване на ремонтните дейности.",
       "expected": {
         "locations": [
-          { "location_name": "кв. Чайка", "sublocations": [], "is_polygon": false }
+          {
+            "location_name": "кв. Чайка",
+            "sublocations": [],
+            "is_polygon": false
+          }
         ],
-        "start_time": "08:30",
-        "end_time": null,
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": "08:30",
+              "end": null
+            }
+          ]
+        },
         "city_wide": false
       }
     },
     {
       "id": "vik-city-wide",
       "kind": "outage",
-      "input": "Планова профилактика\nПоради планова профилактика на пречиствателна станция е възможно временно нарушение на водоподаването за всички клиенти на територията на град Варна от 22:00 до 06:00 часа.",
+      "input": "CURRENT_DATE: 2026-07-27\nПланова профилактика\nПоради планова профилактика на пречиствателна станция е възможно временно нарушение на водоподаването за всички клиенти на територията на град Варна от 22:00 до 06:00 часа.",
       "expected": {
         "locations": [],
-        "start_time": "22:00",
-        "end_time": "06:00",
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": "22:00",
+              "end": "06:00"
+            }
+          ]
+        },
         "city_wide": true
       }
     },
     {
       "id": "vik-complex-and-locality",
       "kind": "outage",
-      "input": "Авария\nПоради авария е нарушено водоподаването в ж.к. Възраждане и с. Тополи. Възстановяване до 16:30 ч.",
+      "input": "CURRENT_DATE: 2026-07-27\nАвария\nПоради авария е нарушено водоподаването в ж.к. Възраждане и с. Тополи. Възстановяване до 16:30 ч.",
       "expected": {
         "locations": [
-          { "location_name": "ж.к. Възраждане", "sublocations": [], "is_polygon": false },
-          { "location_name": "с. Тополи", "sublocations": [], "is_polygon": false }
+          {
+            "location_name": "ж.к. Възраждане",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Тополи",
+            "sublocations": [],
+            "is_polygon": false
+          }
         ],
-        "start_time": null,
-        "end_time": "16:30",
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": null,
+              "end": "16:30"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "epro-daily-window-over-a-range",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\nОт 30.07.2026 г. до 31.07.2026 г. В периода 8:30 ч. до 17:00 ч. гр. Варна - кв. Аспарухово",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "кв. Аспарухово",
+            "sublocations": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-30",
+          "to_date": "2026-07-31",
+          "windows": [
+            {
+              "start": "08:30",
+              "end": "17:00"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "epro-two-windows-one-day",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\nНа 25.07.2026 г. от 9:00 до 11:00 ч. и от 15:00 до 17:00 ч. с. Тополи",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "с. Тополи",
+            "sublocations": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-25",
+          "to_date": "2026-07-25",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "11:00"
+            },
+            {
+              "start": "15:00",
+              "end": "17:00"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "epro-city-dash-district",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n28.07.2026 09:00-16:00\nгр. Варна - кв. Владислав Варненчик",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "кв. Владислав Варненчик",
+            "sublocations": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-28",
+          "to_date": "2026-07-28",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "16:00"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "epro-bare-abbreviation-dropped",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n29.07.2026 08:00-17:00\nгр. Игнатиево, с. Припек, с. Баново, м-т и прилежащите улици",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "гр. Игнатиево",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Припек",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Баново",
+            "sublocations": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-29",
+          "to_date": "2026-07-29",
+          "windows": [
+            {
+              "start": "08:00",
+              "end": "17:00"
+            }
+          ]
+        },
+        "city_wide": false
+      },
+      "forbidden_location_names": [
+        "м-т",
+        "местност",
+        "м."
+      ]
+    },
+    {
+      "id": "vik-shop-and-substation-ignored",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nБез вода ще бъдат:\nж.к. Възраждане, м-н Бурлекс, ТП 726 от 10:00 до 13:00 ч.",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "ж.к. Възраждане",
+            "sublocations": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": "10:00",
+              "end": "13:00"
+            }
+          ]
+        },
+        "city_wide": false
+      },
+      "forbidden_location_names": [
+        "м-н Бурлекс",
+        "ТП 726"
+      ]
+    },
+    {
+      "id": "epro-five-villages-none-dropped",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n29.07.2026 08:00-17:00\nс. Игнатиево, с. Припек, с. Слънчево, с. Баново, с. Тополи",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "с. Игнатиево",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Припек",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Слънчево",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Баново",
+            "sublocations": [],
+            "is_polygon": false
+          },
+          {
+            "location_name": "с. Тополи",
+            "sublocations": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-29",
+          "to_date": "2026-07-29",
+          "windows": [
+            {
+              "start": "08:00",
+              "end": "17:00"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "epro-house-number-stripped",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n28.07.2026 09:00-17:00\nгр. Варна, ул. Пловдив 25, бул. Чаталджа 20 вх. Б.",
+      "expected": {
+        "locations": [
+          {
+            "location_name": "гр. Варна",
+            "sublocations": [
+              "ул. Пловдив",
+              "бул. Чаталджа"
+            ],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-28",
+          "to_date": "2026-07-28",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "17:00"
+            }
+          ]
+        },
         "city_wide": false
       }
     },
@@ -83,43 +395,68 @@
       "id": "roads-relevant",
       "kind": "roads",
       "input": "Ограничения по АМ „Хемус“\nПоради ремонтни дейности на 12 юли се ограничава движението в изпреварващата лента в посока Варна на АМ „Хемус“ в участъка между пътен възел „Белокопитово“ и област Варна. Шофьорите да карат внимателно.",
-      "expected": { "is_relevant": true, "summary_nonempty": true }
+      "expected": {
+        "is_relevant": true,
+        "summary_nonempty": true
+      }
     },
     {
       "id": "roads-irrelevant-passing-mention",
       "kind": "roads",
       "input": "Ремонт на път II-53 в област Сливен\nЗапочва ремонт на 14 км от път II-53 Елена - Сливен. Трасето е част от маршрута София - Ямбол, използван и от пътуващи в посока Варна. Движението се пренасочва по обходни маршрути в област Сливен.",
-      "expected": { "is_relevant": false }
+      "expected": {
+        "is_relevant": false
+      }
     },
     {
       "id": "vt-single-line-letter",
       "kind": "vt",
       "input": "Линия 31А\nПоради ремонт на ул. Девня автобусите по линия 31А се движат по обходен маршрут в двете посоки до второ нареждане.",
-      "expected": { "bus_lines": ["31A"] }
+      "expected": {
+        "bus_lines": [
+          "31A"
+        ]
+      }
     },
     {
       "id": "vt-multiple-lines",
       "kind": "vt",
       "input": "Промяна в маршрутите\nПоради строителни дейности на бул. Левски автобусите по линии 8, 9 и 109 няма да обслужват спирка Явор в посока центъра.",
-      "expected": { "bus_lines": ["8", "9", "109"] }
+      "expected": {
+        "bus_lines": [
+          "8",
+          "9",
+          "109"
+        ]
+      }
     },
     {
       "id": "vt-209-barz",
       "kind": "vt",
       "input": "Линия 209 Бърз\nАвтобусите по линия 209 Бърз се движат по променен маршрут през кв. Владислав Варненчик.",
-      "expected": { "bus_lines": ["209B"] }
+      "expected": {
+        "bus_lines": [
+          "209B"
+        ]
+      }
     },
     {
       "id": "vt-no-lines-sentinel",
       "kind": "vt",
       "input": "Временна организация на движението\nВъв връзка с ремонт на пътното платно се въвежда временна промяна на маршрутите на градския транспорт в района на Централна гара.",
-      "expected": { "bus_lines": ["0"] }
+      "expected": {
+        "bus_lines": [
+          "0"
+        ]
+      }
     },
     {
       "id": "vt-irrelevant",
       "kind": "vt",
       "input": "Нови цени на билетите\nОт 1 август единичният билет за градския транспорт става 2,00 лв. Абонаментните карти запазват цените си.",
-      "expected": { "bus_lines": null }
+      "expected": {
+        "bus_lines": null
+      }
     }
   ]
 }

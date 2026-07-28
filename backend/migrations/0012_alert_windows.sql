@@ -1,0 +1,23 @@
+-- The time detail a flat start/end pair cannot hold (fix-plan C1).
+--
+-- 16 of the 33 alerts the 28.07.2026 review marked inaccurate were wrong only
+-- about time, in two shapes the pair flattens:
+--
+--   "От 30.07 до 31.07 В периода 8:30 до 17:00"  — 08:30–17:00 on EACH day,
+--       stored as 30.07T08:30 → 31.07T17:00, i.e. 55 continuous hours.
+--   "от 9 до 11 ч. и от 15 до 17 ч."             — two windows in one day,
+--       stored as 09:00 → 17:00.
+--
+-- windows_json holds what the pair loses:
+--
+--   {"from_date":"2026-07-30","to_date":"2026-07-31",
+--    "daily":[{"start":"08:30","end":"17:00"}]}
+--
+-- `daily` is an array, so one column covers both shapes. start_time/end_time
+-- stay as the derived ENVELOPE — first date at the first start clock, last date
+-- at the last end clock — which is why this is purely additive: the feed, the
+-- push body and the app's active-window check keep working untouched, and every
+-- legacy row simply has NULL here. So does every alert whose envelope already
+-- says everything: one window on one day.
+
+ALTER TABLE alerts ADD COLUMN windows_json TEXT;
