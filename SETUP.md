@@ -61,33 +61,53 @@ check). Until it is, the `deploy` job in CI is a no-op and deploys happen by han
   (confirmed 2026-07-21).
 - Policy languages: Bulgarian + English, both served at `/privacy`.
 
-## 5. ⏳ Email verification & password reset — decision parked
+## 5. ⏳ Email verification & password reset — provider decided, domain pending
 
 Both flows are built and tested, but **delivery is mocked**: the Worker composes each
 message and logs its link instead of sending it ([backend/src/core/mailer.ts](backend/src/core/mailer.ts)).
-Nobody can receive a verification or reset link until a provider is wired up.
+Nobody can receive a verification or reset link until delivery is wired up.
 
-Parked because the provider choice follows a prior decision — **whether to register a
-domain**:
+**Decided: send through OneSignal**, the same account that already delivers push. The
+reason is not the code — it is the paperwork. Any other provider (Resend, Brevo) is a
+*new* processor: its own DPA, its own row in `/privacy` in both languages, its own entry
+in COMPLIANCE.md §5. OneSignal is already all of those, so the change is an amendment
+rather than an addition.
 
-- Sending as `cityshield.varna@gmail.com` through any third party fails SPF/DKIM
-  alignment (gmail.com does not authorize them), so those links land in spam often enough
-  to matter for a password reset. A domain is the only real fix.
-- **With a domain** (~$10/yr at Cloudflare Registrar, which would also give the API and
-  the Play listing a real URL): Resend is the better fit — transactional-only, no
-  free-tier branding.
-- **Without one**: Brevo can send from a validated single address, accepting the spam
-  risk and its free-tier branding.
+⏳ **What is on you:**
 
-Once decided, the work is one function (`deliver` in `mailer.ts`) plus paperwork: accept
-the provider's DPA, add it to the processor list in `/privacy` and COMPLIANCE.md §5, and
-widen the Play Data Safety purpose for email to include Account management.
+- **Register the domain** (~$10/yr at Cloudflare Registrar). Sending as
+  `cityshield.varna@gmail.com` through any third party fails SPF/DKIM alignment
+  (gmail.com does not authorize them), so reset links land in spam often enough to
+  matter. A domain is the only real fix, and it also gives the API and the Play listing
+  a real URL.
+- **Confirm OneSignal's email channel actually fits**, before any code is written —
+  three questions, all answerable from the dashboard and its pricing page:
+  what the **free plan** allows for email volume; whether **transactional** mail can go
+  without OneSignal's unsubscribe footer and branding; and that a **sending domain** can
+  be verified with the DNS records they require. If any answer is no, Resend is the
+  fallback and the "no new processor" advantage is gone — that is the one thing that
+  would reopen the decision.
+- **Set up the sending domain** in OneSignal once bought (DKIM/SPF/return-path records).
+
+Then the work is one function (`deliver` in `mailer.ts`) — noting that an email address
+is a *separate subscription* on the OneSignal user, so it has to be attached through
+their Users API before a notification can target the email channel — plus paperwork:
+amend OneSignal's description in `/privacy` and COMPLIANCE.md §5 (both currently promise
+it never receives an email address) and widen the Play Data Safety purpose for email to
+include Account management.
 
 ## 6. ⏳ Play Store release — the things only you can hold
 
 - **Google Play developer account** (one-time $25). Needed before anything can be
   published; the identity/address verification Google now requires takes days, not
-  minutes, so start it early if a release date matters.
+  minutes, so start it early if a release date matters. An organization account also
+  needs a D-U-N-S number, which takes longer still.
+- **The closed-testing wait, if the account is a personal one.** Personal developer
+  accounts registered since late 2023 must run a closed test with **12 testers opted in
+  continuously for 14 days** before production access is granted. That is a dozen real
+  Google accounts and two unbroken weeks — by far the longest lead time in the release,
+  and worth confirming against the current Play Console rules for the account type you
+  register, since organization accounts are exempt.
 - **Decide the real package name.** The app still builds as `com.cityshield.fcmtest`, a
   test package. It is permanent once published, and changing it means re-registering the
   package in OneSignal too — so decide before the first upload, not after.
@@ -98,7 +118,11 @@ widen the Play Data Safety purpose for email to include Account management.
   signed one — the signatures differ.
 - **Store listing assets**: icon, feature graphic, screenshots, description, and the
   privacy-policy URL (`https://cityshield.cityshield-varna.workers.dev/privacy`, or the
-  custom-domain equivalent if §5 leads to registering one).
+  custom-domain equivalent once §5's domain is registered — decide which one ships
+  before submitting the listing, since changing it later means re-review).
+- **A public account-deletion URL.** Play requires one for any app with accounts, in
+  addition to the in-app deletion the app already has. It does not exist yet; it will be
+  served from the Worker next to `/privacy`, and the URL goes in the console.
 
 ## 7. ⏳ Processor paperwork (before the release)
 
@@ -114,8 +138,8 @@ self-service:
 ## 8. 💤 Not needed from you
 
 - `JWT_KEY`, `INGEST_API_KEY` — generated with `openssl rand` and stored as Worker secrets.
-- Custom domain — optional (~$10/yr via Cloudflare Registrar); `*.workers.dev` is fine for
-  launch. It only becomes a prerequisite if §5 goes the Resend route.
+- ~~Custom domain~~ — moved to §5: it is now a prerequisite, because email cannot be
+  delivered from a gmail.com address through a third party.
 - AI Gateway ("cityshield", free, for AI request logs) — nice for debugging, not urgent.
 - No other accounts: Nominatim and Overpass need no registration — we just follow their
   usage policies, which the code is built to respect ([SPEC.md](SPEC.md) §2.6).

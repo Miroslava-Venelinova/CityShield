@@ -136,15 +136,22 @@ Per §2.2 — confirm each before the Play release:
 - [ ] Google/Firebase Data Processing Terms accepted in the Firebase console.
       Still required: OneSignal delivers to Android through our Firebase
       project, so FCM remains in the chain even though we no longer call it.
-- [ ] **Email provider — not chosen, and none engaged.** Verification and reset
-      mail is mocked (`backend/src/core/mailer.ts` logs each link), so no
-      processor receives user addresses today and none is listed in `/privacy`.
-      Before those flows go live: accept the provider's DPA, confirm where it
-      processes data (an EU provider needs no transfer mechanism; a US one needs
-      DPF or SCCs), add it to the processor list in `/privacy` **and** to the
-      table above, and widen the Play Data Safety purpose for the email address
-      to include Account management. It will receive only the recipient address
-      and the message body — never location data.
+- [ ] **Email delivery — OneSignal, no new processor.** Verification and reset
+      mail is mocked today (`backend/src/core/mailer.ts` logs each link), so no
+      processor receives user addresses yet. The decision is to send through
+      OneSignal rather than engage a second vendor, which means **no processor is
+      added** — the existing OneSignal entry is amended instead. Before those
+      flows go live, correct every place that says OneSignal never receives an
+      email address: the bullet above, the processor list in `/privacy` (both
+      languages) and the table in §1. It will receive the recipient address and
+      the message body — never location data. The transfer mechanism is already
+      recorded for push and does not change. Also widen the Play Data Safety
+      purpose for the email address to include Account management.
+      If OneSignal's email channel turns out not to fit (free-tier volume,
+      unsubscribe-footer requirements, sending-domain verification — see SETUP §5),
+      the fallback is a separate transactional provider, and then this reverts to
+      a full new-processor item: its own DPA, transfer mechanism, `/privacy` row
+      and §1 table row.
 - [x] OSMF Nominatim — no DPA available; documented decision is to disclose the
       transfer in the in-app consent copy (Profile → Set Location) and in
       `/privacy`, and to send no user identifier with the request.

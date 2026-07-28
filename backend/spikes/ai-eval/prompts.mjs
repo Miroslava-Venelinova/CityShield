@@ -3,7 +3,7 @@
 // OUTAGE and VT are RE-EXPORTED from production rather than copied. They were a
 // character-for-character copy taken at Phase 0, which was right while the point
 // was to grade the models against the shipped prompt — but the prompt has since
-// become something the eval is used to *change* (fix-plan Phase E), and a copy
+// become something the eval is used to *change* (SPEC.md §1.8), and a copy
 // that has to be updated in lockstep is a copy that eventually is not. Node
 // strips the types on import, so this reads the real thing.
 //

@@ -105,7 +105,7 @@ describe("processOutageMessage (mocked AI)", () => {
   });
 
   // The same parse from a message that never says city-wide is a lost district,
-  // not a broadcast — the alert must keep its location (fix-plan A3).
+  // not a broadcast — the alert must keep its location (guard A3, SPEC.md §1.7).
   it("keeps a lone Варна when the message does not say city-wide", async () => {
     mockAI({
       locations: [{ location_name: "град Варна", sublocations: [], is_polygon: false }],
@@ -124,7 +124,7 @@ describe("processOutageMessage (mocked AI)", () => {
 
   // 406268df +8: the district arrives in the street array and has to be lifted
   // out into a location of its own before enrichment pins the city centre.
-  it("promotes a district out of the street array (fix-plan A4)", async () => {
+  it("promotes a district out of the street array (guard A4, SPEC.md §1.7)", async () => {
     clearRefCaches();
     await env.DB.prepare(
       "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES ('ж.к. Младост', 43.2309578, 27.879652)",

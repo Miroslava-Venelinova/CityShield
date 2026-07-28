@@ -4,7 +4,7 @@
 //
 // Started as Phase 0's model-selection spike, where the point was to grade the
 // models against an untouched prompt. It is now also how a prompt CHANGE is
-// measured (fix-plan Phase E) — so prompts.mjs re-exports the real constants
+// measured (SPEC.md §1.8) — so prompts.mjs re-exports the real constants
 // rather than copying them, and the grader normalizes times through the real
 // normalizeSchedule.
 //

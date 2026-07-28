@@ -1,4 +1,4 @@
-// Deterministic guards over the AI parse (fix-plan Phase A).
+// Deterministic guards over the AI parse (guards A1-A6, SPEC.md §1.7).
 //
 // Each block replays a parse the pipeline really stored, from the review of
 // 28.07.2026, against the source text it came from. Pure functions, no D1.
