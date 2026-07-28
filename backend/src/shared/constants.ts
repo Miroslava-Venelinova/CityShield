@@ -92,6 +92,12 @@ The "sublocations" array includes streets/boulevards, each as a separate entry.
 - List EVERY place the message names. A message naming five villages must produce five locations - do not stop early and do not merge them.
 - Many messages are written as "гр. X - кв. Y", "гр. X - ж.к. Y" or "гр. X - м-т Y". The district, complex or locality AFTER the dash is its own "location_name". The city before the dash is only context: it must NOT become a location of its own, and it must NOT go into "sublocations".
 - Example: "Прекъсване на електрозахранването гр. Варна - кв. Владислав Варненчик" gives "locations": [{"location_name": "кв. Владислав Варненчик", "sublocations": [], "is_polygon": false}]
+- When streets are listed AFTER such a district, they are that district's own streets: the district is the "location_name" and the streets are ITS "sublocations". The city stays out of the JSON entirely.
+- Example: "гр. Варна - кв. Виница, ул. Свети Пророк Илия, ул. Константин Павлов" gives "locations": [{"location_name": "кв. Виница", "sublocations": ["ул. Свети Пророк Илия", "ул. Константин Павлов"], "is_polygon": false}]
+- But when a street comes BEFORE the districts, the message is a flat list of separate places: each district is its own location, and the street stays under the city.
+- Example: "гр. Варна - част от: ул. Арх. Стоян Доков, м-ст Ваялар и м-ст Свети Никола" gives "locations": [{"location_name": "гр. Варна", "sublocations": ["ул. Арх. Стоян Доков"], "is_polygon": false}, {"location_name": "м-т Ваялар", "sublocations": [], "is_polygon": false}, {"location_name": "м-т Свети Никола", "sublocations": [], "is_polygon": false}]
+- When the message names ONLY streets under the city and no district at all, the city IS the "location_name" and the streets are its "sublocations".
+- Example: "гр. Варна - ул. Неофит Бозвели 46; ул. Ангел Кънчев 3" gives "locations": [{"location_name": "гр. Варна", "sublocations": ["ул. Неофит Бозвели", "ул. Ангел Кънчев"], "is_polygon": false}]
 If you have multiple streets listed and stuff along the lines of: "затворени", "в карето", "между"; it means that the streets form a polygon and the "is_polygon" field must be set to true. In every other case leave it false.
 In case there is a polygon assume all the things listed are streets.
 - "карето" is the SIGNAL that "is_polygon" is true. It is never a "location_name".

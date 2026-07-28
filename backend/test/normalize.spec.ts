@@ -1,4 +1,4 @@
-// Deterministic guards over the AI parse (guards A1-A6, SPEC.md §1.7).
+// Deterministic guards over the AI parse (guards A1-A7, SPEC.md §1.7).
 //
 // Each block replays a parse the pipeline really stored, from the review of
 // 28.07.2026, against the source text it came from. Pure functions, no D1.
@@ -171,12 +171,15 @@ describe("A4 · region-like sublocations", () => {
     expect(shape(out)).toEqual([["Владислав Варненчик", [], false]]);
   });
 
-  it("lifts a prefixed district out and keeps the streets with the city", () => {
-    const out = run([location("Варна", ["кв. Аспарухово", "ул. Пловдив"])],
-      "Прекъсване гр. Варна - кв. Аспарухово, ул. Пловдив");
+  // Street FIRST, then the districts: a flat list of siblings, so the street is
+  // not theirs and the city keeps it (A7 declines). See A7 for the other order.
+  it("keeps a leading street with the city when several districts follow", () => {
+    const out = run([location("Варна", ["ул. Пловдив", "кв. Аспарухово", "м-т Фичоза"])],
+      "Прекъсване гр. Варна - част от: ул. Пловдив, кв. Аспарухово и м-т Фичоза");
     expect(shape(out)).toEqual([
       ["Варна", ["ул. Пловдив"], false],
       ["кв. Аспарухово", [], false],
+      ["м-т Фичоза", [], false],
     ]);
   });
 
@@ -288,22 +291,89 @@ describe("A6 · hedged street lists target the region", () => {
     expect(wide(out)).toEqual([false]);
   });
 
-  // A4 lifts the district out from under the city; the marker belongs on the
-  // location that still carries streets, not on the promoted district.
-  it("marks only the location left holding streets after A4", () => {
+  // A7 hands the streets to the promoted district, so the marker follows them
+  // there — it belongs on whichever location ends up carrying streets.
+  it("marks the district A7 handed the streets to", () => {
     const out = run([location("Варна", ["Младост", "ул. Пловдив"])],
       "Прекъсване гр. Варна - кв. Младост, в района на ул. Пловдив");
-    expect(shape(out)).toEqual([
-      ["Варна", ["ул. Пловдив"], false],
-      ["Младост", [], false],
-    ]);
-    expect(wide(out)).toEqual([true, false]);
+    expect(shape(out)).toEqual([["Младост", ["ул. Пловдив"], false]]);
+    expect(wide(out)).toEqual([true]);
+  });
+
+  // The flat-list order, where the city keeps the street: the marker stays on it.
+  it("marks the city when it is left holding the streets", () => {
+    const out = run([location("Варна", ["ул. Пловдив", "кв. Аспарухово", "м-т Фичоза"])],
+      "Прекъсване гр. Варна - част от ул. Пловдив, кв. Аспарухово и м-т Фичоза и прилежащите улици");
+    expect(wide(out)).toEqual([true, false, false]);
   });
 
   it("leaves the streets in place — only targeting widens, not the feed", () => {
     const out = run([location("кв. Аспарухово", ["ул. Пловдив", "ул. Драва"])],
       "Без вода в района на ул. Пловдив и ул. Драва");
     expect(out.locations[0]!.sublocations).toEqual(["ул. Пловдив", "ул. Драва"]);
+  });
+});
+
+// ── A7 ───────────────────────────────────────────────────────────────────────
+
+describe("A7 · a district's own streets follow it out from under the city", () => {
+  // 72a4eff6 — "гр. Варна - кв. Виница, ул. Свети Пророк Илия, …". A4 lifted the
+  // district out but left its streets under Варна, so the alert kept a second
+  // pin on the city centre and targeted region-wide Варна alongside it.
+  it("hands the streets listed after a district to that district", () => {
+    const out = run([location("Варна", ["кв. Аспарухово", "ул. Пловдив", "ул. Драва"])],
+      "Прекъсване гр. Варна - кв. Аспарухово, ул. Пловдив, ул. Драва, електрозахранени от ТП 1650.");
+    expect(shape(out)).toEqual([["кв. Аспарухово", ["ул. Пловдив", "ул. Драва"], false]]);
+  });
+
+  it("works for an unprefixed district too", () => {
+    const out = run([location("гр. Варна", ["Младост", "ул. Пловдив"])],
+      "Прекъсване гр. Варна - кв. Младост, ул. Пловдив");
+    expect(shape(out)).toEqual([["Младост", ["ул. Пловдив"], false]]);
+  });
+
+  // aafa1f67 — "гр. Варна - част от: ул. Арх. Стоян Доков, м-ст Ваялар и м-ст
+  // Свети Никола". Siblings, not ownership: attaching that street to a locality
+  // would narrow the locality to it and drop everyone else living there.
+  it("declines when a street precedes the district", () => {
+    const out = run([location("град Варна", ["ул. Пловдив", "м-т Фичоза"])],
+      "Прекъсване град Варна - част от: ул. Пловдив и м-т Фичоза");
+    expect(shape(out)).toEqual([
+      ["град Варна", ["ул. Пловдив"], false],
+      ["м-т Фичоза", [], false],
+    ]);
+  });
+
+  // Which of the two owns them is unknowable from a flat list, and guessing
+  // wrong silences everyone in the district that did not get them.
+  it("declines when more than one district was promoted", () => {
+    const out = run([location("Варна", ["кв. Аспарухово", "м-т Фичоза", "ул. Пловдив"])],
+      "Прекъсване гр. Варна - кв. Аспарухово, м-т Фичоза, ул. Пловдив");
+    expect(shape(out)).toEqual([
+      ["Варна", ["ул. Пловдив"], false],
+      ["кв. Аспарухово", [], false],
+      ["м-т Фичоза", [], false],
+    ]);
+  });
+
+  // 42b91cf8 — the shape with no district at all. The city stays: region-first
+  // pinning keeps the marker off an arbitrary street, and getUserIdsInRange
+  // still targets by street id within Варна rather than city-wide.
+  it("leaves a street-only city alone", () => {
+    const out = run([location("гр. Варна", ["ул. Пловдив 25", "ул. Драва 2А"])],
+      "Прекъсване гр. Варна – ул. Пловдив 25; ул. Драва 2А, електрозахранени от ТП 450.");
+    expect(shape(out)).toEqual([["гр. Варна", ["ул. Пловдив", "ул. Драва"], false]]);
+  });
+
+  // Only a bare city is context. Under a real district the streets are already
+  // where they belong, and a nested promotion would move them somewhere worse.
+  it("does not fire under a non-city parent", () => {
+    const out = run([location("кв. Владиславово", ["м-т Фичоза", "ул. Пловдив"])],
+      "Без вода: кв. Владиславово, м-т Фичоза, ул. Пловдив");
+    expect(shape(out)).toEqual([
+      ["кв. Владиславово", ["ул. Пловдив"], false],
+      ["м-т Фичоза", [], false],
+    ]);
   });
 });
 

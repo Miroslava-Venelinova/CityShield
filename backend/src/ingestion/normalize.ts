@@ -25,6 +25,10 @@
 //       area is, not to bound it. Nothing in the message says how far it
 //       reaches, so targeting only those exact streets is a precision the
 //       source never claimed — mark the location region-wide instead.
+//   A7  "гр. Варна - кв. Виница, ул. Свети Пророк Илия, ул. …" lists the
+//       district's OWN streets after it. A4 lifted the district out but left
+//       the streets behind under the city, so the alert kept a second pin on
+//       the city centre. Hand them to the district instead.
 
 import { cleanName, matchRegion, matchStreet, parseName, placeClass } from "../core/place-names";
 import type { NamedRow } from "../db/queries";
@@ -257,25 +261,54 @@ export function normalizeParse(
       continue;
     }
 
-    // A4.
+    // A4. Positions are kept because A7 reads the order the source listed them
+    // in — that is what separates a district's own streets from a flat list.
     const parentIsCity = isBareCity(location.location_name);
     const promoted: Location[] = [];
-    const streets: string[] = [];
-    for (const sub of location.sublocations) {
+    let streets: string[] = [];
+    let firstPromotedAt = -1;
+    let firstStreetAt = -1;
+    location.sublocations.forEach((sub, i) => {
       if (isPromotable(sub, parentIsCity, refs)) {
+        if (firstPromotedAt < 0) firstPromotedAt = i;
         promoted.push({ location_name: sub, sublocations: [], is_polygon: false });
       } else {
+        if (firstStreetAt < 0) firstStreetAt = i;
         streets.push(sub);
       }
+    });
+
+    // A7. epro writes "гр. Варна - кв. Виница, ул. A, ул. B": the city is
+    // context, the district is the place, and the streets are *inside* it. Give
+    // them to the district and the city has nothing left to hold, so the
+    // cityWasContext test below drops it.
+    //
+    // Only when exactly one district was promoted and it precedes every street,
+    // because that ordering is the whole signal. "гр. Варна - част от: ул. Арх.
+    // Стоян Доков, м-ст Ваялар и м-ст Свети Никола" is the other shape — a flat
+    // list of siblings, street first — and attaching that street to a locality
+    // would narrow the locality to it and drop everyone else living there.
+    // Un-owned streets stay under the city: region-first pinning keeps the
+    // marker off an arbitrary street, and getUserIdsInRange still targets by
+    // street id within Варна rather than city-wide.
+    const streetsBelongToDistrict = parentIsCity
+      && promoted.length === 1 && streets.length > 0 && firstPromotedAt < firstStreetAt;
+    if (streetsBelongToDistrict) {
+      promoted[0]!.sublocations = streets;
+      streets = [];
     }
     location.sublocations = streets;
 
     // A6. Kept as a marker rather than by clearing `sublocations`: the streets
     // are still the most specific thing the message said, so they stay in the
-    // feed and on the pin — only targeting widens. Set after A4 so it applies to
-    // real streets, and after the A2 `continue` so a block polygon (the more
-    // specific claim) is never overridden by the vaguer one.
-    if (areaCue && streets.length > 0) location.region_wide = true;
+    // feed and on the pin — only targeting widens. Set after A4/A7 so it applies
+    // to real streets and lands on whichever location ended up holding them, and
+    // after the A2 `continue` so a block polygon (the more specific claim) is
+    // never overridden by the vaguer one.
+    if (areaCue) {
+      if (streetsBelongToDistrict) promoted[0]!.region_wide = true;
+      else if (streets.length > 0) location.region_wide = true;
+    }
 
     // The city before the dash in "гр. Варна - кв. Младост" is context, not a
     // location: keeping it would drop a second pin on the city centre and widen
