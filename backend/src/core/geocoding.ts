@@ -196,11 +196,23 @@ export async function geocode(env: Env, query: string, deadline?: number): Promi
   }
 }
 
-/** All current sources are Varna-scoped, so anchor every query there (AlertService.BuildQuery). */
-export function buildGeocodeQuery(name: string): string {
-  return name.toLowerCase().includes("варна")
-    ? `${name}, България`
-    : `${name}, Варна, България`;
+/**
+ * A Nominatim query for a place name, scoped to the settlement it sits in.
+ *
+ * `anchor` used to be hardcoded to Варна, on the stated grounds that every
+ * source we crawl is Varna-scoped. That is true of the *province* and false of
+ * the city: vik publishes outages in Долни чифлик, Аврен and Тополи, so their
+ * streets were being looked for in a city 40 km away — and Nominatim is happy
+ * to answer with a Varna street of the same name (30.07.2026 review, the
+ * Долни чифлик alert). Callers pass the settlement instead.
+ *
+ * A name that already contains its own anchor is not repeated, which is what
+ * keeps a settlement's own lookup from becoming "Долни чифлик, Долни чифлик".
+ */
+export function buildGeocodeQuery(name: string, anchor = "Варна"): string {
+  const scope = anchor.trim();
+  if (!scope || name.toLowerCase().includes(scope.toLowerCase())) return `${name}, България`;
+  return `${name}, ${scope}, България`;
 }
 
 /** Never throws — geocoding failure degrades to "no region/street matched". */

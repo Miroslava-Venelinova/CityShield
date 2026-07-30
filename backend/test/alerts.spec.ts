@@ -4,6 +4,7 @@
 import { env, fetchMock } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAlertFeedCache } from "../src/api/alerts";
+import { resetNominatimThrottle } from "../src/core/geocoding";
 import { sendPushToUsers } from "../src/core/onesignal";
 import { clearRefCaches } from "../src/db/queries";
 import { api, jsonInit, registerAndLogin } from "./helpers";
@@ -18,6 +19,10 @@ beforeAll(() => {
 beforeEach(async () => {
   clearRefCaches(); // module caches outlive per-test D1 resets
   await clearAlertFeedCache(); // as does the edge-cached /recent feed
+  // The geocoding tests below put real calls through the 1,100 ms Nominatim
+  // spacing, which is module-scope and shared with every other spec file in
+  // this isolate. Left hot, it delays whatever runs next (see auth.spec.ts).
+  resetNominatimThrottle();
   await env.DB.prepare(
     "INSERT INTO regions (region_name) VALUES ('Аспарухово'), ('Левски')").run();
   await env.DB.prepare(
@@ -414,6 +419,46 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
     const row2 = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
       .bind(id2).first<{ locations_json: string }>();
     expect(JSON.parse(row2!.locations_json)[0].lat).toBeCloseTo(43.2141);
+  });
+
+  // e197d20f (30.07.2026 review): vik covers the Варна *province*, so an outage
+  // in гр. Долни чифлик lists that town's streets — and ул. Камчия exists in
+  // Варна too. Anchoring every lookup to the city asked Nominatim for the wrong
+  // one, in a town 40 km away, and got an answer.
+  it("scopes a street lookup to the settlement the alert named, not to Варна", async () => {
+    // The street lookup answers; the town itself does not, so enrichment falls
+    // through the region step to the streets — the path the anchor governs.
+    // Registered first, because undici takes the first matching interceptor.
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => decodeURIComponent(p).includes("Камчия") })
+      .reply(200, JSON.stringify([{ lat: "42.9925", lon: "27.7187" }]),
+        { headers: { "Content-Type": "application/json" } });
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(200, "[]", { headers: { "Content-Type": "application/json" } });
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{
+          location_name: "гр. Долни чифлик",
+          sublocations: ["ул. Камчия"],
+          is_polygon: false,
+        }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const queries = (await env.DB.prepare("SELECT query FROM geocode_cache").all())
+      .results.map((r) => (r as { query: string }).query);
+    // The town, never ", Варна," — and a seeded Варна street row must not
+    // short-circuit it, because that row is the city's street, not this one's.
+    expect(queries).toContain("Камчия, Долни чифлик, България");
+    // The town's own lookup is not anchored into the city either.
+    expect(queries).toContain("Долни чифлик, България");
+    expect(queries.join(" ")).not.toContain("Варна");
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    expect(JSON.parse(row!.locations_json)[0].lat).toBeCloseTo(42.9925);
   });
 
   // 8360abda: OSM tags a bus shelter with the same name as the area around it,

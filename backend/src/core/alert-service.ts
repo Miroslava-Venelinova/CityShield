@@ -3,7 +3,7 @@
 // store-only rule, the bus-line narrowing, the 1,000-char push-body cap.
 
 import * as q from "../db/queries";
-import { matchRegion, matchStreet, parseName } from "./place-names";
+import { matchRegion, matchStreet, parseName, placeClass } from "./place-names";
 import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
 import { pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
@@ -446,6 +446,22 @@ function geocodableName(name: string): string {
 }
 
 /**
+ * The settlement a location sits in, as a scope for Nominatim.
+ *
+ * A "гр." or "с." names a settlement in its own right, so it *is* the scope —
+ * Долни чифлик is not inside Варна, and scoping it there is what sent an
+ * unseeded village street to a like-named street in the city. Everything else
+ * (кв., ж.к., м-т, к.к., or a bare name we cannot classify) keeps the Варна
+ * scope the sources are written against, which is also the previous behaviour
+ * for every location that has one.
+ */
+function settlementOf(locationName: string): string {
+  const { kind, core } = parseName(locationName);
+  const cls = placeClass(kind);
+  return (cls === "city" || cls === "village") && core ? core : "Варна";
+}
+
+/**
  * The seeded centroid for a matched reference row, when it has one.
  *
  * Reference rows carry coordinates since migration 0005, so a name we already
@@ -470,13 +486,18 @@ function seededPoint(row: q.NamedRow | null): GeoPoint | null {
  * notification targeting stays street-first — see getUserIdsInRange.
  */
 async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: number) {
+  // Everything this location looks up is searched inside its own settlement,
+  // so a village street is never resolved against the like-named city one.
+  const settlement = settlementOf(dto.location_name);
+
   // 1. District / locality level: a named region pins the whole area.
   if (dto.location_name.trim()) {
     const match = matchRegion(dto.location_name, await q.getRegions(env));
     const seeded = seededPoint(match);
     if (seeded) return seeded;
 
-    const point = await geocode(env, buildGeocodeQuery(match?.name ?? geocodableName(dto.location_name)), deadline);
+    const point = await geocode(
+      env, buildGeocodeQuery(match?.name ?? geocodableName(dto.location_name), settlement), deadline);
     if (point) return point;
     // Region named but unresolvable — fall through to the streets rather than
     // leaving the alert with no pin at all.
@@ -489,9 +510,13 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
     for (const raw of candidates) {
       const match = matchStreet(raw, streets);
       const seeded = seededPoint(match);
-      if (seeded) return seeded;
+      // A seeded street row is a *Варна* street (the streets seed covers the
+      // city only), so it is not this location's street when the location is
+      // some other settlement — take the name but let Nominatim place it.
+      if (seeded && settlement === "Варна") return seeded;
 
-      const point = await geocode(env, buildGeocodeQuery(match?.name ?? geocodableName(raw)), deadline);
+      const point = await geocode(
+        env, buildGeocodeQuery(match?.name ?? geocodableName(raw), settlement), deadline);
       if (point) return point;
     }
   }
