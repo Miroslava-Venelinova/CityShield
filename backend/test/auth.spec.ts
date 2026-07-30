@@ -13,6 +13,14 @@ beforeAll(() => {
   fetchMock.disableNetConnect();
 });
 
+// The 1,100 ms Nominatim spacing is module-scope state, and the pool runs every
+// spec file in ONE isolate (singleWorker), so whatever geocoded last leaves this
+// file's lookups already waiting. That is a real delay: it pushed the 5-call
+// throttle test past its timeout and starved reverseGeocode of its budget in
+// the location test, both of which then failed depending only on what ran
+// before them. Start every test from a cold throttle instead.
+beforeEach(resetNominatimThrottle);
+
 afterEach(() => fetchMock.assertNoPendingInterceptors());
 
 describe("POST /api/auth/register", () => {
@@ -111,7 +119,13 @@ describe("rate limiting", () => {
 
     let last: Response | undefined;
     for (let i = 0; i < 6; i++) {
-      // Fresh IP each call, so this can only be the per-user limiter firing.
+      // Drop the Nominatim spacing before each call. RL_GEOCODE_USER counts 5
+      // per *fixed* 60 s window, and left in place the 1,100 ms throttle
+      // stretches these six calls over ~5.5 s — long enough that a run starting
+      // near a window boundary rolls over mid-test, hands the 6th call a fresh
+      // allowance and gets a 200 instead of the 429. This test is about the
+      // limiter, not the throttle, so the delay is only a source of flakes.
+      resetNominatimThrottle();
       last = await api("/api/auth/location",
         jsonInit("PUT", { latitude: 43.2, longitude: 27.9 }, token));
     }
