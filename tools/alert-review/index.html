@@ -28,7 +28,7 @@
   }
   h1 { font-size: 18px; margin: 0 0 4px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
-  .sub { color: var(--muted); margin: 0 0 16px; }
+  .sub { color: var(--muted); margin: 0; }
   .wrap { max-width: 1500px; margin: 0 auto; }
   .grid { display: grid; grid-template-columns: 440px 1fr; gap: 16px; align-items: start; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
@@ -87,6 +87,9 @@
   .check input { width: auto; }
 
   .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  /* The page header, where the gap has to clear both columns — the blurb on
+     the left and the count boxes on the right, whichever ends up taller. */
+  .head.top { margin-bottom: 22px; }
   .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0 14px; }
   .title { font-size: 17px; font-weight: 600; margin: 0; }
   .body {
@@ -177,7 +180,7 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="head">
+  <div class="head top">
     <div>
       <h1>Alert review</h1>
       <p class="sub">Judge what the LLM made of each source message, name the defects that repeat
