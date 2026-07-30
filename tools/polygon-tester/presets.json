@@ -1,0 +1,57 @@
+[
+  {
+    "label": "levski — 30.07.2026 review, no block",
+    "streets": [
+      "бул. Васил Левски",
+      "Дубровник",
+      "Железни врата",
+      "Подвис"
+    ],
+    "source": "fixture:overpass-levski",
+    "options": {}
+  },
+  {
+    "label": "ruse — 30.07.2026 review, no block",
+    "streets": [
+      "Русе",
+      "Александър Дякович",
+      "Девня",
+      "Преслав"
+    ],
+    "source": "fixture:overpass-ruse",
+    "options": {}
+  },
+  {
+    "label": "saharov — real block, four boulevards",
+    "streets": [
+      "Акад. Андрей Сахаров",
+      "бул. Христо Смирненски",
+      "бул. Сливница",
+      "бул. Цар Освободител"
+    ],
+    "source": "fixture:overpass-saharov",
+    "options": {}
+  },
+  {
+    "label": "set1 — real block, spike 3 baseline",
+    "streets": [
+      "Йордан Йовков",
+      "Хан Кубрат",
+      "Ивац Войвода",
+      "Тихомир"
+    ],
+    "source": "fixture:overpass-set1",
+    "options": {}
+  },
+  {
+    "label": "varnenchik — spike set 3, no block",
+    "streets": [
+      "бул. Владислав Варненчик",
+      "Младежка",
+      "Йордан Йовков",
+      "Фантазия"
+    ],
+    "source": "fixture:overpass-varnenchik",
+    "options": {}
+  }
+]

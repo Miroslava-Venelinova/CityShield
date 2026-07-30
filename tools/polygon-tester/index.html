@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CityShield — polygon tester</title>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1a1f27; --line: #2b323d; --text: #e6e9ef;
+    --muted: #98a2b3; --accent: #4f9cf9; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --panel: #fff; --line: #dfe3e8; --text: #1a1f27;
+      --muted: #5c6673; --accent: #1667d0; --ok: #1a7f37; --warn: #9a6700; --err: #cf222e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0; max-width: 74ch; }
+  .wrap { max-width: 1600px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 400px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 1150px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  input, select, textarea, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%;
+  }
+  textarea { resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  button { background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+  button kbd { color: inherit; opacity: .75; border-color: currentColor; }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row > * { flex: 1; }
+  .row.tight { margin-top: 8px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .msg { padding: 9px 11px; border-radius: 6px; border: 1px solid var(--line); margin-bottom: 12px; font-size: 13px; white-space: pre-wrap; }
+  .hide { display: none !important; }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  kbd {
+    font-family: ui-monospace, Consolas, monospace; font-size: 11px; border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--muted); background: transparent;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover td { background: rgba(127, 127, 127, .12); }
+  tr.pick.on td { background: rgba(79, 156, 249, .16); }
+  .badge {
+    display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .badge.good { color: var(--ok); border-color: var(--ok); }
+  .badge.bad { color: var(--err); border-color: var(--err); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .head.top { margin-bottom: 22px; }
+
+  /* The knob grid. A moved knob is marked, because every number here is fitted
+     to five fixtures and it matters which one you are currently disagreeing with. */
+  .knobs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .knobs label { margin: 0 0 2px; }
+  .knob.moved label { color: var(--warn); }
+  .knob.moved input { border-color: var(--warn); }
+
+  /* The verdict line: the one sentence the stored alert would have carried. */
+  .verdict { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 15px; }
+  .verdict .what { font-weight: 600; }
+
+  /* A hand-rolled slippy map: OSM raster tiles positioned absolutely with the
+     geometry drawn over them as SVG. The tiles are light in both themes, so
+     everything inside keeps its own colours rather than the page's. */
+  .map {
+    position: relative; height: 520px; margin: 2px 0 10px; overflow: hidden;
+    border: 1px solid var(--line); border-radius: 8px; background: #e9e5dc;
+    cursor: grab; touch-action: none; resize: vertical;
+  }
+  .map.drag { cursor: grabbing; }
+  .map .layer { position: absolute; inset: 0; }
+  .map img { position: absolute; width: 256px; height: 256px; -webkit-user-drag: none; user-select: none; }
+  /* z-index rather than DOM order: tiles are appended as they come into view,
+     so the overlay would otherwise end up underneath the newest ones. */
+  .map svg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+  .map .ctl { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; flex-direction: column; gap: 4px; }
+  .map .ctl button {
+    width: 30px; height: 27px; padding: 0; font-size: 13px; font-weight: 700;
+    background: rgba(255, 255, 255, .93); color: #1a1f27; border: 1px solid rgba(0, 0, 0, .25);
+  }
+  .legend { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); }
+  .legend .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .legend .stroke { height: 3px; border-radius: 2px; }
+  .layers { display: flex; gap: 4px 12px; flex-wrap: wrap; margin: 8px 0 2px; }
+  .check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .check input { width: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head top">
+    <div>
+      <h1>Polygon tester</h1>
+      <p class="sub">
+        Runs the Worker's own <code>buildBlockPolygon</code> — bundled straight out of
+        <code>backend/src</code>, never reimplemented — and draws every stage of it:
+        the ways Overpass returned, what the clip window kept, the road bands the blocks are
+        cut from, and each enclosed area with the share of its boundary every street accounts for.
+        Knobs override the constants ingestion defaults to, so a threshold can be argued about
+        against geometry rather than against a rerun test suite.
+      </p>
+    </div>
+  </div>
+
+  <div id="msg" class="msg hide"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Input</h2>
+
+        <label for="preset">Preset</label>
+        <select id="preset"></select>
+
+        <label for="streets">Street names <span class="muted">— one per line, as the alert lists them</span></label>
+        <textarea id="streets" rows="5" spellcheck="false"
+          placeholder="бул. Васил Левски&#10;Дубровник&#10;Железни врата&#10;Подвис"></textarea>
+        <label class="check" style="margin-top:8px">
+          <input type="checkbox" id="resolve" checked>
+          Resolve against the street seed first
+        </label>
+        <p class="hint" id="resolveHint"></p>
+
+        <label for="source">Ways</label>
+        <select id="source"></select>
+        <p class="hint" id="sourceHint"></p>
+
+        <div class="row">
+          <button id="btnBuild">Build <kbd>b</kbd></button>
+          <button id="btnFit" class="ghost">Fit</button>
+        </div>
+
+        <label for="fetchName">Fetch fresh ways from Overpass <span class="muted">— save as</span></label>
+        <div class="row tight">
+          <input id="fetchName" placeholder="levski-2" spellcheck="false">
+          <button id="btnFetch" class="ghost" style="flex:0 0 96px">Fetch</button>
+        </div>
+        <p class="hint">
+          One request, cached to disk; every build afterwards reads the file. Overpass rate-limits,
+          so re-fetching the same streets to try another threshold is the one thing to avoid.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="head"><h2 style="margin:0">Knobs</h2>
+          <button id="btnReset" class="ghost" style="width:auto;padding:2px 10px;font-size:12px">Reset</button>
+        </div>
+        <div class="knobs" id="knobs"></div>
+        <p class="hint" id="knobHint"></p>
+      </div>
+
+      <div class="card">
+        <h2>Keep this case</h2>
+        <div class="row tight">
+          <input id="presetLabel" placeholder="Preset label" spellcheck="false">
+          <button id="btnPreset" class="ghost" style="flex:0 0 96px">Save</button>
+        </div>
+        <div class="row tight">
+          <input id="fixtureName" placeholder="fixture name" spellcheck="false">
+          <button id="btnPromote" class="ghost" style="flex:0 0 96px">To fixture</button>
+        </div>
+        <p class="hint">
+          A fixture lands in <code>backend/test/fixtures/overpass-&lt;name&gt;.json</code>, where
+          <code>test/polygon.spec.ts</code> can reach it — the way a bad polygon becomes a
+          regression test.
+        </p>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="head" style="margin-bottom:10px">
+          <div class="verdict" id="verdict"><span class="muted">Nothing built yet.</span></div>
+          <span class="muted mono" id="runMeta"></span>
+        </div>
+
+        <div class="map" id="mapCanvas">
+          <div class="layer" id="mapLayer"></div>
+          <div class="ctl">
+            <button id="mapIn" title="Zoom in">+</button>
+            <button id="mapOut" title="Zoom out">−</button>
+          </div>
+        </div>
+
+        <div class="layers" id="layers"></div>
+        <div class="legend" id="legend"></div>
+      </div>
+
+      <div class="card" id="candCard">
+        <h2>Enclosed areas</h2>
+        <div id="candidates"><p class="muted">Build something to see what the streets enclose.</p></div>
+      </div>
+
+      <div class="card" id="streetCard">
+        <h2>Streets</h2>
+        <div id="streetTable"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Marker colours sit outside the theme: they have to read on the light OSM
+// tiles in dark mode too, and the table has to match what is drawn.
+const STREET_COLORS = ["#1667d0", "#7b2ff7", "#0b7285", "#b8860b", "#c2255c", "#495057", "#e8590c", "#5f3dc4"];
+const VERDICT_COLORS = {
+  winner: "#2b8a3e", "runner-up": "#f08c00", dominated: "#c9361c", "too-few-streets": "#868e96",
+};
+const VERDICT_LABELS = {
+  winner: "winner", "runner-up": "lost the sort", dominated: "one street bounds too much",
+  "too-few-streets": "fewer than 2 streets bound it",
+};
+const ROAD_COLOR = "#343a40", CLIP_COLOR = "#495057", DROPPED_COLOR = "#868e96";
+
+const KNOBS = [
+  { key: "extensionDist", label: "Extension", unit: "m", step: 5,
+    hint: "How far each centreline is stretched past its ends, to close a corner OSM left open." },
+  { key: "roadHalfWidth", label: "Road half-width", unit: "m", step: 1,
+    hint: "Half the band a centreline is widened into. This is what fuses a boulevard's two carriageways." },
+  { key: "clipMargin", label: "Clip margin", unit: "m", step: 50,
+    hint: "Slack around the streets' reach. Everything outside is dropped before any geometry runs." },
+  { key: "sampleStep", label: "Ring sample step", unit: "m", step: 1,
+    hint: "Spacing of the samples the coverage shares are counted from." },
+  { key: "maxSingleStreetCoverage", label: "Max single-street share", unit: "", step: 0.05,
+    hint: "Above this share of one block's boundary, that block is a strip of road, not a block." },
+  { key: "minTouchSamples", label: "Min samples to bound", unit: "", step: 1,
+    hint: "Below this many samples, a street is crossing the block rather than bounding it." },
+];
+
+let config = { defaults: {}, sources: [], presets: [] };
+let run = null;         // the last /api/build payload
+let shapes = null;      // what the map draws, derived from run.debug
+let focus = null;       // { kind: "candidate" | "street", index } — dims everything else
+let layerOn = {};
+let busy = false;
+
+// ── plumbing ─────────────────────────────────────────────────────────────────
+
+async function call(path, body) {
+  let res;
+  try {
+    res = await fetch(path + (path.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(TOKEN), {
+      method: body === undefined ? "GET" : "POST",
+      headers: { "Content-Type": "application/json", "X-Tool-Token": TOKEN },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    // A fetch that rejects never reached the server — the browser says only
+    // "NetworkError", which reads like a bug in the tool and is almost always a
+    // page outliving the process that served it. Each run picks a fresh port
+    // and a fresh token, so a reloaded tab from an earlier session points at
+    // nothing. Say that, since the page cannot ask the server whether it is up.
+    throw new Error(
+      `Could not reach ${location.host} (${e.message}).\n\n`
+      + "The server this page came from is no longer listening. Start it again:\n"
+      + "    python tools/polygon-tester/app.py\n"
+      + "and open the URL it prints — the port and token change every run, so an "
+      + "old tab or a bookmark will not work.");
+  }
+  const payload = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (res.status === 403) {
+    throw new Error("Rejected: this page's token is not the one the running server printed. "
+      + "Open the URL from the terminal.");
+  }
+  if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+function message(text, kind) {
+  const box = $("msg");
+  box.className = "msg " + (kind || "");
+  box.textContent = text;
+  box.classList.toggle("hide", !text);
+}
+
+function setBusy(on, what) {
+  busy = on;
+  for (const id of ["btnBuild", "btnFetch", "btnPromote", "btnPreset"]) $(id).disabled = on;
+  if (on) message(what, "muted");
+}
+
+// ── controls ─────────────────────────────────────────────────────────────────
+
+function renderKnobs() {
+  $("knobs").innerHTML = KNOBS.map((knob) => `
+    <div class="knob" id="knob-${knob.key}">
+      <label for="k-${knob.key}">${esc(knob.label)}${knob.unit ? ` (${knob.unit})` : ""}</label>
+      <input type="number" id="k-${knob.key}" step="${knob.step}" min="0"
+        value="${config.defaults[knob.key]}" data-knob="${knob.key}">
+    </div>`).join("");
+  for (const knob of KNOBS) {
+    const input = $("k-" + knob.key);
+    input.addEventListener("input", markKnobs);
+    input.addEventListener("focus", () => { $("knobHint").textContent = knob.hint; });
+  }
+  markKnobs();
+}
+
+function readKnobs() {
+  const out = {};
+  for (const knob of KNOBS) {
+    const value = $("k-" + knob.key).value;
+    if (value !== "") out[knob.key] = Number(value);
+  }
+  return out;
+}
+
+/** Mark what has been moved off the shipped value — the run is only meaningful
+ *  relative to which constant you are currently disagreeing with. */
+function markKnobs() {
+  const values = readKnobs();
+  let moved = 0;
+  for (const knob of KNOBS) {
+    // An emptied field is not an override: readKnobs leaves it out and the
+    // builder falls back to the shipped constant, so marking it amber would
+    // claim a difference the run does not have.
+    const off = (values[knob.key] ?? config.defaults[knob.key]) !== config.defaults[knob.key];
+    $("knob-" + knob.key).classList.toggle("moved", off);
+    if (off) moved++;
+  }
+  $("btnReset").classList.toggle("hide", !moved);
+  return moved;
+}
+
+function renderSources(selected) {
+  const pick = $("source");
+  const want = selected || pick.value;
+  pick.innerHTML = config.sources.map((s) =>
+    `<option value="${esc(s.id)}">${s.kind === "fixture" ? "fixture" : "cached"} · ${esc(s.name)}
+      — ${s.size_kb} KB, ${esc(s.saved)}</option>`).join("")
+    || '<option value="">nothing fetched yet</option>';
+  if (want && config.sources.some((s) => s.id === want)) pick.value = want;
+  showSourceHint();
+}
+
+function showSourceHint() {
+  const source = config.sources.find((s) => s.id === $("source").value);
+  $("sourceHint").innerHTML = !source ? "Fetch a set of ways below to get started."
+    : source.kind === "fixture"
+      ? `<code>${esc(source.path)}</code> — a checked-in fixture; the test suite runs on this one.`
+      : `<code>${esc(source.path)}</code> — a cached fetch. Promote it to a fixture to keep it.`;
+}
+
+function renderPresets() {
+  $("preset").innerHTML = '<option value="">— pick a saved case —</option>'
+    + config.presets.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join("");
+}
+
+function applyPreset(index) {
+  const preset = config.presets[Number(index)];
+  if (!preset) return;
+  $("streets").value = (preset.streets || []).join("\n");
+  $("presetLabel").value = preset.label;
+  if (preset.source && config.sources.some((s) => s.id === preset.source)) {
+    $("source").value = preset.source;
+    showSourceHint();
+  }
+  for (const knob of KNOBS) {
+    $("k-" + knob.key).value = (preset.options || {})[knob.key] ?? config.defaults[knob.key];
+  }
+  markKnobs();
+  build();
+}
+
+// ── running ──────────────────────────────────────────────────────────────────
+
+async function build() {
+  if (busy) return;
+  const streets = $("streets").value;
+  if (!streets.trim()) return message("Type some street names first.", "warn");
+  if (!$("source").value) return message("No ways to build from — fetch some first.", "warn");
+
+  setBusy(true, "Building…");
+  try {
+    run = await call("/api/build", {
+      streets, source: $("source").value, resolve: $("resolve").checked, options: readKnobs(),
+    });
+    message(run.rebuilt ? "Rebuilt the Worker bundle — backend/src had changed." : "", "muted");
+    focus = null;
+    shapes = shapesFrom(run);
+    renderResult();
+    mapView = fitTo(drawableBounds()) || mapView;
+    drawMap();
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function fetchWays() {
+  if (busy) return;
+  const name = $("fetchName").value.trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
+    return message("Give the fetch a name: lowercase letters, digits and hyphens.", "warn");
+
+  setBusy(true, "Asking Overpass for these streets — one request, then it is cached…");
+  let fetched = null;
+  try {
+    fetched = await call("/api/fetch", {
+      streets: $("streets").value, resolve: $("resolve").checked, name,
+    });
+    config.sources = fetched.sources;
+    renderSources(fetched.source_id);
+  } catch (e) {
+    message(e.message, "err");
+  } finally {
+    setBusy(false);
+  }
+  // Outside the busy window on purpose: build() refuses to start while a run is
+  // in flight, so chaining it inside would silently do nothing.
+  if (!fetched) return;
+  const total = fetched.summary.reduce((sum, s) => sum + s.ways, 0);
+  message(`${total} way(s) saved to ${fetched.saved}. Building…`, "ok");
+  await build();
+}
+
+async function promote() {
+  const name = $("fixtureName").value.trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
+    return message("A fixture name is lowercase letters, digits and hyphens.", "warn");
+  try {
+    const result = await call("/api/promote", { source: $("source").value, name });
+    config.sources = result.sources;
+    renderSources(result.source_id);
+    message(`Saved ${result.saved} — add it to test/polygon.spec.ts to pin this case.`, "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+async function savePreset() {
+  try {
+    const result = await call("/api/preset", {
+      label: $("presetLabel").value, streets: $("streets").value.split("\n"),
+      source: $("source").value, options: readKnobs(),
+    });
+    config.presets = result.presets;
+    renderPresets();
+    message("Preset saved.", "ok");
+  } catch (e) {
+    message(e.message, "err");
+  }
+}
+
+// ── results ──────────────────────────────────────────────────────────────────
+
+function renderResult() {
+  const debug = run.debug;
+  const won = !!run.polygon;
+  const streets = won ? run.polygon.features[0].properties.streets : [];
+
+  $("verdict").innerHTML = won
+    ? `<span class="what ok">Polygon built</span>
+       <span class="muted">bounded by ${streets.map((s) => esc(s)).join(" · ")}</span>`
+    : `<span class="what err">No polygon</span> <span class="muted">${esc(run.reason)}</span>`;
+
+  const moved = markKnobs();
+  $("runMeta").textContent = [
+    `${(debug?.candidates || []).length} enclosed area(s)`,
+    moved ? `${moved} knob(s) off default` : "stock knobs",
+  ].join(" · ");
+
+  renderCandidates();
+  renderStreets();
+  renderLayers();
+}
+
+function renderCandidates() {
+  const candidates = (run.debug && run.debug.candidates) || [];
+  if (!candidates.length) {
+    $("candidates").innerHTML =
+      `<p class="muted">The road network encloses nothing at all — the streets never close a ring.
+       A wider road half-width or a longer extension is what would close one, if a real block is there.</p>`;
+    return;
+  }
+  // Build order is arbitrary; worst-first reads as "here is what was thrown away".
+  const order = ["winner", "runner-up", "dominated", "too-few-streets"];
+  const rows = candidates.map((c, i) => ({ c, i }))
+    .sort((a, b) => order.indexOf(a.c.verdict) - order.indexOf(b.c.verdict) || b.c.areaM2 - a.c.areaM2);
+  const cap = readKnobs().maxSingleStreetCoverage ?? config.defaults.maxSingleStreetCoverage;
+
+  $("candidates").innerHTML = `<table>
+    <tr><th></th><th>Verdict</th><th class="num">Area</th><th class="num">Mean width</th>
+        <th class="num">Samples</th><th>Boundary shared with</th></tr>
+    ${rows.map(({ c, i }) => `
+      <tr class="pick ${focus && focus.kind === "candidate" && focus.index === i ? "on" : ""}"
+          data-candidate="${i}">
+        <td><span class="badge" style="border-color:${VERDICT_COLORS[c.verdict]};color:${VERDICT_COLORS[c.verdict]}">${i + 1}</span></td>
+        <td>${esc(VERDICT_LABELS[c.verdict] || c.verdict)}</td>
+        <td class="num">${(c.areaM2 / 10000).toFixed(2)} ha</td>
+        <td class="num ${c.meanWidthM < 25 ? "err" : ""}">${c.meanWidthM.toFixed(0)} m</td>
+        <td class="num">${c.samples}</td>
+        <td>${c.coverage.filter((s) => s.hits > 0).map((s) =>
+            `<span class="badge ${s.share > cap ? "bad" : ""}"
+              >${esc(s.name)} ${(s.share * 100).toFixed(0)}%</span>`).join(" ") || '<span class="muted">nothing</span>'}</td>
+      </tr>`).join("")}
+  </table>
+  <p class="hint">
+    Mean width is 2·area/perimeter: a carriageway gap measures ~10 m, a real block a few hundred.
+    The shares are of the block's own boundary, so they do not add to 100% — a corner sample can
+    be near two streets, and a stretch bounded by no listed street is near none.
+  </p>`;
+
+  $("candidates").querySelectorAll("[data-candidate]").forEach((row) =>
+    row.addEventListener("click", () => focusOn("candidate", Number(row.dataset.candidate))));
+}
+
+function renderStreets() {
+  const summary = run.summary || [];
+  const perStreet = new Map(((run.debug && run.debug.streets) || []).map((s) => [s.name, s]));
+  const resolved = run.resolved || [];
+  const missed = resolved.filter((r) => !r.name);
+
+  $("streetTable").innerHTML = `
+    ${missed.length ? `<p class="msg warn">Unresolved, so not fetched or drawn:
+      ${missed.map((r) => `<code>${esc(r.raw)}</code>`).join(", ")} —
+      no seeded street matched. Overpass matches names exactly, so these could only return nothing.</p>` : ""}
+    <table>
+      <tr><th></th><th>Street</th><th class="num">Ways</th><th class="num">Points</th>
+          <th class="num">Kept</th><th>Extent</th></tr>
+      ${summary.map((s, i) => {
+        const detail = perStreet.get(s.name);
+        const kept = detail ? detail.kept.length : 0;
+        const dropped = detail ? detail.dropped.length : 0;
+        // A street that spans kilometres is the province-wide Overpass area
+        // showing up: the query matches every administrative Варна, so a common
+        // name arrives with fragments from other settlements attached.
+        const wide = s.spanKm && Math.max(s.spanKm.x, s.spanKm.y) > 5;
+        return `<tr class="pick ${focus && focus.kind === "street" && focus.index === i ? "on" : ""}"
+                    data-street="${i}">
+          <td><span class="swatch" style="display:inline-block;width:11px;height:11px;border-radius:3px;
+              background:${STREET_COLORS[i % STREET_COLORS.length]}"></span></td>
+          <td>${esc(s.name)}</td>
+          <td class="num">${s.ways}</td>
+          <td class="num">${s.vertices}</td>
+          <td class="num">${kept}${dropped ? `<span class="muted"> −${dropped}</span>` : ""}</td>
+          <td class="${wide ? "warn" : "muted"}">${s.spanKm
+            ? `${s.spanKm.x.toFixed(1)} × ${s.spanKm.y.toFixed(1)} km${wide ? " ⚠" : ""}`
+            : "nothing returned"}</td>
+        </tr>`;
+      }).join("")}
+    </table>
+    <p class="hint">
+      <strong>Kept</strong> is how many of a street's fragments survived the clip window;
+      <code>−n</code> is how many were dropped. An extent measured in kilometres is the
+      province-wide Overpass area: the query matches every administrative <em>Варна</em>, so a
+      common street name arrives with same-named stretches from other settlements attached.
+    </p>`;
+
+  $("streetTable").querySelectorAll("[data-street]").forEach((row) =>
+    row.addEventListener("click", () => focusOn("street", Number(row.dataset.street))));
+}
+
+function focusOn(kind, index) {
+  focus = focus && focus.kind === kind && focus.index === index ? null : { kind, index };
+  renderCandidates();
+  renderStreets();
+  mapView = fitTo(focusBounds() || drawableBounds()) || mapView;
+  drawMap();
+}
+
+const LAYERS = [
+  { key: "roads", label: "Road bands" },
+  { key: "kept", label: "Street centrelines" },
+  { key: "dropped", label: "Clipped-off fragments" },
+  { key: "clip", label: "Clip window" },
+  { key: "areas", label: "Enclosed areas" },
+];
+
+function renderLayers() {
+  $("layers").innerHTML = LAYERS.map((l) => `
+    <label class="check"><input type="checkbox" data-layer="${l.key}"
+      ${layerOn[l.key] ? "checked" : ""}> ${esc(l.label)}</label>`).join("");
+  $("layers").querySelectorAll("[data-layer]").forEach((box) =>
+    box.addEventListener("change", () => {
+      layerOn[box.dataset.layer] = box.checked;
+      localStorage.setItem("polygonTesterLayers", JSON.stringify(layerOn));
+      drawMap();
+    }));
+
+  const swatch = (color, cls) => `<span class="swatch ${cls || ""}" style="background:${color}"></span>`;
+  $("legend").innerHTML = [
+    `${swatch(VERDICT_COLORS.winner)}winner`,
+    `${swatch(VERDICT_COLORS["runner-up"])}lost the sort`,
+    `${swatch(VERDICT_COLORS.dominated)}one street bounds too much`,
+    `${swatch(VERDICT_COLORS["too-few-streets"])}fewer than 2 streets`,
+    `${swatch(ROAD_COLOR)}road bands`,
+    `${swatch(DROPPED_COLOR, "stroke")}clipped off`,
+  ].join("");
+}
+
+// ── map ──────────────────────────────────────────────────────────────────────
+// Hand-rolled rather than Leaflet, like the alert reviewer: these tools run
+// from a checkout with nothing installed and the browser half keeps to that
+// rule. Nothing but tile coordinates leaves the machine.
+
+const TILE = 256;
+const MIN_ZOOM = 9, MAX_ZOOM = 19;
+const FIT_PAD = 56;
+
+let mapView = null;   // { z, cx, cy } — centre in tile units at zoom z
+let mapDrag = null, mapResizeTimer = 0;
+
+const lngToX = (lng, z) => ((lng + 180) / 360) * 2 ** z;
+const latToY = (lat, z) => {
+  const s = Math.sin(Math.max(-85, Math.min(85, lat)) * Math.PI / 180);
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 2 ** z;
+};
+
+/** The debug payload, arranged as the map's draw order. */
+function shapesFrom(payload) {
+  const debug = payload.debug;
+  if (!debug) return null;
+  const order = new Map((payload.summary || []).map((s, i) => [s.name, i]));
+  return {
+    roads: debug.roads || [],
+    clip: debug.clipRing || [],
+    streets: (debug.streets || []).map((s) => ({
+      ...s, color: STREET_COLORS[(order.get(s.name) ?? 0) % STREET_COLORS.length],
+      index: order.get(s.name) ?? 0,
+    })),
+    candidates: debug.candidates || [],
+  };
+}
+
+function growBounds(box, points) {
+  for (const [lng, lat] of points) {
+    box.any = true;
+    box.minLng = Math.min(box.minLng, lng); box.maxLng = Math.max(box.maxLng, lng);
+    box.minLat = Math.min(box.minLat, lat); box.maxLat = Math.max(box.maxLat, lat);
+  }
+  return box;
+}
+
+const emptyBounds = () => ({ minLng: Infinity, maxLng: -Infinity, minLat: Infinity, maxLat: -Infinity, any: false });
+
+/**
+ * What "fit" means with nothing focused: the streets that survived the clip,
+ * and the areas they enclose. Deliberately not the dropped fragments — one
+ * same-named stretch 25 km away would zoom the map out to the whole province
+ * and hide the thing you came to look at.
+ */
+function drawableBounds() {
+  if (!shapes) return null;
+  const box = emptyBounds();
+  for (const street of shapes.streets) for (const line of street.kept) growBounds(box, line);
+  for (const candidate of shapes.candidates) growBounds(box, candidate.ring);
+  if (!box.any) for (const street of shapes.streets) for (const line of street.dropped) growBounds(box, line);
+  return box.any ? box : null;
+}
+
+function focusBounds() {
+  if (!shapes || !focus) return null;
+  const box = emptyBounds();
+  if (focus.kind === "candidate") {
+    const candidate = shapes.candidates[focus.index];
+    if (candidate) growBounds(box, candidate.ring);
+  } else {
+    // A focused street shows everything it returned, dropped fragments and all:
+    // that is exactly the view that makes a province-wide match obvious.
+    const street = shapes.streets.find((s) => s.index === focus.index);
+    if (street) for (const line of [...street.kept, ...street.dropped]) growBounds(box, line);
+  }
+  return box.any ? box : null;
+}
+
+/** Highest zoom at which everything given still fits the canvas. */
+function fitTo(box) {
+  const canvas = $("mapCanvas");
+  if (!box || !canvas.clientWidth) return null;
+  const width = Math.max(canvas.clientWidth - FIT_PAD, 64);
+  const height = Math.max(canvas.clientHeight - FIT_PAD, 64);
+
+  let z = MAX_ZOOM;
+  for (; z > MIN_ZOOM; z--) {
+    const w = (lngToX(box.maxLng, z) - lngToX(box.minLng, z)) * TILE;
+    const h = (latToY(box.minLat, z) - latToY(box.maxLat, z)) * TILE;
+    if (w <= width && h <= height) break;
+  }
+  return {
+    z,
+    cx: (lngToX(box.minLng, z) + lngToX(box.maxLng, z)) / 2,
+    cy: (latToY(box.minLat, z) + latToY(box.maxLat, z)) / 2,
+  };
+}
+
+function drawMap() {
+  const canvas = $("mapCanvas"), layer = $("mapLayer");
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  if (!mapView || !width || !height) return;
+
+  const { z } = mapView;
+  const originX = mapView.cx * TILE - width / 2;   // world px at the canvas's left edge
+  const originY = mapView.cy * TILE - height / 2;
+  const world = 2 ** z;
+
+  // Tiles are reused across pans and zooms — rebuilding the elements refetches
+  // every tile and flickers. Keys are absolute, so a kept tile only ever needs
+  // repositioning.
+  const have = new Map([...layer.querySelectorAll("img")].map((img) => [img.dataset.key, img]));
+  const keep = new Set();
+  for (let ty = Math.floor(originY / TILE); ty <= Math.floor((originY + height) / TILE); ty++) {
+    if (ty < 0 || ty >= world) continue;
+    for (let tx = Math.floor(originX / TILE); tx <= Math.floor((originX + width) / TILE); tx++) {
+      const key = `${z}/${tx}/${ty}`;
+      keep.add(key);
+      let img = have.get(key);
+      if (!img) {
+        img = document.createElement("img");
+        img.dataset.key = key;
+        img.alt = "";
+        img.src = `https://tile.openstreetmap.org/${z}/${((tx % world) + world) % world}/${ty}.png`;
+        layer.appendChild(img);
+      }
+      img.style.left = `${Math.round(tx * TILE - originX)}px`;
+      img.style.top = `${Math.round(ty * TILE - originY)}px`;
+    }
+  }
+  for (const [key, img] of have) if (!keep.has(key)) img.remove();
+
+  drawOverlay(originX, originY, z);
+}
+
+function drawOverlay(originX, originY, z) {
+  let svg = $("mapLayer").querySelector("svg");
+  if (!svg) {
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    $("mapLayer").appendChild(svg);
+  }
+  if (!shapes) { svg.innerHTML = ""; return; }
+
+  const px = (lng) => (lngToX(lng, z) * TILE - originX).toFixed(1);
+  const py = (lat) => (latToY(lat, z) * TILE - originY).toFixed(1);
+  const path = (points, close) =>
+    points.map((p, i) => `${i ? "L" : "M"}${px(p[0])} ${py(p[1])}`).join(" ") + (close ? " Z" : "");
+
+  const parts = [];
+
+  // Road bands first: they are the thing the blocks are holes in, so everything
+  // else reads as sitting on top of them.
+  if (layerOn.roads) {
+    for (const ring of shapes.roads) {
+      parts.push(`<path d="${path(ring, true)}" fill="${ROAD_COLOR}" fill-opacity=".13"
+        stroke="${ROAD_COLOR}" stroke-opacity=".3" stroke-width="1"/>`);
+    }
+  }
+
+  if (layerOn.clip && shapes.clip.length) {
+    parts.push(`<path d="${path(shapes.clip, true)}" fill="none" stroke="${CLIP_COLOR}"
+      stroke-width="1.5" stroke-dasharray="8 6" stroke-opacity=".8"/>`);
+  }
+
+  for (const street of shapes.streets) {
+    const dim = focus && !(focus.kind === "street" && focus.index === street.index);
+    if (layerOn.dropped) {
+      for (const line of street.dropped) {
+        parts.push(`<path d="${path(line)}" fill="none" stroke="${DROPPED_COLOR}"
+          stroke-opacity="${dim ? .2 : .7}" stroke-width="2" stroke-dasharray="5 5"/>`);
+      }
+    }
+    if (layerOn.kept) {
+      for (const line of street.kept) {
+        parts.push(`<path d="${path(line)}" fill="none" stroke="${street.color}"
+          stroke-opacity="${dim ? .25 : .95}" stroke-width="${dim ? 2 : 3}" stroke-linecap="round"/>`);
+      }
+    }
+  }
+
+  if (layerOn.areas) {
+    // Winner last, so it is never buried under a rejected area it overlaps.
+    const ordered = shapes.candidates.map((c, i) => ({ c, i }))
+      .sort((a, b) => (a.c.verdict === "winner" ? 1 : 0) - (b.c.verdict === "winner" ? 1 : 0));
+    for (const { c, i } of ordered) {
+      const on = focus && focus.kind === "candidate" && focus.index === i;
+      const dim = focus && !on;
+      const color = VERDICT_COLORS[c.verdict] || "#868e96";
+      parts.push(`<path d="${path(c.ring, true)}" fill="${color}"
+        fill-opacity="${dim ? .06 : c.verdict === "winner" ? .3 : .2}" stroke="${color}"
+        stroke-opacity="${dim ? .3 : 1}" stroke-width="${on || c.verdict === "winner" ? 3 : 2}"
+        stroke-linejoin="round"/>`);
+      // The number is the one in the table; a sliver is too thin to label inside.
+      const mid = c.ring[Math.floor(c.ring.length / 2)] || c.ring[0];
+      if (mid && !dim) {
+        parts.push(`<g><circle cx="${px(mid[0])}" cy="${py(mid[1])}" r="9" fill="${color}"
+          stroke="#fff" stroke-width="2"/><text x="${px(mid[0])}" y="${py(mid[1])}" fill="#fff"
+          font-size="11" font-weight="700" text-anchor="middle"
+          dominant-baseline="central">${i + 1}</text></g>`);
+      }
+    }
+  }
+
+  svg.innerHTML = parts.join("");
+}
+
+function zoomMap(delta) {
+  if (!mapView) return;
+  const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, mapView.z + delta));
+  if (z === mapView.z) return;
+  const scale = 2 ** (z - mapView.z);
+  mapView = { z, cx: mapView.cx * scale, cy: mapView.cy * scale };
+  drawMap();
+}
+
+// ── wiring ───────────────────────────────────────────────────────────────────
+
+$("btnBuild").addEventListener("click", build);
+$("btnFetch").addEventListener("click", fetchWays);
+$("btnPromote").addEventListener("click", promote);
+$("btnPreset").addEventListener("click", savePreset);
+$("btnFit").addEventListener("click", () => {
+  focus = null;
+  renderCandidates();
+  renderStreets();
+  mapView = fitTo(drawableBounds()) || mapView;
+  drawMap();
+});
+$("btnReset").addEventListener("click", () => {
+  for (const knob of KNOBS) $("k-" + knob.key).value = config.defaults[knob.key];
+  markKnobs();
+});
+$("preset").addEventListener("change", (e) => applyPreset(e.target.value));
+$("source").addEventListener("change", () => { showSourceHint(); if (run) build(); });
+$("mapIn").addEventListener("click", () => zoomMap(1));
+$("mapOut").addEventListener("click", () => zoomMap(-1));
+
+// Pan by translating the whole layer and only re-tiling on release: retiling on
+// every pointermove would refetch the map as it moves.
+$("mapCanvas").addEventListener("pointerdown", (e) => {
+  if (!mapView || e.button !== 0 || e.target.closest("button")) return;
+  mapDrag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0 };
+  $("mapCanvas").setPointerCapture(e.pointerId);
+  $("mapCanvas").classList.add("drag");
+});
+$("mapCanvas").addEventListener("pointermove", (e) => {
+  if (!mapDrag) return;
+  mapDrag.dx = e.clientX - mapDrag.x;
+  mapDrag.dy = e.clientY - mapDrag.y;
+  $("mapLayer").style.transform = `translate(${mapDrag.dx}px, ${mapDrag.dy}px)`;
+});
+for (const event of ["pointerup", "pointercancel"]) {
+  $("mapCanvas").addEventListener(event, () => {
+    if (!mapDrag) return;
+    $("mapLayer").style.transform = "";
+    $("mapCanvas").classList.remove("drag");
+    mapView.cx -= mapDrag.dx / TILE;
+    mapView.cy -= mapDrag.dy / TILE;
+    mapDrag = null;
+    drawMap();
+  });
+}
+$("mapCanvas").addEventListener("wheel", (e) => {
+  if (!mapView) return;
+  e.preventDefault();
+  zoomMap(e.deltaY < 0 ? 1 : -1);
+}, { passive: false });
+
+// Covers both the window resizing and the canvas's own resize handle.
+new ResizeObserver(() => {
+  clearTimeout(mapResizeTimer);
+  mapResizeTimer = setTimeout(drawMap, 120);
+}).observe($("mapCanvas"));
+
+document.addEventListener("keydown", (e) => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+    if (e.key === "Escape") e.target.blur();
+    // Ctrl+Enter from the street box is the fastest path from a paste to a map.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); build(); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "b") build();
+  if (e.key === "f") { focus = null; renderCandidates(); renderStreets(); mapView = fitTo(drawableBounds()) || mapView; drawMap(); }
+  if (e.key === "+" || e.key === "=") zoomMap(1);
+  if (e.key === "-") zoomMap(-1);
+});
+
+async function init() {
+  layerOn = { roads: true, kept: true, dropped: false, clip: false, areas: true };
+  try {
+    Object.assign(layerOn, JSON.parse(localStorage.getItem("polygonTesterLayers") || "{}"));
+  } catch { /* a corrupt preference is not worth failing to start over */ }
+
+  config = await call("/api/config");
+  renderKnobs();
+  renderSources();
+  renderPresets();
+  renderLayers();
+  $("resolveHint").innerHTML = config.seeded
+    ? `Same matcher and threshold ingestion uses, against <code>${esc(config.seed_path)}</code>.
+       Turn it off to type OSM names directly.`
+    : `<span class="warn">No street seed at <code>${esc(config.seed_path)}</code></span> —
+       names go to Overpass exactly as typed.`;
+  if (!config.seeded) $("resolve").checked = false;
+  message("");
+}
+
+init().catch((e) => message(e.message, "err"));
+</script>
+</body>
+</html>

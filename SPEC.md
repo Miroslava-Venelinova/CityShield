@@ -84,6 +84,7 @@ CityShield/
 ├── tools/osm-seed-builder/     local UI that builds reference data from Overpass
 ├── tools/push-tester/          local UI that fires a test push
 ├── tools/alert-review/         local UI for judging what the pipeline stored
+├── tools/polygon-tester/       local UI that draws what the block builder cut
 └── setup.bat                   Windows dependency installer
 ```
 
@@ -1091,6 +1092,16 @@ DNS rebinding.
   markdown report. It is the measurement behind the ingestion guards (§1.7) and
   the place matcher (§1.3): every rule in those two exists because a review run
   named the alert it got wrong.
+- **`tools/polygon-tester`** (`python tools/polygon-tester/app.py`) runs the block
+  builder of §1.9 and draws every stage of it: the ways Overpass returned, what
+  the clip window kept, the road bands the blocks are cut from, and each enclosed
+  area with the share of its boundary every street accounts for. It imports
+  `buildBlockPolygon` out of `backend/src` through esbuild rather than
+  reimplementing it, so a polygon judged there is the polygon ingestion would
+  have built; the knobs override the same constants, and a case can be promoted
+  into `backend/test/fixtures/` to become a regression test. It exists because
+  every threshold in `polygon.ts` is fitted to five fixtures, and "was this block
+  correctly rejected" is a question with no answer in the stored row.
 - **`tools/push-tester`** (`python tools/push-tester/app.py`) drives
   `POST /api/alerts/test-push` against the local or deployed Worker, addressing
   one user or everyone. The useful trick: load the user list from **remote** D1

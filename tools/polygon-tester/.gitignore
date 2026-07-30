@@ -1,0 +1,9 @@
+# The esbuild bundle of backend/src — rebuilt whenever the Worker sources change.
+.build/
+
+# Overpass responses this tool fetched. Kept out of the repo on purpose: they are
+# hundreds of kilobytes of coordinates that go stale as OSM moves. Promote the
+# ones a test should pin — they land in backend/test/fixtures/ and are tracked.
+cache/
+
+# presets.json is tracked: the saved cases name the fixtures beside them.
