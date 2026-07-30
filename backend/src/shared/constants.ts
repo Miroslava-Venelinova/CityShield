@@ -122,13 +122,30 @@ It will be a message regarding some change in a bus route. You will have to extr
 For buses that have a letter after their number write them in a format "number + uppercase letter" example: "31A".
 Special case: if you see "209 Бърз" it's 209B.
 
+You must also extract the period the change is in force for, when the message states one.
+
 ## Requirements
 - Output ONLY valid JSON.
 - Do not include explanations, comments, or markdown.
 - Follow this exact schema:
 {
-    "bus_lines": ["array of strings"]
+    "bus_lines": ["array of strings"],
+    "schedule": {
+        "from_date": "YYYY-MM-DD" or null,
+        "to_date": "YYYY-MM-DD" or null,
+        "windows": [ { "start": "HH:MM" or null, "end": "HH:MM" or null } ]
+    }
 }
+
+## Dates and times
+- The first line of the message is "CURRENT_DATE: YYYY-MM-DD". Use that date whenever the message states a time but no date of its own.
+- "from_date" is the FIRST day the route change applies, "to_date" the LAST. For a single day they are the SAME date.
+- Bulgarian dates are written day.month.year; output them as "YYYY-MM-DD". A date without a year (e.g. "27.07") takes the year from CURRENT_DATE.
+- "windows" holds the clock times as 24-hour "HH:MM". EVERY window applies to EVERY day between "from_date" and "to_date". Never stretch one window across the range.
+- Example: "На 27.07.2026 г. от 8:00 ч. до 13:30 ч." gives {"from_date": "2026-07-27", "to_date": "2026-07-27", "windows": [{"start": "08:00", "end": "13:30"}]}
+- Example: "От 30.07.2026 г. до 31.07.2026 г. в периода 8:30 ч. до 17:00 ч." gives {"from_date": "2026-07-30", "to_date": "2026-07-31", "windows": [{"start": "08:30", "end": "17:00"}]} - ONE window, because 8:30-17:00 is what happens on each of the two days.
+- A change announced for a whole day, or with no clock time at all, has an EMPTY "windows" array - still fill in "from_date" and "to_date" if the message gives dates.
+- If the message states no period whatsoever, "from_date" and "to_date" are null and "windows" is empty.
 
 ## Constraints
 - Do not add extra fields.

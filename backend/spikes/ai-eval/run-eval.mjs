@@ -117,14 +117,7 @@ function gradeOutage(testCase, actual) {
   // Times are graded on what the pipeline would STORE, not on the strings the
   // model wrote: normalizeSchedule is what turns the schedule into the envelope
   // plus windows, and "8:00" vs "08:00" is not a difference worth failing on.
-  const want = normalizeSchedule(expected.schedule, CURRENT_DATE);
-  const got = normalizeSchedule(actual.schedule, CURRENT_DATE);
-  for (const f of ["start_time", "end_time"]) {
-    if (want[f] !== got[f]) diffs.push(`${f}: expected ${want[f]}, got ${got[f]}`);
-  }
-  if (JSON.stringify(want.windows) !== JSON.stringify(got.windows)) {
-    diffs.push(`windows: expected ${JSON.stringify(want.windows)}, got ${JSON.stringify(got.windows)}`);
-  }
+  diffs.push(...gradeSchedule(expected.schedule, actual.schedule));
 
   if (Boolean(expected.city_wide) !== Boolean(actual.city_wide)) {
     diffs.push(`city_wide: expected ${expected.city_wide}, got ${actual.city_wide}`);
@@ -146,13 +139,40 @@ function gradeRoads({ expected }, actual) {
 
 function gradeVt({ expected }, actual) {
   if (typeof actual !== "object" || actual === null) return ["output is not an object"];
+  const diffs = [];
   const exp = expected.bus_lines;
   const act = actual.bus_lines;
-  if (exp === null) return act === null || act === undefined ? [] : [`bus_lines: expected null, got ${JSON.stringify(act)}`];
-  if (!Array.isArray(act)) return [`bus_lines: expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`];
-  const a = exp.map(normLine).sort();
-  const b = act.map(normLine).sort();
-  return JSON.stringify(a) === JSON.stringify(b) ? [] : [`bus_lines: expected ${JSON.stringify(a)}, got ${JSON.stringify(b)}`];
+  if (exp === null) {
+    if (!(act === null || act === undefined)) diffs.push(`bus_lines: expected null, got ${JSON.stringify(act)}`);
+  } else if (!Array.isArray(act)) {
+    diffs.push(`bus_lines: expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`);
+  } else {
+    const a = exp.map(normLine).sort();
+    const b = act.map(normLine).sort();
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      diffs.push(`bus_lines: expected ${JSON.stringify(a)}, got ${JSON.stringify(b)}`);
+    }
+  }
+
+  // vt gained a schedule when the 30.07.2026 review found route changes going
+  // out with no period at all. Graded the same way the outage sources are: on
+  // what the pipeline would STORE, so "9:00" vs "09:00" is not a failure.
+  diffs.push(...gradeSchedule(expected.schedule, actual.schedule));
+  return diffs;
+}
+
+/** Envelope + windows the pipeline would store, compared field by field. */
+function gradeSchedule(expectedSchedule, actualSchedule) {
+  const diffs = [];
+  const want = normalizeSchedule(expectedSchedule, CURRENT_DATE);
+  const got = normalizeSchedule(actualSchedule, CURRENT_DATE);
+  for (const f of ["start_time", "end_time"]) {
+    if (want[f] !== got[f]) diffs.push(`${f}: expected ${want[f]}, got ${got[f]}`);
+  }
+  if (JSON.stringify(want.windows) !== JSON.stringify(got.windows)) {
+    diffs.push(`windows: expected ${JSON.stringify(want.windows)}, got ${JSON.stringify(got.windows)}`);
+  }
+  return diffs;
 }
 
 const GRADERS = { outage: gradeOutage, roads: gradeRoads, vt: gradeVt };

@@ -4,6 +4,7 @@
 // ["0"] = route change with no line identified (full vt audience).
 
 import type { Env } from "../../env";
+import { normalizeSchedule, sofiaToday } from "../../shared/datetime";
 import { VT_AI_PROMPT } from "../../shared/constants";
 import { VT_JSON_SCHEMA, vtAiSchema } from "../../shared/schemas";
 import { aiParse } from "../ai";
@@ -55,6 +56,9 @@ export async function run(env: Env, deadline: number): Promise<void> {
   }
   const seenIds = new Set(storedSeen);
   let processed = 0;
+  // One "today" for the whole tick, in Sofia time — a tick that straddles
+  // midnight must not date two messages differently.
+  const today = sofiaToday();
 
   for (const msg of rawMessages) {
     if (processed >= MAX_MESSAGES_PER_TICK || Date.now() >= deadline) break;
@@ -63,8 +67,11 @@ export async function run(env: Env, deadline: number): Promise<void> {
     if (seenIds.has(id)) continue;
 
     processed++;
+    // The CURRENT_DATE line is what lets the model resolve "от 4 август" and
+    // bare clock times — same contract as the outage sources (pipeline.ts).
     const parsed = await aiParse(
-      env, VT_AI_PROMPT, `${msg.header}\n${msg.body}`, VT_JSON_SCHEMA, vtAiSchema, deadline);
+      env, VT_AI_PROMPT, `CURRENT_DATE: ${today}\n${msg.header}\n${msg.body}`,
+      VT_JSON_SCHEMA, vtAiSchema, deadline);
     if (parsed === null) continue; // AI failure — retried next tick
 
     const markSeen = async () => {
@@ -87,11 +94,16 @@ export async function run(env: Env, deadline: number): Promise<void> {
       content = `${content}\n\nЗасегнати линии: ${parsed.bus_lines.join(", ")}`;
     }
 
+    // A route change runs for a period like an outage does; the feed used to
+    // show none at all (30.07.2026 review). Unusable or absent times degrade to
+    // nulls here exactly as they do for the outage sources.
+    const { start_time, end_time, windows } = normalizeSchedule(parsed.schedule, today);
+
     const submitted = await ingestAlert(env, TAG, CATEGORY, title, content, {
       locations: [],
-      start_time: null,
-      end_time: null,
-      windows: null,
+      start_time,
+      end_time,
+      windows,
       city_wide: true,
       bus_lines: parsed.bus_lines,
     }, `id=${id}`, deadline);

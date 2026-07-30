@@ -16,6 +16,44 @@ import type { AlertWindows } from "./datetime";
 // which is also where every field is coerced or rejected. The zod/JSON layers
 // stay deliberately lenient so a malformed clock never rejects a whole parse.
 
+/**
+ * The `schedule` object, shared by every source that states a time.
+ *
+ * Extracted rather than copied when vt gained times: a route change is
+ * published with the same "from this date to that date, these hours each day"
+ * shape an outage is, and `normalizeSchedule` is one function — two spellings
+ * of the contract feeding it would only drift. Structurally identical to the
+ * literal it replaced, so the JSON handed to the model is unchanged.
+ */
+const SCHEDULE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    from_date: { type: ["string", "null"] },
+    to_date: { type: ["string", "null"] },
+    windows: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          start: { type: ["string", "null"] },
+          end: { type: ["string", "null"] },
+        },
+        required: ["start", "end"],
+      },
+    },
+  },
+  required: ["from_date", "to_date", "windows"],
+} as const;
+
+const scheduleAiSchema = z.object({
+  from_date: z.string().nullable().default(null),
+  to_date: z.string().nullable().default(null),
+  windows: z.array(z.object({
+    start: z.string().nullable().default(null),
+    end: z.string().nullable().default(null),
+  })).default([]),
+}).default({ from_date: null, to_date: null, windows: [] });
+
 export const OUTAGE_JSON_SCHEMA = {
   type: "object",
   properties: {
@@ -31,25 +69,7 @@ export const OUTAGE_JSON_SCHEMA = {
         required: ["location_name", "sublocations", "is_polygon"],
       },
     },
-    schedule: {
-      type: "object",
-      properties: {
-        from_date: { type: ["string", "null"] },
-        to_date: { type: ["string", "null"] },
-        windows: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              start: { type: ["string", "null"] },
-              end: { type: ["string", "null"] },
-            },
-            required: ["start", "end"],
-          },
-        },
-      },
-      required: ["from_date", "to_date", "windows"],
-    },
+    schedule: SCHEDULE_JSON_SCHEMA,
     city_wide: { type: "boolean" },
   },
   required: ["locations", "schedule", "city_wide"],
@@ -61,14 +81,7 @@ export const outageAiSchema = z.object({
     sublocations: z.array(z.string()).default([]),
     is_polygon: z.boolean().default(false),
   })).default([]),
-  schedule: z.object({
-    from_date: z.string().nullable().default(null),
-    to_date: z.string().nullable().default(null),
-    windows: z.array(z.object({
-      start: z.string().nullable().default(null),
-      end: z.string().nullable().default(null),
-    })).default([]),
-  }).default({ from_date: null, to_date: null, windows: [] }),
+  schedule: scheduleAiSchema,
   city_wide: z.boolean().default(false),
 });
 
@@ -97,14 +110,21 @@ export interface ProcessedData {
 
 // ── VT (bus route changes) ───────────────────────────────────────────────────
 
+// A route change runs for a period the same way an outage does ("от 01.08 до
+// 15.08, от 09:00 до 17:00"), and the feed showed it with no time at all — the
+// 30.07.2026 review flagged that. Same `schedule` contract, same
+// normalizeSchedule on the way out; only `locations` is meaningless here,
+// because a route change has no address.
 export const VT_JSON_SCHEMA = {
   type: "object",
   properties: {
     bus_lines: { type: ["array", "null"], items: { type: "string" } },
+    schedule: SCHEDULE_JSON_SCHEMA,
   },
-  required: ["bus_lines"],
+  required: ["bus_lines", "schedule"],
 } as const;
 
 export const vtAiSchema = z.object({
   bus_lines: z.array(z.string()).nullable().default(null),
+  schedule: scheduleAiSchema,
 });
