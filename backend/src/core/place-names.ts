@@ -17,6 +17,8 @@
 // reverse-geocode path; this module is a layer on top for the two call sites
 // that resolve a *place* name (targeting and the map pin).
 
+import regionSeed from "../../seeds/regions.json";
+import streetSeed from "../../seeds/streets.json";
 import type { NamedRow } from "../db/queries";
 import { type GramKey, gramKeys, gramSimilarity, similarity } from "./fuzzy";
 import { distanceKm } from "./geo";
@@ -165,11 +167,37 @@ interface Prepared {
  */
 const preparedRows = new WeakMap<object, Prepared[]>();
 
+/**
+ * Kind and core grams for every *seeded* name, built once at module evaluation.
+ *
+ * Both are derived from the name alone — nothing here needs a row id, a
+ * coordinate, or which table the name came from — and the names are static data
+ * that ships in this bundle anyway. So the work does not belong in a request at
+ * all: module evaluation is charged against the Worker's separate startup budget
+ * (400 ms) rather than the 10 ms an invocation gets, and doing it here also
+ * leaves the regex and tokenizer paths JIT-warm for the first real match. That
+ * first match was costing ~9.7 ms of a 10 ms budget purely because it was the
+ * first; per-row cost was never the problem.
+ *
+ * D1 stays the source of truth for the rows themselves — `prepare` still maps
+ * over what the ref cache read, and any name the seeds do not carry (the two
+ * region_aliases rows from migration 0013, or a re-seed that has not been
+ * deployed yet) is simply computed on demand. Drift costs speed, never accuracy.
+ */
+const seeded = new Map<string, { cls: PlaceClass | null; grams: Set<GramKey> }>();
+for (const { name } of [...regionSeed, ...streetSeed]) {
+  if (seeded.has(name)) continue;
+  const { kind, core } = parseName(name);
+  seeded.set(name, { cls: placeClass(kind), grams: gramKeys(core) });
+}
+
 function prepare(rows: readonly NamedRow[]): Prepared[] {
   const memo = preparedRows.get(rows as object);
   if (memo) return memo;
 
   const prepared = rows.map((row) => {
+    const pre = seeded.get(row.name);
+    if (pre) return { row, cls: pre.cls, grams: pre.grams };
     const { kind, core } = parseName(row.name);
     return { row, cls: placeClass(kind), grams: gramKeys(core) };
   });

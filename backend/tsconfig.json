@@ -9,6 +9,10 @@
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "isolatedModules": true,
+    // core/place-names.ts imports the seed name lists so the per-candidate
+    // matching data is built at module evaluation instead of on the first
+    // alert an isolate handles. See the comment on `seeded` there.
+    "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
