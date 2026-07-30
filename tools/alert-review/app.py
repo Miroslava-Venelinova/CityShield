@@ -570,6 +570,42 @@ def run_command(argv: list[str], timeout: int = 180) -> dict:
 # ── report ────────────────────────────────────────────────────────────────────
 
 
+def ring_points(polygon) -> int:
+    total = 0
+    for ring in polygon if isinstance(polygon, list) else []:
+        if isinstance(ring, list) and len(ring) >= 3:
+            total += sum(1 for point in ring if isinstance(point, list) and len(point) >= 2)
+    return total
+
+
+def polygon_points(geometry, depth: int = 0) -> int:
+    """
+    Vertices across every ring of whatever GeoJSON a location carries: a bare
+    Polygon on stored rows, a FeatureCollection on ones written before the
+    pipeline unwrapped it, and a MultiPolygon in principle.
+
+    Zero means there is no usable geometry, which is worth saying next to
+    `is_polygon`: without a ring the Worker targets that location by name and
+    radius instead, so the two flags disagreeing changes who was notified.
+    """
+    if depth > 5 or not isinstance(geometry, (dict, list)):
+        return 0
+    if isinstance(geometry, list):
+        return sum(polygon_points(item, depth + 1) for item in geometry)
+    if "features" in geometry:
+        return polygon_points(geometry["features"], depth + 1)
+    if "geometry" in geometry:
+        return polygon_points(geometry["geometry"], depth + 1)
+    coordinates = geometry.get("coordinates")
+    if not isinstance(coordinates, list):
+        return 0
+    if geometry.get("type") == "Polygon":
+        return ring_points(coordinates)
+    if geometry.get("type") == "MultiPolygon":
+        return sum(ring_points(polygon) for polygon in coordinates)
+    return 0
+
+
 def summarize() -> dict:
     """
     The whole loaded dataset, never the current filter: a report that silently
@@ -633,6 +669,7 @@ def summarize() -> dict:
                     "lat": location.get("lat"),
                     "lng": location.get("lng"),
                     "is_polygon": bool(location.get("is_polygon")),
+                    "polygon_points": polygon_points(location.get("polygon_geojson")),
                     "region_wide": bool(location.get("region_wide")),
                     "sublocations": [str(s) for s in location.get("sublocations", [])
                                      if isinstance(s, (str, int, float))],
@@ -782,7 +819,14 @@ def render_markdown(summary: dict) -> str:
                        if location["lat"] is not None and location["lng"] is not None
                        else "no coordinates")
                 subs = (" — " + ", ".join(location["sublocations"])) if location["sublocations"] else ""
-                polygon = " · polygon" if location["is_polygon"] else ""
+                # The flag and the geometry decide different things and can
+                # disagree: a ring means everyone inside it was notified, no
+                # ring means the location fell back to name-and-radius.
+                points = location["polygon_points"]
+                if location["is_polygon"]:
+                    polygon = f" · polygon, {points} pts" if points else " · **polygon flagged, no geometry**"
+                else:
+                    polygon = f" · **geometry not flagged**, {points} pts" if points else ""
                 # The streets below were listed but not targeted — say so, or the
                 # line reads as street-level targeting that it deliberately isn't.
                 wide = " · region-wide" if location["region_wide"] else ""

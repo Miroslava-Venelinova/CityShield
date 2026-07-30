@@ -24,8 +24,8 @@ only — no pip install. Nothing here writes to D1: the only statement is a cons
 2. **List and filters** — free text over title and content, plus category, severity, review
    status, issue, important-only, created-date range, and inaccuracy reason.
 3. **Detail** — content as scrollable text, the window in both `24.07.2026 09:00` and its raw
-   stored form, and `locations_json` as a readable list of `name → lat, lng` (each pin links out
-   to OpenStreetMap, which is how you actually check a coordinate) with the pretty-printed JSON
+   stored form, a map of everything the alert targets, and `locations_json` as a readable list of
+   `name → lat, lng` (each pin also links out to OpenStreetMap) with the pretty-printed JSON
    folded underneath.
 4. **Verdict** — one of four, below. Written to `judgments.json` on every judgment, not at the
    end, so closing the tab never costs you the tail of a session.
@@ -49,6 +49,39 @@ nobody is going to fix — so setting either drops both.
 list, has its own filter, and gets its own section at the top of the report. It persists
 immediately if the alert is already judgeable, so a star never depends on remembering to press
 <kbd>Enter</kbd> afterwards.
+
+## The map
+
+*Wrong coordinates* is the one verdict you cannot reach by reading. A district pinned on one of
+its streets looks perfectly reasonable as `43.2085, 27.9142`, and a block polygon means nothing
+at all until you see which streets it actually encloses — so the detail pane draws the alert:
+OpenStreetMap tiles with every location on top, numbered to match the list below it.
+
+- **A blue circle** is a plain pin: the coordinate the Worker matches users against by proximity.
+- **A red ring with a red circle** is a polygon and its centroid. Everyone inside the ring is
+  notified; the centroid is only what the app shows as the pin.
+- **Clicking a location** in the list zooms to it and dims the rest; clicking it again, or
+  **fit**, goes back to all of them. Drag to pan, `+` / `−` to zoom, and drag the bottom edge of
+  the map if it wants to be taller.
+- <kbd>g</kbd> hides the map, and it stays hidden across sessions. Tiles are fetched ~200 ms
+  after an alert settles, so holding <kbd>j</kbd> through the list doesn't pull a screenful per
+  alert on the way past.
+
+The badge next to a location's name says which of the two kinds of targeting actually happened,
+because the flag and the geometry are stored separately and can disagree:
+
+| Badge | |
+|---|---|
+| `polygon · 34 pts` | A ring was built and stored. Everyone inside it was notified. |
+| `polygon flagged, no geometry` | The parse asked for a polygon and the build produced none — the alert fell back to matching that location by name and radius. It reads as street-level targeting and isn't. |
+| `geometry, not flagged` | A ring is stored but `is_polygon` is false, so it was never used. Ingestion normalizes this away today; an old row can still carry it. |
+
+The report says the same thing on each location line, so a finding survives outside the tool.
+
+No mapping library: this tool runs from a checkout with nothing installed, and the browser half
+holds to that rule — the tiles are positioned by hand and the geometry is drawn as SVG over them.
+It is the one thing here that talks to the network from your browser, and what it sends is the
+tile coordinates of the area you are looking at, the same as the `map ↗` links.
 
 ## Issues — the same defect in forty alerts
 
@@ -84,6 +117,7 @@ The point is getting through a few hundred alerts, so nothing needs the mouse:
 | <kbd>1</kbd>–<kbd>8</kbd> | toggle a reason (also flips the verdict to inaccurate) |
 | <kbd>s</kbd> | stamp the selected issue and advance |
 | <kbd>i</kbd> | important |
+| <kbd>g</kbd> | show or hide the map |
 | <kbd>Enter</kbd> | save and advance (<kbd>Ctrl</kbd>+<kbd>Enter</kbd> from the note field) |
 | <kbd>u</kbd> | unreview — drops the judgment |
 | <kbd>/</kbd> | jump to search, <kbd>Esc</kbd> back out |
@@ -157,3 +191,6 @@ Same trust model as `tools/push-tester` and `tools/osm-seed-builder`: the Host h
 to loopback and every call carries the printed token. The queries are read-only, but "read-only"
 still means this process can pull the production alerts table on request, so no other page in
 your browser gets to reach it.
+
+The server itself makes no outbound request but `wrangler d1 execute`. The page fetches map
+tiles; nothing else leaves the machine, and no alert text ever does.

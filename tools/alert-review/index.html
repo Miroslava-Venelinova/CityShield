@@ -9,6 +9,10 @@
     --bg: #12151a; --panel: #1a1f27; --line: #2b323d; --text: #e6e9ef;
     --muted: #98a2b3; --accent: #4f9cf9; --ok: #3fb950; --warn: #d29922; --err: #f85149;
     --star: #e3b341;
+    /* Marker colours are deliberately outside the theme: they have to read on
+       the light OSM tiles in dark mode too, and the list numbers must match
+       what is drawn on the map. */
+    --pin: #1667d0; --poly: #c9361c;
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -92,9 +96,47 @@
   .times { display: flex; gap: 24px; flex-wrap: wrap; margin: 12px 0; }
   .times div small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .times div span { font-size: 15px; }
-  .loc { border-top: 1px solid var(--line); padding: 7px 0; }
+  .loc { border-top: 1px solid var(--line); padding: 7px 0; display: flex; gap: 9px; align-items: flex-start; }
   .loc:first-child { border-top: none; }
+  .loc.pick { cursor: pointer; }
+  .loc.pick:hover { background: rgba(127, 127, 127, .1); }
+  .loc.on { background: rgba(79, 156, 249, .12); }
+  .loc .grow { flex: 1; min-width: 0; }
   .loc .n { font-weight: 600; }
+  /* The list's twin of a map marker, carrying the same number and colour. */
+  .marker {
+    flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; margin-top: 1px;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700;
+    background: var(--pin); color: #fff;
+  }
+  .marker.poly { background: var(--poly); }
+  .marker.blank { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+
+  /* A hand-rolled slippy map: OSM raster tiles positioned absolutely with the
+     geometry drawn over them as SVG. The tiles are light in both themes, so
+     everything inside keeps its own colours rather than the page's. */
+  .map {
+    position: relative; height: 340px; margin: 2px 0 10px; overflow: hidden;
+    border: 1px solid var(--line); border-radius: 8px; background: #e9e5dc;
+    cursor: grab; touch-action: none; resize: vertical;
+  }
+  .map.drag { cursor: grabbing; }
+  .map .layer { position: absolute; inset: 0; }
+  .map img { position: absolute; width: 256px; height: 256px; -webkit-user-drag: none; user-select: none; }
+  /* z-index rather than DOM order: tiles are appended as they come into view,
+     so the overlay would otherwise end up underneath the newest ones. */
+  .map svg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+  .map .ctl { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; flex-direction: column; gap: 4px; }
+  .map .ctl button {
+    width: 30px; height: 27px; padding: 0; font-size: 13px; font-weight: 700;
+    background: rgba(255, 255, 255, .93); color: #1a1f27; border: 1px solid rgba(0, 0, 0, .25);
+  }
+  .map .ctl button:hover:not(:disabled) { background: #fff; filter: none; }
+  .map .attr {
+    position: absolute; right: 0; bottom: 0; z-index: 2; font-size: 10px; padding: 1px 5px;
+    background: rgba(255, 255, 255, .82); color: #333; border-radius: 4px 0 0 0;
+  }
+  .map .attr a { color: #1667d0; }
 
   .reasons { display: grid; gap: 6px; margin-top: 8px; }
   .reason { display: flex; gap: 9px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
@@ -258,7 +300,8 @@
         <div id="empty" class="muted">Load a source, then pick an alert. <kbd>j</kbd> / <kbd>k</kbd>
         move, <kbd>y</kbd> accurate, <kbd>n</kbd> inaccurate, <kbd>m</kbd> not implemented,
         <kbd>o</kbd> old, <kbd>i</kbd> important, <kbd>1</kbd>–<kbd>8</kbd> reasons,
-        <kbd>s</kbd> stamp the selected issue, <kbd>Enter</kbd> save, <kbd>u</kbd> unreview.</div>
+        <kbd>s</kbd> stamp the selected issue, <kbd>g</kbd> map, <kbd>Enter</kbd> save,
+        <kbd>u</kbd> unreview.</div>
 
         <div id="detail" class="hide">
           <div class="head">
@@ -275,7 +318,24 @@
           <h2 style="margin-bottom:6px">Content</h2>
           <div class="body" id="dContent"></div>
 
-          <h2 style="margin:16px 0 6px">Locations</h2>
+          <div class="head" style="margin:16px 0 6px">
+            <h2 style="margin:0">Locations</h2>
+            <button class="ghost" id="mapToggle" style="width:auto;font-size:12px;padding:2px 9px">
+              Hide map <kbd>g</kbd></button>
+          </div>
+          <div id="mapWrap">
+            <div class="map" id="mapCanvas">
+              <div class="layer" id="mapLayer"></div>
+              <div class="ctl">
+                <button id="mapIn" title="Zoom in">+</button>
+                <button id="mapOut" title="Zoom out">−</button>
+                <button id="mapFit" title="Fit every location" style="font-size:11px">fit</button>
+              </div>
+              <div class="attr">© <a href="https://www.openstreetmap.org/copyright"
+                target="_blank" rel="noreferrer noopener">OpenStreetMap</a> contributors</div>
+            </div>
+            <div class="hint" id="mapNote" style="margin:0 0 10px"></div>
+          </div>
           <div id="dLocations"></div>
           <details style="margin-top:10px">
             <summary class="muted" style="cursor:pointer;font-size:13px">locations_json</summary>
@@ -441,6 +501,7 @@ async function init() {
 
   $("note").maxLength = config.max_note_length;
   $("issueDetail").maxLength = config.max_note_length;
+  $("mapToggle").innerHTML = `${showMap ? "Hide" : "Show"} map <kbd>g</kbd>`;
 
   applyDataset(await api("/api/alerts"));
 }
@@ -741,6 +802,8 @@ function renderDetail(alert) {
 
   $("dContent").textContent = alert.content || "(empty)";
 
+  renderMap(alert);
+
   if (alert.locations_error) {
     $("dLocations").innerHTML = `<div class="err">${esc(alert.locations_error)}</div>
       <div class="hint">The Worker degrades an alert like this to no locations at all,
@@ -749,27 +812,276 @@ function renderDetail(alert) {
     $("dLocations").innerHTML = '<div class="muted">No locations. The alert either went out '
       + 'city-wide or was stored without notifying anyone (SPEC §1.5).</div>';
   } else {
-    $("dLocations").innerHTML = alert.locations.map((loc) => {
-      const hasPin = typeof loc.lat === "number" && typeof loc.lng === "number";
+    $("dLocations").innerHTML = alert.locations.map((loc, index) => {
+      const shape = mapShapes[index];
+      const hasPin = !!shape.pin;
       const pin = hasPin
         ? `<span class="mono">${loc.lat}, ${loc.lng}</span>
            <a href="https://www.openstreetmap.org/?mlat=${loc.lat}&mlon=${loc.lng}#map=16/${loc.lat}/${loc.lng}"
               target="_blank" rel="noreferrer noopener">map ↗</a>`
         : '<span class="warn">no coordinates — nobody is matched by proximity</span>';
       const subs = (loc.sublocations || []).filter((s) => typeof s === "string");
-      return `<div class="loc">
-        <div class="n">${esc(loc.location_name) || '<span class="muted">(unnamed)</span>'}
-          ${loc.is_polygon ? '<span class="badge">polygon</span>' : ""}
-          ${loc.region_wide ? '<span class="badge">region-wide</span>' : ""}</div>
-        <div>${pin}</div>
-        ${subs.length ? `<div class="muted">${esc(subs.join(" · "))}</div>` : ""}
+      return `<div class="loc${shape.drawable ? " pick" : ""}" data-loc="${index}">
+        <span class="marker ${shape.rings.length ? "poly" : ""}${hasPin ? "" : " blank"}"
+          >${hasPin ? shape.n : "–"}</span>
+        <div class="grow">
+          <div class="n">${esc(loc.location_name) || '<span class="muted">(unnamed)</span>'}
+            ${polygonBadge(loc, shape)}
+            ${loc.region_wide ? '<span class="badge">region-wide</span>' : ""}</div>
+          <div>${pin}</div>
+          ${subs.length ? `<div class="muted">${esc(subs.join(" · "))}</div>` : ""}
+        </div>
       </div>`;
     }).join("");
+    $("dLocations").querySelectorAll("[data-loc]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (!e.target.closest("a")) focusLocation(Number(el.dataset.loc));
+      }));
   }
 
   $("dJson").textContent = alert.locations_error
     ? alert.locations_json
     : JSON.stringify(alert.locations, null, 2);
+}
+
+/**
+ * `is_polygon` and the geometry are stored together but can disagree, and the
+ * difference decides who gets notified: with a polygon the Worker notifies
+ * everyone inside the ring, without one it falls back to matching the location
+ * by name and radius. Say which of the two actually happened.
+ */
+function polygonBadge(loc, shape) {
+  if (loc.is_polygon && shape.rings.length) {
+    const points = shape.rings.reduce((n, ring) => n + ring.length, 0);
+    return `<span class="badge">polygon · ${points} pts</span>`;
+  }
+  if (loc.is_polygon) return '<span class="badge warning">polygon flagged, no geometry</span>';
+  return shape.rings.length ? '<span class="badge warning">geometry, not flagged</span>' : "";
+}
+
+// ── map ──────────────────────────────────────────────────────────────────────
+// Judging a pin means seeing where it landed, and a block polygon only means
+// something against the streets around it — so the locations are drawn on OSM
+// tiles rather than only listed. Hand-rolled rather than Leaflet: this tool
+// runs from a checkout with nothing installed and the browser half keeps to
+// that rule. Nothing but tile coordinates leaves the machine.
+
+const TILE = 256;
+const MIN_ZOOM = 10, MAX_ZOOM = 18, POINT_ZOOM = 16;
+const FIT_PAD = 56;     // px of slack left around the fitted geometry
+const MAP_DELAY = 180;  // ms; holding j must not fetch a screenful of tiles per alert
+// The literal twins of --pin / --poly: var() in an SVG presentation attribute
+// is not reliable, and these have to match the numbers in the list.
+const PIN_COLOR = "#1667d0", POLY_COLOR = "#c9361c";
+
+let mapShapes = [];   // one entry per location of the current alert, in list order
+let mapView = null;   // { z, cx, cy } — centre in tile units at zoom z
+let mapFocus = -1;    // index of the focused location, or -1 for all of them
+let mapTimer = 0, mapResizeTimer = 0, mapDrag = null;
+let showMap = localStorage.getItem("alertReviewMap") !== "0";
+
+const lngToX = (lng, z) => ((lng + 180) / 360) * 2 ** z;
+const latToY = (lat, z) => {
+  const s = Math.sin(Math.max(-85, Math.min(85, lat)) * Math.PI / 180);
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 2 ** z;
+};
+
+/**
+ * Every ring in whatever GeoJSON a location carries. Stored rows hold a bare
+ * Polygon geometry, but the ingestion pipeline builds a FeatureCollection and
+ * rows written before it was unwrapped still hold one — so both are accepted,
+ * as is a MultiPolygon.
+ */
+function collectRings(node, out = [], depth = 0) {
+  if (!node || typeof node !== "object" || depth > 5) return out;
+  if (Array.isArray(node)) {
+    for (const item of node) collectRings(item, out, depth + 1);
+    return out;
+  }
+  if (node.features) return collectRings(node.features, out, depth + 1);
+  if (node.geometry) return collectRings(node.geometry, out, depth + 1);
+  const coordinates = node.coordinates;
+  if (!Array.isArray(coordinates)) return out;
+  if (node.type === "Polygon") pushRings(coordinates, out);
+  else if (node.type === "MultiPolygon") for (const polygon of coordinates) pushRings(polygon, out);
+  return out;
+}
+
+function pushRings(polygon, out) {
+  for (const ring of polygon || []) {
+    const points = (ring || []).filter((p) =>
+      Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number");
+    if (points.length >= 3) out.push(points);  // [lng, lat], GeoJSON order
+  }
+}
+
+function shapesFor(alert) {
+  return (alert.locations || []).map((loc, index) => {
+    const rings = collectRings(loc.polygon_geojson);
+    const pin = typeof loc.lat === "number" && typeof loc.lng === "number" ? [loc.lng, loc.lat] : null;
+    return { n: index + 1, rings, pin, drawable: !!(pin || rings.length) };
+  });
+}
+
+function boundsOf(shapes) {
+  const box = { minLng: Infinity, maxLng: -Infinity, minLat: Infinity, maxLat: -Infinity, any: false };
+  const add = ([lng, lat]) => {
+    box.any = true;
+    box.minLng = Math.min(box.minLng, lng); box.maxLng = Math.max(box.maxLng, lng);
+    box.minLat = Math.min(box.minLat, lat); box.maxLat = Math.max(box.maxLat, lat);
+  };
+  for (const shape of shapes) {
+    if (shape.pin) add(shape.pin);
+    for (const ring of shape.rings) for (const point of ring) add(point);
+  }
+  return box.any ? box : null;
+}
+
+/** Highest zoom at which everything given still fits the canvas. */
+function fitTo(shapes) {
+  const box = boundsOf(shapes);
+  const canvas = $("mapCanvas");
+  if (!box || !canvas.clientWidth) return null;
+  const width = Math.max(canvas.clientWidth - FIT_PAD, 64);
+  const height = Math.max(canvas.clientHeight - FIT_PAD, 64);
+
+  let z = MAX_ZOOM;
+  for (; z > MIN_ZOOM; z--) {
+    const w = (lngToX(box.maxLng, z) - lngToX(box.minLng, z)) * TILE;
+    const h = (latToY(box.minLat, z) - latToY(box.maxLat, z)) * TILE;
+    if (w <= width && h <= height) break;
+  }
+  // A single pin fits at every zoom; 18 would be a rooftop with no context.
+  if (box.maxLng - box.minLng < 1e-6 && box.maxLat - box.minLat < 1e-6) z = Math.min(z, POINT_ZOOM);
+
+  return {
+    z,
+    cx: (lngToX(box.minLng, z) + lngToX(box.maxLng, z)) / 2,
+    cy: (latToY(box.minLat, z) + latToY(box.maxLat, z)) / 2,
+  };
+}
+
+function renderMap(alert) {
+  mapShapes = shapesFor(alert);
+  mapFocus = -1;
+  const drawable = mapShapes.filter((shape) => shape.drawable);
+
+  // Nothing to say about an alert with no locations at all — that case is the
+  // list's to explain, not the map's.
+  $("mapWrap").classList.toggle("hide", !alert.locations.length);
+  $("mapToggle").classList.toggle("hide", !alert.locations.length);
+  $("mapCanvas").classList.toggle("hide", !showMap || !drawable.length);
+  $("mapNote").textContent = !showMap ? ""
+    : !drawable.length ? "No coordinates on any location — nothing to draw."
+    : "Drag to pan; click a location below to focus it.";
+
+  clearTimeout(mapTimer);
+  if (!showMap || !drawable.length) { mapView = null; return; }
+  // Deferred, so walking the list with j/k doesn't pull tiles for every alert
+  // it passes through.
+  mapTimer = setTimeout(() => {
+    mapView = fitTo(mapShapes);
+    drawMap();
+  }, MAP_DELAY);
+}
+
+function drawMap() {
+  const canvas = $("mapCanvas"), layer = $("mapLayer");
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  if (!mapView || !width || !height) return;
+
+  const { z } = mapView;
+  const originX = mapView.cx * TILE - width / 2;   // world px at the canvas's left edge
+  const originY = mapView.cy * TILE - height / 2;
+  const world = 2 ** z;
+
+  // Tiles are reused across pans, zooms and alerts — rebuilding the elements
+  // refetches every tile and flickers. Keys are absolute, so a kept tile only
+  // ever needs repositioning.
+  const have = new Map([...layer.querySelectorAll("img")].map((img) => [img.dataset.key, img]));
+  const keep = new Set();
+  for (let ty = Math.floor(originY / TILE); ty <= Math.floor((originY + height) / TILE); ty++) {
+    if (ty < 0 || ty >= world) continue;
+    for (let tx = Math.floor(originX / TILE); tx <= Math.floor((originX + width) / TILE); tx++) {
+      const key = `${z}/${tx}/${ty}`;
+      keep.add(key);
+      let img = have.get(key);
+      if (!img) {
+        img = document.createElement("img");
+        img.dataset.key = key;
+        img.alt = "";
+        img.src = `https://tile.openstreetmap.org/${z}/${((tx % world) + world) % world}/${ty}.png`;
+        layer.appendChild(img);
+      }
+      img.style.left = `${Math.round(tx * TILE - originX)}px`;
+      img.style.top = `${Math.round(ty * TILE - originY)}px`;
+    }
+  }
+  for (const [key, img] of have) if (!keep.has(key)) img.remove();
+
+  drawShapes(originX, originY, z);
+}
+
+function drawShapes(originX, originY, z) {
+  const px = (lng) => (lngToX(lng, z) * TILE - originX).toFixed(1);
+  const py = (lat) => (latToY(lat, z) * TILE - originY).toFixed(1);
+
+  const parts = [];
+  mapShapes.forEach((shape, index) => {
+    if (!shape.drawable) return;
+    const dim = mapFocus >= 0 && mapFocus !== index;
+    const on = mapFocus === index;
+    for (const ring of shape.rings) {
+      const d = ring.map((p, i) => `${i ? "L" : "M"}${px(p[0])} ${py(p[1])}`).join(" ") + " Z";
+      parts.push(`<path d="${d}" fill="${POLY_COLOR}" fill-opacity="${dim ? .05 : .16}"
+        stroke="${POLY_COLOR}" stroke-opacity="${dim ? .35 : 1}" stroke-width="${on ? 3 : 2}"
+        stroke-linejoin="round"/>`);
+    }
+    if (!shape.pin) return;
+    const [x, y] = [px(shape.pin[0]), py(shape.pin[1])];
+    parts.push(`<g opacity="${dim ? .4 : 1}">
+      <circle cx="${x}" cy="${y}" r="${on ? 12 : 10}" fill="${shape.rings.length ? POLY_COLOR : PIN_COLOR}"
+        stroke="#fff" stroke-width="2"/>
+      <text x="${x}" y="${y}" fill="#fff" font-size="11" font-weight="700"
+        text-anchor="middle" dominant-baseline="central">${shape.n}</text></g>`);
+  });
+
+  let svg = $("mapLayer").querySelector("svg");
+  if (!svg) {
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    $("mapLayer").appendChild(svg);
+  }
+  svg.innerHTML = parts.join("");
+}
+
+/** Zoom to one location, or back to all of them when it is already focused. */
+function focusLocation(index) {
+  const shape = mapShapes[index];
+  if (!shape || !shape.drawable) return;
+  if (!showMap) toggleMap(true);
+  mapFocus = mapFocus === index ? -1 : index;
+  $("dLocations").querySelectorAll("[data-loc]").forEach((el) =>
+    el.classList.toggle("on", Number(el.dataset.loc) === mapFocus));
+  clearTimeout(mapTimer);
+  mapView = fitTo(mapFocus < 0 ? mapShapes : [shape]) || mapView;
+  drawMap();
+}
+
+function zoomMap(delta) {
+  if (!mapView) return;
+  const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, mapView.z + delta));
+  if (z === mapView.z) return;
+  const scale = 2 ** (z - mapView.z);
+  mapView = { z, cx: mapView.cx * scale, cy: mapView.cy * scale };
+  drawMap();
+}
+
+function toggleMap(on) {
+  showMap = on === undefined ? !showMap : on;
+  localStorage.setItem("alertReviewMap", showMap ? "1" : "0");
+  $("mapToggle").innerHTML = `${showMap ? "Hide" : "Show"} map <kbd>g</kbd>`;
+  const alert = alerts.find((a) => a.id === currentId);
+  if (alert) renderDetail(alert);
 }
 
 // ── judging ──────────────────────────────────────────────────────────────────
@@ -947,6 +1259,50 @@ $("issueCancel").addEventListener("click", closeIssueForm);
 $("reportMd").addEventListener("click", () => report("md"));
 $("reportJson").addEventListener("click", () => report("json"));
 
+$("mapToggle").addEventListener("click", () => toggleMap());
+$("mapIn").addEventListener("click", () => zoomMap(1));
+$("mapOut").addEventListener("click", () => zoomMap(-1));
+$("mapFit").addEventListener("click", () => {
+  mapFocus = -1;
+  $("dLocations").querySelectorAll("[data-loc]").forEach((el) => el.classList.remove("on"));
+  mapView = fitTo(mapShapes) || mapView;
+  drawMap();
+});
+
+// Pan by translating the whole layer and only re-tiling on release: retiling on
+// every pointermove would refetch the map as it moves.
+$("mapCanvas").addEventListener("pointerdown", (e) => {
+  if (!mapView || e.button !== 0 || e.target.closest("button, a")) return;
+  mapDrag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0 };
+  $("mapCanvas").setPointerCapture(e.pointerId);
+  $("mapCanvas").classList.add("drag");
+});
+$("mapCanvas").addEventListener("pointermove", (e) => {
+  if (!mapDrag) return;
+  mapDrag.dx = e.clientX - mapDrag.x;
+  mapDrag.dy = e.clientY - mapDrag.y;
+  $("mapLayer").style.transform = `translate(${mapDrag.dx}px, ${mapDrag.dy}px)`;
+});
+for (const event of ["pointerup", "pointercancel"]) {
+  $("mapCanvas").addEventListener(event, () => {
+    if (!mapDrag) return;
+    $("mapLayer").style.transform = "";
+    $("mapCanvas").classList.remove("drag");
+    if (mapView) {
+      mapView.cx -= mapDrag.dx / TILE;
+      mapView.cy -= mapDrag.dy / TILE;
+    }
+    mapDrag = null;
+    drawMap();
+  });
+}
+
+// Covers both the window resizing and the canvas's own resize handle.
+new ResizeObserver(() => {
+  clearTimeout(mapResizeTimer);
+  mapResizeTimer = setTimeout(drawMap, 120);
+}).observe($("mapCanvas"));
+
 // The point of the tool is going through a lot of alerts, so every judgment is
 // reachable without the mouse. Typing in a field is never a shortcut.
 document.addEventListener("keydown", (e) => {
@@ -973,6 +1329,7 @@ document.addEventListener("keydown", (e) => {
     case "m": setVerdict("unimplemented"); break;
     case "o": save("stale"); break;
     case "i": toggleImportant(); break;
+    case "g": toggleMap(); break;
     case "s": stampActive(); break;
     case "u": unreview(); break;
     case "Enter": e.preventDefault(); save(); break;
