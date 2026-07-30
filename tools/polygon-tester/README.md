@@ -34,10 +34,11 @@ The bundle is rebuilt automatically whenever anything under `backend/src` change
 constant in `polygon.ts` and pressing **Build** already runs the new code. The UI says
 `Rebuilt the Worker bundle` when that happens.
 
-Two things the Worker does that this deliberately does not: resolve names against D1 (it uses
-`tools/osm-seed-builder/output/streets.json`, the same data the seed writes into the table), and
-enforce the 10 ms CPU budget. A setting that looks fine here can still be too slow to ship —
-`test/polygon.spec.ts` and a `wrangler tail` are what settle that.
+One thing the Worker does that this deliberately does not: resolve names against D1. It uses
+`tools/osm-seed-builder/output/streets.json`, the same data the seed writes into the table.
+
+CPU it does report, but only as a shape — see **worst burst** below. A setting that looks fine
+in Node can still be too slow on a cold isolate; `wrangler tail`'s `cpuTime` settles that.
 
 ## The loop
 
@@ -69,14 +70,20 @@ Click a row in either table to zoom to it and dim the rest; click again, or **Fi
 to go back. Drag to pan, scroll or <kbd>+</kbd>/<kbd>−</kbd> to zoom, drag the map's bottom edge
 to make it taller.
 
+**Worst burst**, next to the enclosed-area count, is the longest uninterrupted
+stretch of synchronous work in the run. The free plan caps *that* at 10 ms, not the total,
+which is why `buildBlockPolygon` yields between its stages (SPEC §1.9). It is measured in
+this tool's Node process, so read it as a shape rather than as the platform's accounting —
+a cold Worker isolate costs several times more, and `wrangler tail`'s `cpuTime` is the truth.
+
 **Mean width** is `2·area/perimeter`. A gap between two carriageways measures ~10 m; a real block
 runs to a few hundred. It is the fastest way to recognise a sliver that slipped through.
 
 **The shares** are of the block's *own* boundary, counted from the ring samples — the number
 `maxSingleStreetCoverage` is decided on. They do not add to 100%: a corner sample can be near two
 streets, and a stretch bounded by no listed street is near none. Over the current fixtures real
-blocks give their busiest street 28–42% and every sliver gives it 97–100%, which is why 0.7 sits
-where it does.
+blocks give their busiest street 17–42% and every rejected sliver gives it 90–100%, which is why
+0.7 sits where it does.
 
 ## The knobs
 
@@ -87,7 +94,7 @@ Worker ships** — when a setting turns out to be right, edit `polygon.ts` and r
 
 | Knob | |
 |---|---|
-| `extensionDist` | How far each centreline is stretched past its ends, to close a corner OSM left open. Long values *invent* blocks: at the inherited 200 m this fabricated a 17.4 ha one for Владислав Варненчик. |
+| `extensionDist` | How far each centreline is stretched past its ends, to close a corner OSM left open. Too short and a real block never closes: Левски needs 50 m, Русе 150, Варненчик 200. Sweep it — a block whose area barely moves from 50 m to 500 m is real; one that grows with the stub is not. |
 | `roadHalfWidth` | Half the band a centreline becomes. This is what fuses a boulevard's two carriageways, and the primary defence against slivers. Too wide starts eating small blocks — 25 m takes set 1 from 2.06 ha to 1.19 ha. |
 | `clipMargin` | Slack around the streets' reach. Everything outside is dropped before any geometry runs. |
 | `sampleStep` | Spacing of the ring samples the shares are counted from. Halving it doubles the most CPU-heavy loop in the Worker. |
@@ -109,8 +116,9 @@ the map fits its dropped fragments too, which is what makes the spread obvious.
 
 ## Presets
 
-`presets.json` (tracked) holds the five cases the current thresholds were fitted to — two real
-blocks, three sets that correctly enclose nothing. Selecting one loads its streets, its fixture
+`presets.json` (tracked) holds the five cases the current thresholds were fitted to. All five
+enclose a real block of 2–39 ha, and all but one also produce a carriageway sliver that is
+rejected — which is the pair the thresholds have to get right. Selecting one loads its streets, its fixture
 and its knobs and builds immediately, so "did my change break a case that used to work" is one
 click per case. **Save** adds or overwrites one under the label in the box.
 

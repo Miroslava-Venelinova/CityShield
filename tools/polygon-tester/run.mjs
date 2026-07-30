@@ -134,7 +134,7 @@ try {
 
   if (action === "build") {
     const ways = worker.groupWaysByName(job.document || {});
-    const result = worker.buildBlockPolygon(ways, queryNames, { ...job.options, debug: true });
+    const result = await worker.buildBlockPolygon(ways, queryNames, { ...job.options, debug: true });
     done({
       resolved,
       queryNames,

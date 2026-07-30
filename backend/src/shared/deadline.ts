@@ -73,3 +73,26 @@ export async function sleepWithin(ms: number, deadline?: number): Promise<boolea
   await new Promise((resolve) => setTimeout(resolve, ms));
   return true;
 }
+
+/**
+ * End the current CPU burst and start a new one.
+ *
+ * The free plan's 10 ms is not an invocation total — it bounds one uninterrupted
+ * synchronous stretch between two I/O awaits (§1.1; ticks reporting 94 ms of
+ * `cpuTime` complete fine). So a computation too long to run in one go does not
+ * need a bigger budget, it needs to stop being one go. Awaiting this hands
+ * control back to the runtime, which charges what has run so far and starts the
+ * next stretch from zero.
+ *
+ * This is not a substitute for making the work smaller — every yield is a task
+ * hop, and slicing a genuinely quadratic loop only spreads the same cost over
+ * more of them. Use it where the work is irreducible and already close to the
+ * ceiling, which in this Worker means the JSTS pipeline in ingestion/polygon.ts.
+ *
+ * `setTimeout` rather than `scheduler.wait`: both suspend the isolate, and this
+ * one also runs under plain Node, which is what lets tools/polygon-tester
+ * execute the very same function.
+ */
+export function yieldBurst(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}

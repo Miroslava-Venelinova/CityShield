@@ -225,7 +225,7 @@ Each of these has a trigger; none is worth doing before it fires.
 | Item | Do it when |
 |---|---|
 | In-memory trigram index for the fuzzy matcher | `bestMatch` — not `place-names` — shows up as a burst in `wrangler tail`. Largely overtaken: the matcher's cold cost is now 1.27 ms because the per-name data is built at startup (SPEC.md §1.3), and an index would be built per isolate. D1-stored trigrams were evaluated and rejected |
-| Workers Paid ($5/mo, 30 s CPU) | Polygon building actually exceeds the budget, not before. Note the 30.07.2026 outage did **not** need it: a 10 ms *burst* limit is not raised usefully by a plan that grants more total CPU, and the burst was avoidable work |
+| Workers Paid ($5/mo, 30 s CPU) | A single irreducible operation exceeds the 10 ms *burst* ceiling, not before. Polygon building came close on 30.07.2026 — buffering the road network doubled its cost — and was solved by yielding between stages instead, worst cold burst 14 → 6 ms. SPEC §1.9 lists exactly what the paid plan would let us delete, and what stays regardless. Note the 30.07.2026 outage did **not** need it either: more total CPU does not raise a burst ceiling, and that burst was avoidable work |
 | Granting the wrangler token observability scope | Before the next incident. Without it, historical Worker logs cannot be queried at all and diagnosis costs one 15-minute cron cycle per data point (SPEC.md §3.8) |
 | AI Gateway for request logs | Debugging an AI-quality problem that the current logs cannot explain |
 | Paid/self-hosted map tiles | Traffic grows enough to matter under the OSM tile usage policy |

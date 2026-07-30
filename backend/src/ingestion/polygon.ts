@@ -14,7 +14,7 @@ import DistanceOp from "jsts/org/locationtech/jts/operation/distance/DistanceOp.
 import { bestMatch, POLYGON_RESOLVE_THRESHOLD } from "../core/fuzzy";
 import { getStreets } from "../db/queries";
 import type { Env } from "../env";
-import { abortIn, expired, sleepWithin } from "../shared/deadline";
+import { abortIn, expired, sleepWithin, yieldBurst } from "../shared/deadline";
 
 const factory = new GeometryFactory();
 
@@ -462,6 +462,14 @@ type LngLat = [number, number];
 export interface BlockPolygonDebug {
   /** The street the clip window is anchored on — the shortest of the set. */
   anchorStreet: string;
+  /**
+   * Milliseconds of synchronous work in each stretch between the yields, in
+   * order. The free plan caps the *largest* of these at 10 ms, not their sum,
+   * so this is the number the pipeline lives or dies by — measured wherever the
+   * tester happens to run, which is not workerd, so read it as a shape rather
+   * than as the platform's own accounting. `wrangler tail` gives that.
+   */
+  bursts: number[];
   clipRing: LngLat[];
   streets: Array<{ name: string; kept: LngLat[][]; dropped: LngLat[][] }>;
   /** Exterior rings of the buffered road network the blocks are cut from. */
@@ -478,11 +486,28 @@ export interface BlockPolygonDebug {
   }>;
 }
 
-export function buildBlockPolygon(
+/**
+ * Async purely to fit the CPU budget, never for I/O — every input is already in
+ * memory by the time it is called.
+ *
+ * This is the most CPU-heavy code in the Worker and the free plan caps one
+ * uninterrupted synchronous stretch at 10 ms (§1.1). Cutting blocks out of
+ * buffered road bands rather than bare centrelines roughly doubled the cost —
+ * measured on the Сахаров fixture, 4.2 → 8.6 ms p90 — which left the whole
+ * pipeline inside a single burst with about a millisecond to spare, on a warm
+ * dev machine. A cold isolate has less, and an exceeded burst kills the tick
+ * silently: the logs array is dropped with it.
+ *
+ * So the pipeline `await`s between its expensive stages. Nothing waits on
+ * anything; each yield just ends a burst and starts a new one, and the invocation
+ * has minutes of wall clock to spend. See yieldBurst, and §1.9 for what a paid
+ * plan would let us delete.
+ */
+export async function buildBlockPolygon(
   waysByName: WaysByName,
   streetNames: string[],
   options: BlockPolygonOptions = {},
-): BlockPolygonResult {
+): Promise<BlockPolygonResult> {
   const {
     extensionDist, sampleStep, roadHalfWidth, clipMargin,
     maxSingleStreetCoverage, minTouchSamples,
@@ -491,8 +516,25 @@ export function buildBlockPolygon(
   // so the touch test has to reach exactly that far — plus the slack.
   const touchTolerance = roadHalfWidth + TOUCH_SLACK_M;
   const dbg: BlockPolygonDebug | null = options.debug
-    ? { anchorStreet: "", clipRing: [], streets: [], roads: [], candidates: [] }
+    ? { anchorStreet: "", bursts: [], clipRing: [], streets: [], roads: [], candidates: [] }
     : null;
+
+  // Close the current burst and open the next, recording what the closed one
+  // cost when the tester is watching. `Date.now()` advances at I/O boundaries
+  // in workerd rather than continuously, so the reading is only meaningful in
+  // the tester's Node process — which is the only place that asks for it.
+  let burstStart = Date.now();
+  const breakBurst = async () => {
+    if (dbg) dbg.bursts.push(Date.now() - burstStart);
+    await yieldBurst();
+    burstStart = Date.now();
+  };
+  /** Close the final stretch. Every return that carries `debug` goes through it. */
+  const sealed = (): { debug: BlockPolygonDebug } | Record<string, never> => {
+    if (!dbg) return {};
+    dbg.bursts.push(Date.now() - burstStart);
+    return { debug: dbg };
+  };
   // Anchor projection at the first coordinate seen.
   let anchor: [number, number] | null = null;
   for (const lines of waysByName.values()) {
@@ -588,9 +630,11 @@ export function buildBlockPolygon(
     return {
       polygon: null,
       reason: `only ${streetGeoms.size} streets near the block after clipping`,
-      ...(dbg ? { debug: dbg } : {}),
+      ...sealed(),
     };
   }
+
+  await breakBurst();
 
   // 3. Extend the centrelines so they cross rather than stop short.
   const extended = new Map<string, any>();
@@ -599,8 +643,29 @@ export function buildBlockPolygon(
   // 4. Widen each street into a band and union them into one road network. The
   //    blocks are then its holes — see ROAD_HALF_WIDTH_M for why this replaced
   //    polygonizing the bare centrelines.
-  const roads = UnaryUnionOp.union(factory.createGeometryCollection(
-    [...extended.values()].map((geom) => BufferOp.bufferOp(geom, roadHalfWidth))));
+  //
+  //    Buffering is the single most expensive step, and it is per street, so a
+  //    burst boundary goes between them: a set of four boulevards costs about
+  //    the same as everything else in this function put together, and a street
+  //    is the smallest slice that can be taken without holding a half-built
+  //    band across the yield.
+  const bands: any[] = [];
+  for (const geom of extended.values()) {
+    bands.push(BufferOp.bufferOp(geom, roadHalfWidth));
+    await breakBurst();
+  }
+
+  //    Unioned by folding rather than in one cascaded call over the collection.
+  //    Cascading is the faster of the two in total, and that is the wrong thing
+  //    to optimise: on a cold isolate the single call was the largest burst in
+  //    the whole pipeline (12 ms on Сахаров, over the ceiling on its own).
+  //    Folding costs more overall and the invocation has minutes of wall clock
+  //    to pay it out of.
+  let roads = bands[0];
+  for (let i = 1; i < bands.length; i++) {
+    roads = UnaryUnionOp.union(factory.createGeometryCollection([roads, bands[i]]));
+    await breakBurst();
+  }
 
   const rawPolygons: any[] = [];
   for (let i = 0; i < roads.getNumGeometries(); i++) {
@@ -620,6 +685,14 @@ export function buildBlockPolygon(
   const extendedEntries = [...extended.entries()];
   let slivers = 0; // rejected for single-street dominance — reported below
   for (const poly of rawPolygons) {
+    // A burst per face *and* per street within it. This is the other half of
+    // the cost — a boulevard-long face carries the most samples and is measured
+    // against every street — and unlike buffering it scales with how many areas
+    // the streets happen to enclose, which the input cannot be checked for in
+    // advance. One face against four streets took 11 ms cold; one street's
+    // worth of it is a quarter of that.
+    await breakBurst();
+
     // Sample (and wrap into Points) once per polygon, then reuse across streets.
     const samples = samplesAlongRing(poly.getExteriorRing(), sampleStep)
       .map((c) => factory.createPoint(c));
@@ -631,7 +704,10 @@ export function buildBlockPolygon(
     const streets: string[] = [];
     const coverage: BlockPolygonDebug["candidates"][number]["coverage"] = [];
     let dominated = false;
+    let first = true;
     for (const [name, geom] of extendedEntries) {
+      if (!first) await breakBurst();
+      first = false;
       const hits = countSamplesNearStreet(
         samples, geom, maxHits, touchTolerance, minTouchSamples, !!dbg);
       if (dbg) coverage.push({ name, hits, share: hits / samples.length });
@@ -680,7 +756,7 @@ export function buildBlockPolygon(
         : slivers === rawPolygons.length
           ? `all ${slivers} enclosed area(s) were bounded by a single street`
           : `none of ${rawPolygons.length} enclosed area(s) was bounded by ≥2 distinct streets`,
-      ...(dbg ? { debug: dbg } : {}),
+      ...sealed(),
     };
   }
 
@@ -697,7 +773,7 @@ export function buildBlockPolygon(
   }
 
   return {
-    ...(dbg ? { debug: dbg } : {}),
+    ...sealed(),
     polygon: {
       type: "FeatureCollection",
       features: [{
@@ -735,7 +811,7 @@ export async function buildPolygonForStreets(
     }
 
     const ways = await fetchStreetWays(env, resolved, deadline);
-    const result = buildBlockPolygon(ways, resolved);
+    const result = await buildBlockPolygon(ways, resolved);
     if (!result.polygon) console.warn(`[polygon] no polygon: ${result.reason}`);
     return result.polygon;
   } catch (e) {
@@ -743,3 +819,59 @@ export async function buildPolygonForStreets(
     return null;
   }
 }
+
+// ── Warm-up ──────────────────────────────────────────────────────────────────
+
+/**
+ * Run the whole JSTS pipeline once, on a 100 m square, at module evaluation.
+ *
+ * The 30.07.2026 outage was first-execution cost, not per-row cost: code that
+ * runs in 0.1 ms warm cost 6.8 ms the first time an isolate reached it, which
+ * on its own exceeded the burst ceiling. JSTS behaves the same way here — cold,
+ * the first `BufferOp` costs 9 ms against 3 ms for the next one, and the union
+ * and the distance loop are worse. Splitting the pipeline into bursts cannot
+ * help with that, because the warm-up lands inside whichever burst happens to
+ * touch a code path first.
+ *
+ * Module evaluation is charged against the separate **400 ms startup budget**
+ * that `wrangler deploy` reports, not against a tick, so paying it here is a
+ * real fix rather than a shuffle — the same reasoning that moved the place
+ * matcher's per-name setup to module scope in 9a5776e.
+ *
+ * The square is chosen to reach every operation the real pipeline uses,
+ * including the interior ring the blocks come from. It must never be able to
+ * break the module: a Worker that fails to evaluate serves nothing at all,
+ * and an unwarmed pipeline is merely slower.
+ */
+function warmJstsPipeline(): void {
+  try {
+    const corners = [[0, 0], [100, 0], [100, 100], [0, 100]] as const;
+    const sides = corners.map((from, i) => {
+      const to = corners[(i + 1) % corners.length]!;
+      return lineStringFromXY([[from[0], from[1]], [to[0], to[1]]]);
+    });
+
+    const extended = sides.map((side) => extendGeometry(mergeLines([side]), EXTENSION_DIST_M));
+    let roads = BufferOp.bufferOp(extended[0]!, ROAD_HALF_WIDTH_M);
+    for (let i = 1; i < extended.length; i++) {
+      roads = UnaryUnionOp.union(factory.createGeometryCollection(
+        [roads, BufferOp.bufferOp(extended[i]!, ROAD_HALF_WIDTH_M)]));
+    }
+
+    for (let i = 0; i < roads.getNumGeometries(); i++) {
+      const part = roads.getGeometryN(i);
+      if (typeof part.getNumInteriorRing !== "function") continue;
+      for (let h = 0; h < part.getNumInteriorRing(); h++) {
+        const hole = ringToPolygon(part.getInteriorRingN(h));
+        const samples = samplesAlongRing(hole.getExteriorRing(), SAMPLE_STEP_M)
+          .map((c) => factory.createPoint(c));
+        countSamplesNearStreet(samples, extended[0]!, samples.length,
+          ROAD_HALF_WIDTH_M + TOUCH_SLACK_M, MIN_TOUCH_SAMPLES, true);
+      }
+    }
+  } catch {
+    // Nothing to do and nothing to report: the pipeline is correct either way.
+  }
+}
+
+warmJstsPipeline();

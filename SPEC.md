@@ -721,27 +721,76 @@ separated:
    User-Agent is mandatory**: `overpass-api.de` answers a browser UA with 406.
 3. **Project** to a local metric frame (equirectangular:
    `x = (lon−lon₀)·111320·cos(lat₀)`, `y = (lat−lat₀)·111320`).
-4. **JSTS pipeline:** per-street `LineMerger` → extend both ends by **200 m**
-   along the end-segment direction → `UnaryUnionOp` → `Polygonizer`.
-5. **Candidate filter:** sample each candidate's exterior ring every **10 m**; a
-   street "touches" when a contiguous run longer than **5 m** stays within **1 m**
-   of its geometry (distance predicates, not buffer intersections). Keep
-   candidates touched by **≥2 distinct streets**, sort by (touch count, area)
-   descending, take the winner.
-6. **Output** the winner reprojected to WGS84 as a FeatureCollection with a
-   `streets` property — the shape enrichment already accepts.
-7. Any exception → log and `null`. A polygon failure never fails a message.
+4. **Clip** to a window around the block: the shortest street's extent, grown to
+   reach each other street's nearest fragment, plus a **500 m** margin. The
+   shortest street is the most local of the set; growing to the others is what
+   stops an edge being amputated when the block is wider than the margin. It is
+   also a band-aid over the Overpass query above, which pins no admin level and
+   so matches the *province* — `Преслав` comes back spanning 39 × 10 km.
+5. **JSTS pipeline:** per-street `LineMerger` → extend both ends by **200 m**
+   along the end-segment direction → widen each into a **12 m half-width** road
+   band (`BufferOp`) → union the bands. The blocks are the **holes** of that
+   union. Cutting them out of bare centrelines instead is what let a dual
+   carriageway's own width become a "block" — the 30.07.2026 review's finding.
+6. **Candidate filter:** sample each hole's exterior ring every **10 m**; a
+   street bounds it when **≥2 samples** fall within `12 + 1.5 m` of its geometry.
+   Keep holes bounded by **≥2 distinct streets** where **no single street covers
+   more than 70%** of the ring, sort by (bounding-street count, area) descending,
+   take the winner.
+7. **Output** the winner reprojected to WGS84 as a FeatureCollection with a
+   `streets` property — the streets that actually bound it, not every name
+   fetched.
+8. Any exception → log and `null`. A polygon failure never fails a message.
 
-**CPU is the binding constraint here** — this is the most CPU-heavy code in the
-Worker, against the 10 ms free-plan burst budget (§1.1). Spike 3 measured 3–7 ms for
-block-level street sets but 87 ms at 5 m sampling for a boulevard-heavy set, so
-two mitigations are baked in: 10 m sampling (same winners, half the cost) and
-clipping street geometries to a bbox with a 500 m margin around the *shortest*
-street (kills the blow-up on city-spanning sets). Samples are built once per
-candidate rather than once per street per candidate, and an envelope check
-rejects distant streets before any distance work. The `$5/mo` Workers Paid plan
-(30 s CPU) remains the escape hatch if this is ever exceeded; do not pay
-preemptively.
+**CPU is the binding constraint here.** This is the most CPU-heavy code in the
+Worker and the free plan caps one uninterrupted synchronous stretch at 10 ms
+(§1.1). Four mitigations, in order of how much they buy:
+
+- **The pipeline is split into bursts.** `buildBlockPolygon` is `async` purely
+  for this — it awaits `yieldBurst()` between stages, and nothing waits on
+  anything. Measured cold on the Сахаров fixture, the longest burst falls from
+  12 ms to 4 ms. The union is folded pairwise rather than cascaded over the whole
+  collection for the same reason: cascading is faster in total and the total is
+  not what is capped. A scheduled invocation has minutes of wall clock to spend.
+- **JSTS is warmed at module evaluation** (`warmJstsPipeline`), which is charged
+  against the separate 400 ms startup budget. Cold, the first `BufferOp` cost
+  9 ms against 3 ms for the next — first-execution cost, not per-row cost, and
+  splitting cannot help because the warm-up lands in whichever burst reaches a
+  path first. Same reasoning as §1.3's matcher fix.
+- **10 m ring sampling** (spike 3: same winners as 5 m, half the cost), samples
+  built once per candidate rather than once per street per candidate, and an
+  envelope check rejecting distant streets before any distance work.
+- **The clip window** of step 4, which kills the blow-up on city-spanning sets.
+
+Cold, worst burst over the five fixtures is now **6 ms**; warm it is 2–3 ms. The
+numbers come from `tools/polygon-tester`, which reports `debug.bursts` per run,
+in Node rather than workerd — read them as a shape and `wrangler tail`'s
+`cpuTime` as the truth.
+
+**If the account moves to Workers Paid**, the burst ceiling goes from 10 ms to
+**30 s** of CPU per invocation (raisable to 5 min via `limits.cpu_ms`). That
+makes every mitigation above optional rather than free to delete:
+
+- Delete first: the burst split. `buildBlockPolygon` goes back to synchronous —
+  drop `breakBurst`/`sealed`, restore `UnaryUnionOp.union` over the whole band
+  collection (faster than folding), and unwind `await` at its three call sites
+  and in `tools/polygon-tester/run.mjs`. `debug.bursts` goes with it. This is the
+  only change the paid plan actually pays for, and it is worth ~15 ms of wall
+  clock per polygon.
+- Keep regardless: 10 m sampling, the one-pass sample reuse, and the envelope
+  check. They cost nothing in clarity and spike 3 measured 87 ms at 5 m sampling
+  on a boulevard-heavy set — still worth avoiding on any plan.
+- Keep, but for a different reason: the clip window is correctness, not CPU. It
+  is what keeps a same-named street 25 km away out of the geometry, and it stays
+  until the Overpass query pins an admin level.
+- `warmJstsPipeline` becomes pointless and should go — it buys a few ms against
+  a budget that is no longer scarce, at the cost of a function that exists only
+  to run dead code.
+
+Note what the paid plan is *not* for: the 30.07.2026 outage (§1.3) was a 10 ms
+burst that a bigger total CPU budget would not have raised, and the work was
+avoidable anyway. Pay when a single irreducible operation exceeds the burst
+ceiling, not when a tick is merely busy.
 
 ### 1.10 GDPR functionality
 
@@ -858,7 +907,7 @@ Original risk list, with outcomes:
 |---|---|---|
 | 1 | Source sites blocking Cloudflare egress IPs | **Cleared** — Phase 0 spike 1: all sources returned byte-identical responses from the edge and from a local IP |
 | 2 | Cron wall-clock budget | **Restructured** — the 30 s assumption was wrong; only CPU is capped. Bounded by the 15-min cadence instead (§1.7). Worst case is delayed, never lost, alerts |
-| 3 | 10 ms CPU on polygon building | **Mitigated** in §1.9 (10 m sampling + bbox clip); the $5/mo plan is the escape hatch |
+| 3 | 10 ms CPU on polygon building | **Mitigated** in §1.9. Buffering the road network (30.07.2026) roughly doubled the cost and put a cold build over the ceiling, so the pipeline now yields between stages and warms JSTS at module scope: worst cold burst 14 → 6 ms. The $5/mo plan would let the split be deleted, not the correctness work |
 | 3a | 10 ms CPU on **name matching** — the one that actually fired | **Fixed** in §1.3 (30.07.2026). Not on the list because polygons were assumed to be the only CPU-heavy code; the matcher's per-candidate setup was larger and ran on every tick. See §1.1 on what the 10 ms actually bounds |
 | 4 | LLM quality on Bulgarian | **Resolved** — qwen3-30b scored 10–11/13 on the graded corpus with 0 errors; the one systematic deviation is handled deterministically (§1.7) |
 | 5 | 50-subrequest fan-out ceiling | **Retired** — OneSignal fans out per *user*, 2,000 per request (§1.6) |

@@ -483,10 +483,21 @@ function renderResult() {
     : `<span class="what err">No polygon</span> <span class="muted">${esc(run.reason)}</span>`;
 
   const moved = markKnobs();
-  $("runMeta").textContent = [
+  // The free plan caps the *longest* burst at 10 ms, not their sum, so that is
+  // what gets shown — flagged past 7 ms, since this is a warm Node process and
+  // a cold isolate costs several times more (SPEC §1.9).
+  const bursts = debug?.bursts || [];
+  const worst = bursts.length ? Math.max(...bursts) : 0;
+  const total = bursts.reduce((sum, ms) => sum + ms, 0);
+  $("runMeta").innerHTML = [
     `${(debug?.candidates || []).length} enclosed area(s)`,
+    bursts.length
+      ? `<span class="${worst > 7 ? "err" : worst > 4 ? "warn" : "ok"}"
+           title="Longest uninterrupted synchronous stretch. The free plan caps this at 10 ms — not the total."
+           >${worst} ms worst burst</span> <span class="muted">of ${total} ms in ${bursts.length}</span>`
+      : "",
     moved ? `${moved} knob(s) off default` : "stock knobs",
-  ].join(" · ");
+  ].filter(Boolean).join(" · ");
 
   renderCandidates();
   renderStreets();

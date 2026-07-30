@@ -17,11 +17,11 @@ const overpassSet1Raw = env.TEST_FIXTURES["overpass-set1.json"]!;
 const overpassSet1 = JSON.parse(overpassSet1Raw);
 
 describe("buildBlockPolygon (fixture ways)", () => {
-  it("builds a closed block bounded by the 4 streets; the known test point is inside", () => {
+  it("builds a closed block bounded by the 4 streets; the known test point is inside", async () => {
     const ways = groupWaysByName(overpassSet1);
     for (const name of SET1) expect(ways.has(name), `OSM ways for ${name}`).toBe(true);
 
-    const result = buildBlockPolygon(ways, SET1);
+    const result = await buildBlockPolygon(ways, SET1);
     expect(result.polygon, result.reason).not.toBeNull();
 
     const feature = result.polygon!.features[0]!;
@@ -35,9 +35,9 @@ describe("buildBlockPolygon (fixture ways)", () => {
     expect(pointInRing(TEST_POINT.lat, TEST_POINT.lng, ring)).toBe(true);
   });
 
-  it("bails out with fewer than 3 streets in OSM", () => {
+  it("bails out with fewer than 3 streets in OSM", async () => {
     const ways = groupWaysByName(overpassSet1);
-    const result = buildBlockPolygon(ways, ["Йордан Йовков", "Тихомир"]);
+    const result = await buildBlockPolygon(ways, ["Йордан Йовков", "Тихомир"]);
     expect(result.polygon).toBeNull();
     expect(result.reason).toContain("2 streets");
   });
@@ -108,9 +108,9 @@ function meanWidthM(ring: Ring): number {
 
 describe("buildBlockPolygon rejects dual-carriageway slivers", () => {
   for (const { id, streets, minAreaHa } of BLOCK_SETS) {
-    it(`${id}: keeps the block, throws away the carriageway gap`, () => {
+    it(`${id}: keeps the block, throws away the carriageway gap`, async () => {
       const ways = groupWaysByName(JSON.parse(env.TEST_FIXTURES[`overpass-${id}.json`]!));
-      const result = buildBlockPolygon(ways, streets, { debug: true });
+      const result = await buildBlockPolygon(ways, streets, { debug: true });
 
       expect(result.polygon, result.reason).not.toBeNull();
       const feature = result.polygon!.features[0]!;
@@ -144,18 +144,18 @@ describe("buildBlockPolygon rejects dual-carriageway slivers", () => {
   // so a threshold compared against a lower bound in one mode and an exact
   // count in the other would have the tool disagreeing with production about
   // the alerts it exists to explain.
-  it("reaches the same verdict with the debug channel on", () => {
+  it("reaches the same verdict with the debug channel on", async () => {
     for (const { id, streets } of BLOCK_SETS) {
       const ways = groupWaysByName(JSON.parse(env.TEST_FIXTURES[`overpass-${id}.json`]!));
-      const plain = buildBlockPolygon(ways, streets);
-      const traced = buildBlockPolygon(ways, streets, { debug: true });
+      const plain = await buildBlockPolygon(ways, streets);
+      const traced = await buildBlockPolygon(ways, streets, { debug: true });
       expect(traced.polygon, id).toEqual(plain.polygon);
       expect(traced.reason, id).toBe(plain.reason);
     }
 
     const ways = groupWaysByName(overpassSet1);
-    const traced = buildBlockPolygon(ways, SET1, { debug: true });
-    expect(traced.polygon).toEqual(buildBlockPolygon(ways, SET1).polygon);
+    const traced = await buildBlockPolygon(ways, SET1, { debug: true });
+    expect(traced.polygon).toEqual((await buildBlockPolygon(ways, SET1)).polygon);
     // And the shares it reports are the ones the rule is decided on: every
     // street the winner is credited to must clear the floor, and none of them
     // may pass the cap that would have rejected the face.
@@ -166,10 +166,10 @@ describe("buildBlockPolygon rejects dual-carriageway slivers", () => {
     }
   });
 
-  it("reports the streets that bound the winner, not every street fetched", () => {
+  it("reports the streets that bound the winner, not every street fetched", async () => {
     const ways = groupWaysByName(overpassSet1);
     // Йовков bounds only 12% of the block, so it is genuinely one of the four.
-    const result = buildBlockPolygon(ways, SET1);
+    const result = await buildBlockPolygon(ways, SET1);
     expect(result.polygon!.features[0]!.properties.streets.sort()).toEqual([...SET1].sort());
   });
 });

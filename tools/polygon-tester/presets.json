@@ -1,6 +1,6 @@
 [
   {
-    "label": "levski — 30.07.2026 review, no block",
+    "label": "levski — 30.07.2026 review · 18.7 ha + 1 sliver",
     "streets": [
       "бул. Васил Левски",
       "Дубровник",
@@ -11,7 +11,7 @@
     "options": {}
   },
   {
-    "label": "ruse — 30.07.2026 review, no block",
+    "label": "ruse — 30.07.2026 review · 30.4 ha + 3 slivers",
     "streets": [
       "Русе",
       "Александър Дякович",
@@ -22,7 +22,7 @@
     "options": {}
   },
   {
-    "label": "saharov — real block, four boulevards",
+    "label": "saharov — four boulevards · 38.5 ha + 2 slivers",
     "streets": [
       "Акад. Андрей Сахаров",
       "бул. Христо Смирненски",
@@ -33,7 +33,7 @@
     "options": {}
   },
   {
-    "label": "set1 — real block, spike 3 baseline",
+    "label": "set1 — spike 3 baseline · 2.1 ha, no sliver",
     "streets": [
       "Йордан Йовков",
       "Хан Кубрат",
@@ -44,7 +44,7 @@
     "options": {}
   },
   {
-    "label": "varnenchik — spike set 3, no block",
+    "label": "varnenchik — spike set 3 · 17.4 ha + 2 slivers",
     "streets": [
       "бул. Владислав Варненчик",
       "Младежка",
