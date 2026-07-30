@@ -18,7 +18,7 @@
 // that resolve a *place* name (targeting and the map pin).
 
 import type { NamedRow } from "../db/queries";
-import { gramSimilarity, similarity, trigrams } from "./fuzzy";
+import { type GramKey, gramKeys, gramSimilarity, similarity } from "./fuzzy";
 import { distanceKm } from "./geo";
 
 /** Canonical kind token, keyed by the form the prompt asks the model for. */
@@ -143,8 +143,7 @@ const VARNA_CENTER = { lat: 43.2073873, lng: 27.9166653 };
 interface Prepared {
   row: NamedRow;
   cls: PlaceClass | null;
-  grams: Set<string>;
-  inCity: boolean;
+  grams: Set<GramKey>;
 }
 
 /**
@@ -154,6 +153,15 @@ interface Prepared {
  * matchers run several times per alert, so without this every call re-parses
  * and re-tokenizes all 245 regions (or 1,300 streets) against a 10 ms budget.
  * Keying on the cached array drops the memo when the ref cache turns over.
+ *
+ * This is the one genuinely expensive thing on the alert path, and it is paid in
+ * full on the FIRST match an isolate does — which for a 15-minute cron tick is
+ * every tick. It overran the 10 ms budget on 30.07.2026 and stopped ingestion
+ * dead, so what it does per row is kept to the minimum: the packed-gram
+ * representation (fuzzy.ts) rather than string grams, and nothing that only one
+ * of the two callers needs. In particular `inCity` is NOT computed here —
+ * `matchStreet` passes `preferInCity: false` and never reads it, so eagerly
+ * running 1,333 haversines for it was pure cost.
  */
 const preparedRows = new WeakMap<object, Prepared[]>();
 
@@ -161,8 +169,25 @@ function prepare(rows: readonly NamedRow[]): Prepared[] {
   const memo = preparedRows.get(rows as object);
   if (memo) return memo;
 
-  // The city centre the in-city preference measures from, taken from the same
-  // seed data as everything else rather than hardcoded.
+  const prepared = rows.map((row) => {
+    const { kind, core } = parseName(row.name);
+    return { row, cls: placeClass(kind), grams: gramKeys(core) };
+  });
+  preparedRows.set(rows as object, prepared);
+  return prepared;
+}
+
+/**
+ * The city centre the in-city preference measures from, taken from the same seed
+ * data as everything else rather than hardcoded. Memoized per array alongside
+ * `prepare`, and only ever asked for on the `preferInCity` path.
+ */
+const centers = new WeakMap<object, { lat: number; lng: number }>();
+
+function centerOf(rows: readonly NamedRow[]): { lat: number; lng: number } {
+  const memo = centers.get(rows as object);
+  if (memo) return memo;
+
   let center = VARNA_CENTER;
   for (const row of rows) {
     if (row.lat === null || row.lng === null) continue;
@@ -171,21 +196,22 @@ function prepare(rows: readonly NamedRow[]): Prepared[] {
       break;
     }
   }
+  centers.set(rows as object, center);
+  return center;
+}
 
-  const prepared = rows.map((row) => {
-    const { kind, core } = parseName(row.name);
-    return {
-      row,
-      cls: placeClass(kind),
-      grams: trigrams(core),
-      // A row seeded without coordinates cannot be placed, so it never wins a
-      // near-tie on location — but it still competes on score.
-      inCity: row.lat !== null && row.lng !== null
-        && distanceKm(row.lat, row.lng, center.lat, center.lng) <= IN_CITY_RADIUS_KM,
-    };
-  });
-  preparedRows.set(rows as object, prepared);
-  return prepared;
+/**
+ * Whether a candidate sits inside the city, for breaking a near-tie.
+ *
+ * Computed on demand rather than per row up front: only the handful of
+ * candidates inside the near-tie band are ever asked, so this runs a few times
+ * per match instead of once per seeded row. A row seeded without coordinates
+ * cannot be placed, so it never wins a near-tie on location — but it still
+ * competes on score.
+ */
+function isInCity(row: NamedRow, center: { lat: number; lng: number }): boolean {
+  return row.lat !== null && row.lng !== null
+    && distanceKm(row.lat, row.lng, center.lat, center.lng) <= IN_CITY_RADIUS_KM;
 }
 
 function matchCore(
@@ -201,7 +227,7 @@ function matchCore(
   // names no place, so it matches nothing rather than whatever it scores over.
   if (!core || !accepts(queryClass)) return null;
 
-  const queryGrams = trigrams(core);
+  const queryGrams = gramKeys(core);
   if (queryGrams.size === 0) return null;
 
   let top = 0;
@@ -220,7 +246,8 @@ function matchCore(
   // better is still the better answer.
   let pool = scored.filter((s) => s.score >= top - NEAR_TIE_BAND);
   if (preferInCity) {
-    const inCity = pool.filter((s) => s.p.inCity);
+    const center = centerOf(rows);
+    const inCity = pool.filter((s) => isInCity(s.p.row, center));
     if (inCity.length > 0) pool = inCity;
   }
 

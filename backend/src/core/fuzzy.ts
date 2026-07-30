@@ -8,8 +8,10 @@ export const SIMILARITY_THRESHOLD = 0.3;
 /** `similarity_threshold` used by polygon street resolution (Phase 3). */
 export const POLYGON_RESOLVE_THRESHOLD = 0.4;
 
+const WORD_SPLIT = /[^\p{L}\p{N}]+/u;
+
 export function trigrams(text: string): Set<string> {
-  const words = String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const words = String(text).toLowerCase().split(WORD_SPLIT).filter(Boolean);
   const grams = new Set<string>();
   for (const word of words) {
     const padded = `  ${word} `;
@@ -19,13 +21,44 @@ export function trigrams(text: string): Set<string> {
 }
 
 /**
+ * One trigram as a number: its three UTF-16 code units packed into the low 48
+ * bits, which a double holds exactly (max ≈ 2.8e14, well under 2^53).
+ *
+ * Same tokenization as `trigrams`, so the two sets are in bijection and Jaccard
+ * over either gives bit-identical scores — verified over the whole seeded street
+ * list. What changes is the cost of *building* the set: a gram is now a number
+ * rather than a freshly allocated 3-character string, which is ~23,000 fewer
+ * string allocations per pass over the streets table and halves the build.
+ *
+ * That build is what the 10 ms CPU budget could not afford: it is paid in full
+ * the first time an isolate matches a name (place-names.ts's `prepare`), and a
+ * cron tick is almost always a cold isolate.
+ */
+export type GramKey = number;
+
+export function gramKeys(text: string): Set<GramKey> {
+  const words = String(text).toLowerCase().split(WORD_SPLIT).filter(Boolean);
+  const grams = new Set<GramKey>();
+  for (const word of words) {
+    const padded = `  ${word} `;
+    for (let i = 0; i <= padded.length - 3; i++) {
+      grams.add(padded.charCodeAt(i) * 4294967296
+        + padded.charCodeAt(i + 1) * 65536
+        + padded.charCodeAt(i + 2));
+    }
+  }
+  return grams;
+}
+
+/**
  * Jaccard over two trigram sets — `similarity` without the tokenization.
  *
  * Exported for core/place-names.ts, which compares pre-tokenized *cores*
  * (the name minus its kind prefix) and would otherwise re-tokenize every
- * candidate on every call.
+ * candidate on every call. Reads only `size` and `has`, so it serves string
+ * grams and packed `GramKey`s alike — never mix the two in one call.
  */
-export function gramSimilarity(ta: Set<string>, tb: Set<string>): number {
+export function gramSimilarity(ta: ReadonlySet<unknown>, tb: ReadonlySet<unknown>): number {
   if (ta.size === 0 && tb.size === 0) return 0;
   // Iterate the smaller set — the lookups are what cost.
   const [small, large] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
@@ -50,9 +83,9 @@ export function similarity(a: string, b: string): number {
  * WeakMap keys on the cached array, so a ref-cache refresh drops the memo with
  * the rows it describes.
  */
-const candidateGrams = new WeakMap<object, Map<string, Set<string>>>();
+const candidateGrams = new WeakMap<object, Map<string, Set<GramKey>>>();
 
-function gramsFor(candidates: readonly unknown[], name: string): Set<string> {
+function gramsFor(candidates: readonly unknown[], name: string): Set<GramKey> {
   let memo = candidateGrams.get(candidates as object);
   if (!memo) {
     memo = new Map();
@@ -60,7 +93,7 @@ function gramsFor(candidates: readonly unknown[], name: string): Set<string> {
   }
   let grams = memo.get(name);
   if (!grams) {
-    grams = trigrams(name);
+    grams = gramKeys(name);
     memo.set(name, grams);
   }
   return grams;
@@ -78,7 +111,7 @@ export function bestMatch<T>(
 ): T | null {
   // Hoisted out of the loop: the query was previously re-tokenized once per
   // candidate, i.e. thousands of times per call.
-  const queryGrams = trigrams(name);
+  const queryGrams = gramKeys(name);
   if (queryGrams.size === 0) return null;
 
   let best: T | null = null;
