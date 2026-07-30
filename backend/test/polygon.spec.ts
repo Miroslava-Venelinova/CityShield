@@ -21,7 +21,7 @@ describe("buildBlockPolygon (fixture ways)", () => {
     const ways = groupWaysByName(overpassSet1);
     for (const name of SET1) expect(ways.has(name), `OSM ways for ${name}`).toBe(true);
 
-    const result = buildBlockPolygon(ways, SET1, 250);
+    const result = buildBlockPolygon(ways, SET1);
     expect(result.polygon, result.reason).not.toBeNull();
 
     const feature = result.polygon!.features[0]!;
@@ -40,6 +40,137 @@ describe("buildBlockPolygon (fixture ways)", () => {
     const result = buildBlockPolygon(ways, ["Йордан Йовков", "Тихомир"]);
     expect(result.polygon).toBeNull();
     expect(result.reason).toContain("2 streets");
+  });
+});
+
+// ── Dual-carriageway slivers (30.07.2026 alert review) ───────────────────────
+//
+// A boulevard reaches OSM as two parallel centrelines under one name. Cutting
+// blocks straight out of centrelines therefore treats the gap between a
+// boulevard's carriageways as a block: a 10–16 m strip of roadway, bounded by
+// ≥2 "distinct" streets (the boulevard, plus whatever cross-streets cap its
+// ends) and spanning more cross-streets than any real block, so it won. The
+// resulting polygon enclosed tarmac with no addresses on it, and since
+// alert-service.ts targets polygon locations purely by point-in-polygon with no
+// fallback to the street names, it notified nobody.
+//
+// Widening each centreline into a road band first (ROAD_HALF_WIDTH_M) closes
+// that gap into the road it is, and MAX_SINGLE_STREET_COVERAGE rejects what
+// survives. Every set below still produces such a strip, and every one of them
+// is thrown away — which is the point of asserting on the losers as well as the
+// winner. The two are the same fixtures the bug was reported on, so a change
+// that reintroduces the sliver fails here rather than in production.
+//
+// Getting the block *back* is a separate mechanism, EXTENSION_DIST_M, and
+// conflating the two is how these three sets briefly came to assert that they
+// enclosed nothing at all. They enclose 17–30 ha each.
+//
+// Fixtures are the real Overpass responses, trimmed to the fields the parser
+// reads. levski and ruse are the two alerts the review flagged; varnenchik is
+// Phase 0 spike set 3, which was silently producing a sliver too.
+
+const BLOCK_SETS: Array<{ id: string; streets: string[]; minAreaHa: number }> = [
+  {
+    // Also pins the clip window. Anchored on the shortest street's bbox alone,
+    // this set lost Подвис entirely — it sits ~800 m west of Дубровник, outside
+    // the 500 m margin — and no ring could close with an edge missing.
+    id: "levski", minAreaHa: 15,
+    streets: ["бул. Васил Левски", "Дубровник", "Железни врата", "Подвис"],
+  },
+  {
+    id: "ruse", minAreaHa: 25,
+    streets: ["Русе", "Александър Дякович", "Девня", "Преслав"],
+  },
+  {
+    id: "varnenchik", minAreaHa: 14,
+    streets: ["бул. Владислав Варненчик", "Младежка", "Йордан Йовков", "Фантазия"],
+  },
+  {
+    // Four boulevards, 267 ways: the guard against over-correcting in the other
+    // direction, where a rule strict enough to kill slivers kills this too.
+    id: "saharov", minAreaHa: 32,
+    streets: ["Акад. Андрей Сахаров", "бул. Христо Смирненски", "бул. Сливница", "бул. Цар Освободител"],
+  },
+];
+
+/** Mean width of a WGS84 ring (2·area/perimeter) — a sliver's is ~10 m. */
+function meanWidthM(ring: Ring): number {
+  const kx = 111_320 * Math.cos((ring[0]![1]! * Math.PI) / 180);
+  const xy = ring.map(([lon, lat]) => [lon * kx, lat * 111_320]);
+  let area2 = 0, perim = 0;
+  for (let i = 0; i < xy.length - 1; i++) {
+    const [x1, y1] = xy[i]!, [x2, y2] = xy[i + 1]!;
+    area2 += x1! * y2! - x2! * y1!;
+    perim += Math.hypot(x2! - x1!, y2! - y1!);
+  }
+  return perim > 0 ? Math.abs(area2) / perim : 0;
+}
+
+describe("buildBlockPolygon rejects dual-carriageway slivers", () => {
+  for (const { id, streets, minAreaHa } of BLOCK_SETS) {
+    it(`${id}: keeps the block, throws away the carriageway gap`, () => {
+      const ways = groupWaysByName(JSON.parse(env.TEST_FIXTURES[`overpass-${id}.json`]!));
+      const result = buildBlockPolygon(ways, streets, { debug: true });
+
+      expect(result.polygon, result.reason).not.toBeNull();
+      const feature = result.polygon!.features[0]!;
+      // A block is enclosed by its streets, so all of them bound it.
+      expect(feature.properties.streets.sort()).toEqual([...streets].sort());
+      // Nothing sliver-shaped: these blocks run 200–270 m wide, a carriageway
+      // gap 10–16 m. The bound is loose on purpose — this asserts the shape
+      // class, not the exact geometry, which moves whenever OSM does.
+      expect(meanWidthM(feature.geometry.coordinates[0] as Ring)).toBeGreaterThan(50);
+
+      const candidates = result.debug!.candidates;
+      const winner = candidates.find((c) => c.verdict === "winner")!;
+      expect(winner.areaM2 / 10_000).toBeGreaterThan(minAreaHa);
+
+      // The reported bug, still expressible and still caught: every one of
+      // these sets produces at least one strip of roadway, and every one of
+      // them is rejected for being wrapped around a single street. Asserting
+      // only on the winner would pass just as well with the rule deleted.
+      const rejected = candidates.filter((c) => c.verdict === "dominated");
+      expect(rejected.length, "no sliver was produced — the rule is untested here").toBeGreaterThan(0);
+      for (const sliver of rejected) {
+        expect(Math.max(...sliver.coverage.map((s) => s.share))).toBeGreaterThan(0.7);
+      }
+    });
+  }
+
+  // tools/polygon-tester turns `debug` on to draw what was cut and to read the
+  // exact coverage shares, and everything it claims rests on that being an
+  // observation rather than a second code path. It nearly isn't: debug drops
+  // the two early exits in countSamplesNearStreet and the dominated-face break,
+  // so a threshold compared against a lower bound in one mode and an exact
+  // count in the other would have the tool disagreeing with production about
+  // the alerts it exists to explain.
+  it("reaches the same verdict with the debug channel on", () => {
+    for (const { id, streets } of BLOCK_SETS) {
+      const ways = groupWaysByName(JSON.parse(env.TEST_FIXTURES[`overpass-${id}.json`]!));
+      const plain = buildBlockPolygon(ways, streets);
+      const traced = buildBlockPolygon(ways, streets, { debug: true });
+      expect(traced.polygon, id).toEqual(plain.polygon);
+      expect(traced.reason, id).toBe(plain.reason);
+    }
+
+    const ways = groupWaysByName(overpassSet1);
+    const traced = buildBlockPolygon(ways, SET1, { debug: true });
+    expect(traced.polygon).toEqual(buildBlockPolygon(ways, SET1).polygon);
+    // And the shares it reports are the ones the rule is decided on: every
+    // street the winner is credited to must clear the floor, and none of them
+    // may pass the cap that would have rejected the face.
+    const winner = traced.debug!.candidates.find((c) => c.verdict === "winner")!;
+    for (const { name, hits, share } of winner.coverage) {
+      expect(winner.bounding.includes(name), name).toBe(hits >= 2);
+      expect(share, name).toBeLessThanOrEqual(0.7);
+    }
+  });
+
+  it("reports the streets that bound the winner, not every street fetched", () => {
+    const ways = groupWaysByName(overpassSet1);
+    // Йовков bounds only 12% of the block, so it is genuinely one of the four.
+    const result = buildBlockPolygon(ways, SET1);
+    expect(result.polygon!.features[0]!.properties.streets.sort()).toEqual([...SET1].sort());
   });
 });
 

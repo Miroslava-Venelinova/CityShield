@@ -8,7 +8,7 @@
 import GeometryFactory from "jsts/org/locationtech/jts/geom/GeometryFactory.js";
 import Coordinate from "jsts/org/locationtech/jts/geom/Coordinate.js";
 import LineMerger from "jsts/org/locationtech/jts/operation/linemerge/LineMerger.js";
-import Polygonizer from "jsts/org/locationtech/jts/operation/polygonize/Polygonizer.js";
+import BufferOp from "jsts/org/locationtech/jts/operation/buffer/BufferOp.js";
 import UnaryUnionOp from "jsts/org/locationtech/jts/operation/union/UnaryUnionOp.js";
 import DistanceOp from "jsts/org/locationtech/jts/operation/distance/DistanceOp.js";
 import { bestMatch, POLYGON_RESOLVE_THRESHOLD } from "../core/fuzzy";
@@ -18,9 +18,65 @@ import { abortIn, expired, sleepWithin } from "../shared/deadline";
 
 const factory = new GeometryFactory();
 
+/**
+ * How far each centreline is stretched past its ends before the blocks are cut.
+ *
+ * OSM fragments do not always reach the junction they belong to, and a block
+ * left open at one corner is not a block at all. This is the reach that closes
+ * those gaps, inherited from the centreline pipeline.
+ *
+ * It was briefly cut to 25 m, on the argument that a road band already bridges
+ * 2·ROAD_HALF_WIDTH_M by itself and that a long stub — swept from a street's
+ * end in whatever direction its last segment happened to point, then widened —
+ * fabricates blocks out of empty space. The first half is true. The second was
+ * measured *before* the clip window was fixed to reach every street: with an
+ * edge of the block clipped away, a long stub really did sweep into nothing.
+ * Once no edge is missing it only closes corners, and the shorter reach turned
+ * out to destroy three real blocks while fixing nothing — бул. Левски
+ * (18.7 ha), Русе (30.4 ha) and Владислав Варненчик (17.4 ha), each bounded
+ * 17–35% by every one of its four streets. The dual-carriageway slivers those
+ * same alerts used to produce are killed by ROAD_HALF_WIDTH_M and
+ * MAX_SINGLE_STREET_COVERAGE, neither of which depends on this number.
+ *
+ * 200 m is where every fixture closes — Левски needs 50, Русе 150, Варненчик
+ * 200 — and the blocks it finds are stable: over a 50–500 m sweep each winner's
+ * area moves by under 2%, which is what distinguishes a real block from one a
+ * stub invented. Going longer only costs area, since the extensions are
+ * buffered too and eat into the edges they close.
+ */
 const EXTENSION_DIST_M = 200;
 const SAMPLE_STEP_M = 10;   // spike 3: same winner as 5 m at half the CPU
 const CLIP_MARGIN_M = 500;  // bbox margin around the shortest street
+
+/**
+ * Half-width given to every street before the blocks are cut out of it.
+ *
+ * OSM gives us centrelines, and a dual carriageway is two of them under one
+ * name. Polygonizing centrelines therefore treats the gap between a boulevard's
+ * carriageways as a block — a 10–16 m strip of roadway with no addresses on it,
+ * which is what the 30.07.2026 review caught (see MAX_SINGLE_STREET_COVERAGE).
+ * Widening each centreline into a band first makes that gap close up into the
+ * road it is, so the failure cannot be expressed: what is left enclosed by the
+ * road network is a real block, and its edges sit at the kerb rather than in the
+ * middle of the carriageway.
+ *
+ * 12 m closes every carriageway gap measured over the review's alerts and the
+ * Phase 0 spike sets (widest: 15.4 m, so 24 m of fill clears it) while leaving
+ * the genuine blocks intact — set 1 keeps 2.06 of its 2.98 ha, Сахаров 39.2 of
+ * 42.8. Going wider starts eating small blocks for no further gain.
+ */
+const ROAD_HALF_WIDTH_M = 12;
+
+/**
+ * Slack on top of `ROAD_HALF_WIDTH_M` when asking which streets bound a block.
+ *
+ * Block edges are now offset a road half-width from the centrelines they came
+ * from, so the old "within 1 m of the street" test would match nothing at all.
+ * A sample on a block's edge sits almost exactly `ROAD_HALF_WIDTH_M` from the
+ * centreline that put it there; the slack absorbs the buffer's polygonal
+ * approximation of the round end caps and joins.
+ */
+const TOUCH_SLACK_M = 1.5;
 
 // ── Overpass fetch (replaces ox.features_from_place) ─────────────────────────
 
@@ -148,6 +204,28 @@ function lineStringFromXY(coords: [number, number][]): any {
   return factory.createLineString(coords.map(([x, y]) => new Coordinate(x, y)));
 }
 
+/**
+ * A hole of the road network as a standalone polygon, wound counter-clockwise.
+ *
+ * Interior rings come out clockwise, which is the opposite of what RFC 7946
+ * asks of an exterior ring. Nothing downstream reads the winding today —
+ * `pointInRing` ray-casts, and Leaflet does not care — but the ring leaves here
+ * as GeoJSON for consumers we do not control, so it is worth the one pass.
+ */
+function ringToPolygon(ring: any): any {
+  const coords = ring.getCoordinates();
+  let area2 = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    area2 += coords[i]!.x * coords[i + 1]!.y - coords[i + 1]!.x * coords[i]!.y;
+  }
+  return factory.createPolygon(area2 < 0 ? [...coords].reverse() : coords);
+}
+
+/** A JSTS ring's coordinates as plain local-metre pairs. */
+function ringXY(ring: any): XY[] {
+  return ring.getCoordinates().map((c: any): XY => [c.x, c.y]);
+}
+
 function mergeLines(lineStrings: any[]): any {
   const merger = new LineMerger();
   for (const ls of lineStrings) merger.add(ls);
@@ -211,9 +289,21 @@ function linesBBox(lines: XY[][]): Box {
 const boxesOverlap = (a: Box, b: Box): boolean =>
   a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
 
-// Candidate filter (§1.9 step 5): sample the exterior ring; a street
-// "touches" the polygon when a contiguous run of samples longer than 5 m
-// stays within 1 m of the street geometry.
+const unionBox = (a: Box, b: Box): Box => ({
+  minX: Math.min(a.minX, b.minX), maxX: Math.max(a.maxX, b.maxX),
+  minY: Math.min(a.minY, b.minY), maxY: Math.max(a.maxY, b.maxY),
+});
+
+/** Euclidean distance from a point to a box; 0 when the point is inside it. */
+function boxDistanceToPoint(box: Box, [x, y]: XY): number {
+  const dx = Math.max(box.minX - x, 0, x - box.maxX);
+  const dy = Math.max(box.minY - y, 0, y - box.maxY);
+  return Math.hypot(dx, dy);
+}
+
+// Candidate filter (§1.9 step 5): walk the exterior ring at a fixed spacing, so
+// "how much of this block does that street bound" becomes a sample count. See
+// countSamplesNearStreet for what the counts are then asked.
 function samplesAlongRing(ring: any, step: number): any[] {
   const coords = ring.getCoordinates();
   const samples: any[] = [];
@@ -236,34 +326,90 @@ function samplesAlongRing(ring: any, step: number): any[] {
 }
 
 /**
- * Whether a run of ring samples longer than `minRun` stays within `tolerance`
- * of the street.
+ * Samples a street must cover before it counts as bounding the polygon at all.
+ *
+ * A deliberate tightening of the "contiguous run longer than 5 m" test this
+ * replaces. That rule was written against the spike's original 5 m sample step,
+ * where clearing 5 m took two samples; when spike 3 doubled the step to 10 m it
+ * quietly became *one* — a single sample within a metre of the ring, which is
+ * what a street merely crossing the block registers. Since `touched` is the
+ * ranking key, every such crossing inflated a face's score, and inflating
+ * scores on long faces is precisely how the slivers below came to win.
+ *
+ * Two samples is 20 m of shared boundary. Nothing real is near that line: over
+ * the sets in the tests, the least-involved genuine bounding street still covers
+ * 12% of its ring (~10 samples).
+ */
+const MIN_TOUCH_SAMPLES = 2;
+
+/**
+ * The largest share of a block's boundary one street may account for.
+ *
+ * The backstop against the dual-carriageway sliver, not the primary defence —
+ * `ROAD_HALF_WIDTH_M` is, by closing the gap before anything is cut out of it.
+ * This states the requirement the geometry only implies: a block is *enclosed*
+ * by several streets, not wrapped around one. It still catches a face nobody
+ * anticipated — the Русе/Преслав set produces one bounded end to end by
+ * ул. Девня alone, which no buffer width removes.
+ *
+ * Measured over the 30.07.2026 review's two bad alerts plus three of the Phase 0
+ * spike sets, the split is total: real blocks give their busiest street 28–39%
+ * of the ring, every carriageway sliver gives it 97–100%. 0.7 sits in the empty
+ * middle with room on both sides.
+ */
+const MAX_SINGLE_STREET_COVERAGE = 0.7;
+
+/**
+ * How many of the ring samples lie within `tolerance` of the street.
+ *
+ * Was a boolean "does a contiguous run longer than 5 m touch this street",
+ * which answered the wrong question: it cannot tell a block bounded by four
+ * streets from the strip *between the two carriageways of one* — both "touch"
+ * two or more streets. The count answers both at once (see the caller), and a
+ * street bounding one edge of a real block still lands far above the 2-sample
+ * floor that replaces the run test.
  *
  * Takes pre-built sample points rather than the ring: samples used to be
  * recomputed (and re-wrapped into JSTS Points) once per street per candidate
  * polygon, which multiplied the most CPU-heavy loop in the Worker by the street
  * count for no gain. This is the code the 10 ms free-plan budget is tightest
  * against (SPEC.md §1.9).
+ *
+ * The count is exact only when it has to be. Both things the caller asks of it
+ * — "does this street bound the face at all" and "does it bound too much of
+ * it" — are often decided before the samples run out, and the return then stops
+ * at a lower bound that answers both identically. Without that, dropping the
+ * old boolean's early exit would have made every real block pay a full scan per
+ * street.
+ *
+ * `exact` gives up that saving to return the true total, which is what the
+ * share-of-the-ring percentages in tools/polygon-tester are read off. It cannot
+ * change a verdict — the early exits only ever fire once both thresholds are
+ * settled — so the tool tunes against the same decisions production makes.
  */
-function streetTouchesSamples(
-  samples: any[], streetGeom: any, step: number, tolerance = 1.0, minRun = 5,
-): boolean {
+function countSamplesNearStreet(
+  samples: any[], streetGeom: any, maxHits: number, tolerance: number,
+  minTouch: number, exact: boolean,
+): number {
   // Cheap envelope reject before any distance work: a street whose bounding
   // box is nowhere near this polygon cannot bound it.
   const streetEnv = streetGeom.getEnvelopeInternal();
-  let run = 0;
-  for (const point of samples) {
+  let hits = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const point = samples[i];
     const c = point.getCoordinate();
     const nearBox = c.x >= streetEnv.getMinX() - tolerance && c.x <= streetEnv.getMaxX() + tolerance
       && c.y >= streetEnv.getMinY() - tolerance && c.y <= streetEnv.getMaxY() + tolerance;
-    if (nearBox && DistanceOp.distance(point, streetGeom) <= tolerance) {
-      run += step;
-      if (run > minRun) return true;
-    } else {
-      run = 0;
-    }
+    if (nearBox && DistanceOp.distance(point, streetGeom) <= tolerance) hits++;
+    if (exact) continue;
+    // Over the cap: the face is rejected, so nothing further is worth measuring.
+    if (hits > maxHits) return hits;
+    // Bounded out the other way — even if every remaining sample hit, this
+    // street could not reach the cap, and it has already cleared the touch
+    // floor. Both tests are settled; the exact total is of no interest.
+    if (hits >= minTouch && hits + (samples.length - i - 1) <= maxHits) return hits;
   }
-  return false;
+  return hits;
 }
 
 // ── Main pipeline (port of extract_city_block + streets_to_geojson) ──────────
@@ -278,14 +424,75 @@ export interface BlockPolygonResult {
     }>;
   } | null;
   reason?: string;
+  debug?: BlockPolygonDebug;
+}
+
+/**
+ * Every number the block builder is fitted to, in one place.
+ *
+ * They exist as a record because five real Overpass fixtures is a small sample
+ * to have fitted them on, and the next bad polygon is going to be argued about
+ * by moving one of them. tools/polygon-tester overrides them per run and draws
+ * the result, so that argument can be had against geometry instead of against
+ * a rerun test suite. Ingestion never passes any of these — production is
+ * whatever is written above.
+ */
+export const BLOCK_POLYGON_DEFAULTS = {
+  extensionDist: EXTENSION_DIST_M,
+  sampleStep: SAMPLE_STEP_M,
+  roadHalfWidth: ROAD_HALF_WIDTH_M,
+  clipMargin: CLIP_MARGIN_M,
+  maxSingleStreetCoverage: MAX_SINGLE_STREET_COVERAGE,
+  minTouchSamples: MIN_TOUCH_SAMPLES,
+};
+
+export type BlockPolygonOptions = Partial<typeof BLOCK_POLYGON_DEFAULTS> & {
+  /**
+   * Report the intermediate geometry — what was clipped, what the road network
+   * came out as, every enclosed area and why it lost. Ingestion leaves this off
+   * and pays nothing for it; the tester turns it on, which also switches the
+   * sample counts to exact (see countSamplesNearStreet).
+   */
+  debug?: boolean;
+};
+
+/** WGS84 `[lng, lat]`, so the tester can draw any of this without converting. */
+type LngLat = [number, number];
+
+export interface BlockPolygonDebug {
+  /** The street the clip window is anchored on — the shortest of the set. */
+  anchorStreet: string;
+  clipRing: LngLat[];
+  streets: Array<{ name: string; kept: LngLat[][]; dropped: LngLat[][] }>;
+  /** Exterior rings of the buffered road network the blocks are cut from. */
+  roads: LngLat[][];
+  candidates: Array<{
+    ring: LngLat[];
+    areaM2: number;
+    /** 2·area/perimeter — a carriageway gap's is ~10 m, a real block's ~300 m. */
+    meanWidthM: number;
+    samples: number;
+    coverage: Array<{ name: string; hits: number; share: number }>;
+    bounding: string[];
+    verdict: "winner" | "runner-up" | "dominated" | "too-few-streets";
+  }>;
 }
 
 export function buildBlockPolygon(
   waysByName: WaysByName,
   streetNames: string[],
-  extensionDist = EXTENSION_DIST_M,
-  sampleStep = SAMPLE_STEP_M,
+  options: BlockPolygonOptions = {},
 ): BlockPolygonResult {
+  const {
+    extensionDist, sampleStep, roadHalfWidth, clipMargin,
+    maxSingleStreetCoverage, minTouchSamples,
+  } = { ...BLOCK_POLYGON_DEFAULTS, ...options };
+  // Block edges sit a road half-width off the centrelines that produced them,
+  // so the touch test has to reach exactly that far — plus the slack.
+  const touchTolerance = roadHalfWidth + TOUCH_SLACK_M;
+  const dbg: BlockPolygonDebug | null = options.debug
+    ? { anchorStreet: "", clipRing: [], streets: [], roads: [], candidates: [] }
+    : null;
   // Anchor projection at the first coordinate seen.
   let anchor: [number, number] | null = null;
   for (const lines of waysByName.values()) {
@@ -307,73 +514,198 @@ export function buildBlockPolygon(
     return { polygon: null, reason: `only ${localLines.size} streets found in OSM` };
   }
 
-  // CPU mitigation (spike 3): a block polygon is always near the shortest
-  // street — drop ways outside a bbox around it before merge/extend/union so
-  // a city-spanning boulevard doesn't multiply the polygonize/filter work.
+  // CPU mitigation (spike 3): drop ways far from the block before
+  // merge/extend/union, so a city-spanning boulevard — or, thanks to the
+  // province-wide Overpass area, a same-named street in another town entirely —
+  // does not multiply the work downstream.
+  //
+  // The window is anchored on the shortest street, which is the most local of
+  // the set and so the most reliable pointer at the block. It used to *be* that
+  // street's bbox plus a margin, which quietly assumed the block is no wider
+  // than the margin. It is not: for the бул. Левски alert of the 30.07.2026
+  // review the shortest street (Дубровник, 676 m) is the block's east edge, and
+  // the west edge (Подвис) sits ~800 m away — outside a 500 m margin. Clipping
+  // it off left a ring that could never close, so a real ~650 × 356 m block came
+  // back as no polygon at all.
+  //
+  // So the window is grown to reach every street before the margin is applied:
+  // each street contributes the one fragment nearest the anchor, which is the
+  // fragment that could plausibly bound the block, and never the same-named
+  // stretch two towns over.
   let shortestLines: XY[][] | null = null;
+  let shortestName = "";
   let shortestLen = Infinity;
-  for (const lines of localLines.values()) {
+  for (const [name, lines] of localLines) {
     const len = lines.reduce((sum, line) => sum + lineLength(line), 0);
     if (len < shortestLen) {
       shortestLen = len;
       shortestLines = lines;
+      shortestName = name;
     }
   }
-  const box = linesBBox(shortestLines!);
+  const anchorBox = linesBBox(shortestLines!);
+  const anchorPoint: XY = [(anchorBox.minX + anchorBox.maxX) / 2, (anchorBox.minY + anchorBox.maxY) / 2];
+
+  let reach: Box = anchorBox;
+  for (const lines of localLines.values()) {
+    let nearest: Box | null = null;
+    let nearestDist = Infinity;
+    for (const line of lines) {
+      const b = linesBBox([line]);
+      const d = boxDistanceToPoint(b, anchorPoint);
+      if (d < nearestDist) { nearestDist = d; nearest = b; }
+    }
+    if (nearest) reach = unionBox(reach, nearest);
+  }
+
   const clipBox: Box = {
-    minX: box.minX - CLIP_MARGIN_M, maxX: box.maxX + CLIP_MARGIN_M,
-    minY: box.minY - CLIP_MARGIN_M, maxY: box.maxY + CLIP_MARGIN_M,
+    minX: reach.minX - clipMargin, maxX: reach.maxX + clipMargin,
+    minY: reach.minY - clipMargin, maxY: reach.maxY + clipMargin,
   };
+
+  const toWgs84Line = (line: XY[]): LngLat[] => line.map(proj.toWgs84);
+  if (dbg) {
+    dbg.anchorStreet = shortestName;
+    const { minX, maxX, minY, maxY } = clipBox;
+    dbg.clipRing = toWgs84Line(
+      [[minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY], [minX, minY]]);
+  }
 
   const streetGeoms = new Map<string, any>();
   for (const [name, lines] of localLines) {
     const kept = lines.filter((line) => boxesOverlap(linesBBox([line]), clipBox));
     if (kept.length > 0) streetGeoms.set(name, mergeLines(kept.map(lineStringFromXY)));
+    if (dbg) {
+      const keptSet = new Set(kept);
+      dbg.streets.push({
+        name,
+        kept: kept.map(toWgs84Line),
+        dropped: lines.filter((line) => !keptSet.has(line)).map(toWgs84Line),
+      });
+    }
   }
   if (streetGeoms.size < 3) {
-    return { polygon: null, reason: `only ${streetGeoms.size} streets near the block after clipping` };
+    return {
+      polygon: null,
+      reason: `only ${streetGeoms.size} streets near the block after clipping`,
+      ...(dbg ? { debug: dbg } : {}),
+    };
   }
 
-  // 3. Extend, 4. union + polygonize.
+  // 3. Extend the centrelines so they cross rather than stop short.
   const extended = new Map<string, any>();
   for (const [name, geom] of streetGeoms) extended.set(name, extendGeometry(geom, extensionDist));
 
-  const union = UnaryUnionOp.union(factory.createGeometryCollection([...extended.values()]));
-  const polygonizer = new Polygonizer();
-  polygonizer.add(union);
-  const rawPolygons = jstsCollectionToArray(polygonizer.getPolygons());
+  // 4. Widen each street into a band and union them into one road network. The
+  //    blocks are then its holes — see ROAD_HALF_WIDTH_M for why this replaced
+  //    polygonizing the bare centrelines.
+  const roads = UnaryUnionOp.union(factory.createGeometryCollection(
+    [...extended.values()].map((geom) => BufferOp.bufferOp(geom, roadHalfWidth))));
 
-  // 5. Keep polygons bounded by ≥2 distinct streets; best = (touchCount, area).
-  const candidates: Array<{ poly: any; touched: number }> = [];
-  const extendedGeoms = [...extended.values()];
+  const rawPolygons: any[] = [];
+  for (let i = 0; i < roads.getNumGeometries(); i++) {
+    const part = roads.getGeometryN(i);
+    // A union of buffers is a Polygon or MultiPolygon, but an empty or
+    // degenerate input can yield something without rings at all.
+    if (typeof part.getNumInteriorRing !== "function") continue;
+    if (dbg) dbg.roads.push(ringXY(part.getExteriorRing()).map(proj.toWgs84));
+    for (let h = 0; h < part.getNumInteriorRing(); h++) {
+      rawPolygons.push(ringToPolygon(part.getInteriorRingN(h)));
+    }
+  }
+
+  // 5. Keep blocks enclosed by ≥2 distinct streets, none of which wraps most
+  //    of the ring on its own; best = (touchCount, area).
+  const candidates: Array<{ poly: any; touched: number; streets: string[] }> = [];
+  const extendedEntries = [...extended.entries()];
+  let slivers = 0; // rejected for single-street dominance — reported below
   for (const poly of rawPolygons) {
     // Sample (and wrap into Points) once per polygon, then reuse across streets.
     const samples = samplesAlongRing(poly.getExteriorRing(), sampleStep)
       .map((c) => factory.createPoint(c));
-    let touched = 0;
-    for (const geom of extendedGeoms) {
-      if (streetTouchesSamples(samples, geom, sampleStep)) touched++;
+    if (samples.length === 0) continue;
+
+    // One pass yields both tests: which streets bound this face at all, and
+    // whether any single one of them accounts for too much of its boundary.
+    const maxHits = maxSingleStreetCoverage * samples.length;
+    const streets: string[] = [];
+    const coverage: BlockPolygonDebug["candidates"][number]["coverage"] = [];
+    let dominated = false;
+    for (const [name, geom] of extendedEntries) {
+      const hits = countSamplesNearStreet(
+        samples, geom, maxHits, touchTolerance, minTouchSamples, !!dbg);
+      if (dbg) coverage.push({ name, hits, share: hits / samples.length });
+      // A dominated face is rejected outright, so there is nothing left to
+      // learn from the remaining streets — stop paying for them. This is the
+      // one path where the CPU budget was already worst-case (a sliver runs
+      // the length of a boulevard, so it carries the most samples). The tester
+      // reads every street's share, so there it keeps going after the verdict.
+      if (hits > maxHits) {
+        dominated = true;
+        if (!dbg) break;
+        continue;
+      }
+      if (hits >= minTouchSamples) streets.push(name);
     }
-    if (touched >= 2) candidates.push({ poly, touched });
+    if (dbg) {
+      const ring = ringXY(poly.getExteriorRing());
+      let perimeter = 0;
+      for (let i = 1; i < ring.length; i++)
+        perimeter += Math.hypot(ring[i]![0] - ring[i - 1]![0], ring[i]![1] - ring[i - 1]![1]);
+      const areaM2 = poly.getArea();
+      dbg.candidates.push({
+        ring: ring.map(proj.toWgs84),
+        areaM2,
+        meanWidthM: perimeter > 0 ? (2 * areaM2) / perimeter : 0,
+        samples: samples.length,
+        coverage: coverage.sort((a, b) => b.hits - a.hits),
+        bounding: streets,
+        // Overwritten for whichever one wins the sort below.
+        verdict: dominated ? "dominated" : streets.length >= 2 ? "runner-up" : "too-few-streets",
+      });
+    }
+    if (dominated) { slivers++; continue; }
+    if (streets.length >= 2) candidates.push({ poly, touched: streets.length, streets });
   }
   candidates.sort((a, b) => b.touched - a.touched || b.poly.getArea() - a.poly.getArea());
 
   if (!candidates.length) {
-    return { polygon: null, reason: "no polygon bounded by ≥2 distinct streets" };
+    // Each of these says something different about *why* there is no polygon,
+    // and they are the only signal the review tool gets when an alert comes
+    // back pinned rather than outlined.
+    return {
+      polygon: null,
+      reason: rawPolygons.length === 0
+        ? "the streets enclose no block"
+        : slivers === rawPolygons.length
+          ? `all ${slivers} enclosed area(s) were bounded by a single street`
+          : `none of ${rawPolygons.length} enclosed area(s) was bounded by ≥2 distinct streets`,
+      ...(dbg ? { debug: dbg } : {}),
+    };
   }
 
   // 6. Reproject winner to WGS84 + FeatureCollection (streets_to_geojson shape).
-  const ringWgs84: [number, number][] = candidates[0]!.poly
-    .getExteriorRing()
-    .getCoordinates()
-    .map((c: any) => proj.toWgs84([c.x, c.y]));
+  const winner = candidates[0]!;
+  const ringWgs84: LngLat[] = ringXY(winner.poly.getExteriorRing()).map(proj.toWgs84);
+
+  if (dbg) {
+    // Matched on area rather than by index: the debug list holds every enclosed
+    // area in build order, the candidate list only the survivors, re-sorted.
+    const area = winner.poly.getArea();
+    const won = dbg.candidates.find((c) => c.verdict === "runner-up" && c.areaM2 === area);
+    if (won) won.verdict = "winner";
+  }
 
   return {
+    ...(dbg ? { debug: dbg } : {}),
     polygon: {
       type: "FeatureCollection",
       features: [{
         type: "Feature",
-        properties: { streets: [...streetGeoms.keys()] },
+        // The streets that actually bound the winning face, not every name we
+        // fetched: the two differed whenever the block was built from a subset,
+        // and the review tool prints this as "the polygon is bounded by …".
+        properties: { streets: winner.streets },
         geometry: { type: "Polygon", coordinates: [ringWgs84] },
       }],
     },
