@@ -18,14 +18,14 @@ Items marked 🧑 need the operator (accounts, payments, decisions) — see [SET
 
 ## 1. Deployment hygiene
 
-- [ ] **Redeploy.** The live Worker predates several changes — migrations 0009–0014, the
-      erpsever.bg contract fix, the ViK id-probe crawler, ISO datetimes, the 4-hour VT
-      interval, and everything from the 28.07 review fix — unless
-      `npx wrangler deployments list` says otherwise. Apply the migrations remotely
-      **first** (`npm run db:remote`) and confirm with
-      `npx wrangler d1 migrations list --remote`. Ordering is load-bearing now:
-      `getRegions` reads `region_aliases` (0013) and `insertAlert` writes `windows_json`
-      (0012), so a Worker deployed ahead of its migrations fails every alert it handles.
+- [x] ~~**Redeploy.**~~ Done 30.07.2026 while fixing the CPU outage — the live Worker was
+      still the 28.07 18:43 build, so it also predated the 28.07 review fix's normalize
+      change (`7c3bbd9`, a district's own streets follow it out from under the city).
+      Migrations 0009–0014 were already applied remotely, confirmed with
+      `npx wrangler d1 migrations list --remote` before deploying. Keep the ordering rule
+      in mind for next time: `getRegions` reads `region_aliases` (0013) and `insertAlert`
+      writes `windows_json` (0012), so a Worker deployed ahead of its migrations fails
+      every alert it handles.
 - [ ] **Merge `cloudflare-migration` into `main`.** `main` still holds the retired
       pre-Cloudflare stack (50 commits behind), and CI's `deploy` job only runs on `main`,
       so nothing auto-deploys until this happens.
@@ -57,9 +57,38 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
 - [ ] **Watch the matcher's threshold.** B1 raised core-comparison to 0.40 with clean
       separation over the 102 names seen so far. New source text can land in the gap;
       a name that should match and scores 0.35 is an alias row, not a lower threshold.
-- [ ] **CPU headroom.** `place-names.ts` added per-candidate parsing on top of the trigram
-      scan, against a 10 ms budget. If `wrangler tail` shows alert handling approaching
-      it, the in-memory trigram index in §6 is the fix — measure first.
+- [x] ~~**CPU headroom.**~~ Fired on 30.07.2026 before anyone measured it, and took
+      ingestion down for 20 hours: every tick died at `exceededCpu`, so no cursor moved
+      and six real ViK outages went unsent. `prepare()` cost ~11.6 ms in one synchronous
+      burst on a cold isolate — and a 15-minute cron is a cold isolate every time. Fixed
+      by building the per-name data at module evaluation (§1.3), 11.6 ms → 1.27 ms. The
+      in-memory trigram index below would **not** have fixed it: an index is still built
+      per isolate on first use. Read SPEC.md §1.1 on what the 10 ms actually bounds.
+- [ ] **A message that cannot be processed still pins the cursor forever.** This is what
+      turned one over-budget message into a 20-hour outage instead of one late alert. The
+      design is deliberate for the transient cases — oldest-first, advance only past
+      successes — and `MAX_PUSH_ATTEMPTS` already caps the one failure that repeats
+      (a dead push). Nothing caps a message that fails *before* the store.
+      The awkward part: an `exceededCpu` kill runs no more code, so an attempt counter
+      written after the failure never gets written. It has to be written *before* the
+      heavy work and cleared on success — one extra D1 write per message per tick — and
+      then N strikes means skipping a real public-safety alert on purpose. That trade is
+      a product decision, not a refactor, which is why this is a checkbox and not a
+      patch. Cheap partial credit meanwhile: alert on a `crawl_state.updated_at` that
+      has not moved in a few hours (SPEC.md §3.8 has the query).
+- [ ] **Workers AI is timing out far more than spike 2 measured — watch this.** Over the
+      three recovery ticks on 30.07.2026: **6 `AI.run timed out after 30000 ms` against 8
+      messages ingested**, and one epro message exhausted all 3 attempts and was deferred
+      to the next tick. Spike 2 clocked qwen3-30b at 4–21 s, which is what `RUN_TIMEOUT_MS
+      = 30_000` was sized for; it is now routinely past 30 s.
+      Why it matters beyond wasted neurons: a message can burn 90 s in retries, and the
+      10:00 tick used **175.9 s of the 180 s `DEADLINE_MS`**. Past that the runner starts
+      logging "Deadline reached before '<source>'" and skipping sources — so this
+      degrades into *missed* alerts rather than slow ones, from a direction the deadline
+      design did not anticipate (it assumed the AI was fast and Overpass was the risk).
+      Do not just raise the timeout — that makes starvation more likely, not less.
+      Measure first: whether this is a transient Workers AI condition or the new normal
+      decides between a faster/smaller model, fewer attempts, and one message per tick.
 
 ## 3. Email delivery — via OneSignal, once the domain is bought
 
@@ -195,8 +224,9 @@ Each of these has a trigger; none is worth doing before it fires.
 
 | Item | Do it when |
 |---|---|
-| In-memory trigram index for the fuzzy matcher | The streets table grows, or `place-names.ts` parsing pushes alert handling toward the 10 ms budget in `wrangler tail`. D1-stored trigrams were evaluated and rejected |
-| Workers Paid ($5/mo, 30 s CPU) | Polygon building actually exceeds the 10 ms budget, not before |
+| In-memory trigram index for the fuzzy matcher | `bestMatch` — not `place-names` — shows up as a burst in `wrangler tail`. Largely overtaken: the matcher's cold cost is now 1.27 ms because the per-name data is built at startup (SPEC.md §1.3), and an index would be built per isolate. D1-stored trigrams were evaluated and rejected |
+| Workers Paid ($5/mo, 30 s CPU) | Polygon building actually exceeds the budget, not before. Note the 30.07.2026 outage did **not** need it: a 10 ms *burst* limit is not raised usefully by a plan that grants more total CPU, and the burst was avoidable work |
+| Granting the wrangler token observability scope | Before the next incident. Without it, historical Worker logs cannot be queried at all and diagnosis costs one 15-minute cron cycle per data point (SPEC.md §3.8) |
 | AI Gateway for request logs | Debugging an AI-quality problem that the current logs cannot explain |
 | Paid/self-hosted map tiles | Traffic grows enough to matter under the OSM tile usage policy |
 | Per-source polling changes | A source's publishing rhythm changes — intervals live in `src/ingestion/schedule.ts` |

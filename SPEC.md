@@ -28,11 +28,26 @@ crons `*/15 * * * *` (ingest) and `30 3 * * *` (cleanup).
 
 **Free-tier numbers the design is built around** (verified July 2026; links in §3.6):
 
-- **Workers Free:** 100,000 requests/day · **10 ms CPU** per invocation (I/O wait
-  does not count) · **50 external subrequests** per invocation (D1/AI/KV have a
-  separate 1,000 internal ceiling) · 3 MB gzipped script · 5 Cron Triggers per
-  account.
+- **Workers Free:** 100,000 requests/day · **10 ms CPU per uninterrupted
+  synchronous stretch** (I/O wait does not count) · **50 external subrequests**
+  per invocation (D1/AI/KV have a separate 1,000 internal ceiling) · 3 MB gzipped
+  script · 5 Cron Triggers per account.
   A scheduled invocation gets *minutes* of wall clock — only CPU is capped.
+
+  **The 10 ms is not an invocation total.** This document said it was until
+  30.07.2026, when the ingest cron started dying at `exceededCpu` and the
+  measurements said otherwise: the killed ticks reported a `cpuTime` of exactly
+  10, while the ticks that replaced them complete with `outcome: "ok"` at 94 ms
+  and 53 ms. What the limit bounds is one stretch of synchronous work between two
+  I/O awaits, so accumulating CPU across many awaits is fine and a single long
+  burst is not. Design against the longest burst, not the sum — and note that
+  raising the ceiling (the `$5/mo` escape hatch in §1.9) is the wrong instrument
+  for a burst that is simply doing avoidable work.
+
+  Module evaluation is charged separately again, against a **400 ms startup
+  budget** that `wrangler deploy` prints as "Worker Startup Time" (27 ms as of
+  the §1.3 change below). Work that depends only on data already in the bundle
+  therefore belongs at module scope, where it costs startup rather than a tick.
 - **D1 Free:** 5 GB total / 500 MB per DB · 5M rows read/day · 100k rows
   written/day · 50 queries per invocation · 100 bound parameters per statement.
   Billing counts rows **examined**, not returned, which is why §1.2's partial
@@ -242,9 +257,35 @@ district in the city — so those alerts pinned a village and, because a user's
    otherwise unreachable) resolves to the **same** `region_id` — a second region
    row would split the district's users instead of joining them.
 
-Parsed kinds, core trigrams and the in-city flag are memoized against the
-candidate array the same way `fuzzy.ts` memoizes trigrams, so the 6-hour ref
-cache pays for them once rather than per alert (§1.1's 10 ms CPU budget).
+**Parsed kinds and core trigrams are built at module evaluation**, keyed by name,
+from the same `seeds/*.json` the database is seeded from — not per alert, and not
+per isolate. Both are derived from a name and nothing else (no row id, no
+coordinate, no table), so there is nothing about them that needs a request.
+
+That was learned the hard way. They used to be computed on first use and memoized
+against the candidate array, which sounds equivalent and is not: a 15-minute cron
+tick is a *cold isolate every time*, so "once per isolate" meant "every tick". The
+first `matchRegion` cost 6.78 ms and the first `matchStreet` 4.85 ms — ~11.6 ms in
+one synchronous burst, over §1.1's 10 ms — and on 30.07.2026 that stopped
+ingestion outright for 20 hours: every tick died at `exceededCpu` before storing
+anything, so no cursor advanced and the same six ViK messages were retried
+forever. Note what the shape of the numbers says — 252 regions cost *more* than
+1,333 streets, because the dominant term was first-execution warmup of the kind
+regexes and the tokenizer, not per-row work. Moving that to startup is what fixed
+it; making it cheaper was not enough on its own (11.63 → 9.66 ms).
+
+Now 0.37 ms and 0.79 ms. A gram is also its three UTF-16 code units packed into
+one double rather than a freshly allocated 3-character string — the sets stay in
+bijection, so Jaccard is bit-identical (verified as zero deviation over all 1,333
+seeded street names). The in-city flag is computed on demand for the near-tie band
+only: `matchStreet` passes `preferInCity: false` and never reads it, so running
+1,333 haversines for it was pure cost.
+
+D1 remains the source of truth for the rows. `prepare` maps whatever the 6-hour
+ref cache read and falls back to computing any name the seeds do not carry — the
+two `region_aliases` rows from migration 0013, or a re-seed that has not been
+deployed yet. Drift costs speed, never accuracy. Against the deployed database
+that is 1333/1333 streets and 252/254 regions.
 
 **Point-in-polygon (`core/geo.ts`)** — `ringBBox` → SQL bbox prefilter
 (`latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?`) → exact ray-cast test
@@ -690,8 +731,8 @@ separated:
    `streets` property — the shape enrichment already accepts.
 7. Any exception → log and `null`. A polygon failure never fails a message.
 
-**CPU is the binding constraint here** — this is the only meaningfully CPU-heavy
-code in the Worker, against a 10 ms free-plan budget. Spike 3 measured 3–7 ms for
+**CPU is the binding constraint here** — this is the most CPU-heavy code in the
+Worker, against the 10 ms free-plan burst budget (§1.1). Spike 3 measured 3–7 ms for
 block-level street sets but 87 ms at 5 m sampling for a boulevard-heavy set, so
 two mitigations are baked in: 10 m sampling (same winners, half the cost) and
 clipping street geometries to a bbox with a 500 m margin around the *shortest*
@@ -817,6 +858,7 @@ Original risk list, with outcomes:
 | 1 | Source sites blocking Cloudflare egress IPs | **Cleared** — Phase 0 spike 1: all sources returned byte-identical responses from the edge and from a local IP |
 | 2 | Cron wall-clock budget | **Restructured** — the 30 s assumption was wrong; only CPU is capped. Bounded by the 15-min cadence instead (§1.7). Worst case is delayed, never lost, alerts |
 | 3 | 10 ms CPU on polygon building | **Mitigated** in §1.9 (10 m sampling + bbox clip); the $5/mo plan is the escape hatch |
+| 3a | 10 ms CPU on **name matching** — the one that actually fired | **Fixed** in §1.3 (30.07.2026). Not on the list because polygons were assumed to be the only CPU-heavy code; the matcher's per-candidate setup was larger and ran on every tick. See §1.1 on what the 10 ms actually bounds |
 | 4 | LLM quality on Bulgarian | **Resolved** — qwen3-30b scored 10–11/13 on the graded corpus with 0 errors; the one systematic deviation is handled deterministically (§1.7) |
 | 5 | 50-subrequest fan-out ceiling | **Retired** — OneSignal fans out per *user*, 2,000 per request (§1.6) |
 
@@ -1065,10 +1107,34 @@ DNS rebinding.
   tick by the `event.cron` value *and* a non-zero CPU time on the invocation —
   which is why the scheduled handler awaits its job instead of using `waitUntil`
   (§1.1).
+- **Read `outcome` before you read the logs.** An `exceededCpu` kill discards the
+  invocation's buffered logs, so `wrangler tail` shows the tick with `logs: []`
+  and `exceptions: []` — indistinguishable at a glance from a tick that had
+  nothing to do. That is how the 30.07.2026 outage stayed invisible for 20 hours.
+  `outcome` and `cpuTime` are the tell: a `cpuTime` sitting exactly on the limit
+  is a kill, not a coincidence.
+- **The signature of a stalled ingest** is a `crawl_state.updated_at` that has not
+  moved while the source has published ids above the cursor. Two queries settle
+  it: `SELECT source, last_id, updated_at FROM crawl_state`, then fetch
+  `last_id + 1` from the source by hand. If the page is there and parses, the
+  fault is ours and downstream of the fetch.
 - **A source that returns 200 and nothing useful is the failure mode to watch.**
-  Both real ingestion outages so far (epro's contract change, ViK's region-scoped
-  listing) looked healthy in the logs. Periodically compare what the app shows
-  against the source websites.
+  Both source-side ingestion outages so far (epro's contract change, ViK's
+  region-scoped listing) looked healthy in the logs. Periodically compare what the
+  app shows against the source websites.
+- **A tick's wall time is now the number to watch, not its CPU.** Since 30.07.2026
+  `AI.run` frequently exceeds its 30 s cap (§1.8) — 6 timeouts against 8 ingested
+  messages over three ticks — and retries are serial, so a tick reached 175.9 s of
+  the 180 s `DEADLINE_MS`. When ticks cross it the runner drops whole sources with
+  "Deadline reached before '<source>'", which is a *silent* loss of coverage: the
+  cursor model makes those alerts late rather than lost, but only if a later tick
+  has room. Grep the tail for that line.
+- **Historical logs are not queryable with the current credentials.** Observability
+  is enabled on the Worker, but the wrangler OAuth token's scopes do not include
+  it, so `/workers/observability/telemetry/query` answers `10000 Authentication
+  error` and the only option is catching a live tick with `wrangler tail`. On a
+  15-minute cron that is a 15-minute wait per data point. Worth granting before
+  the next incident rather than during it.
 - **D1 Time Travel** (`wrangler d1 time-travel`) gives 7-day point-in-time
   restore on the free plan — the recovery path referenced by the breach runbook.
 - Retention deletions log their row counts each night; a cleanup that starts
