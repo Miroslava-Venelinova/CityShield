@@ -20,30 +20,52 @@ only — no pip install. Nothing here writes to D1: the only statement is a cons
    with the columns `id, category, title, content, severity, start_time, end_time,
    windows_json, locations_json, created_on_utc`. `--csv` loads one at startup; the same picker reloads from
    either database without restarting. D1 reads are capped at 2000 rows, newest first, and the
-   UI says so when the cap bites.
+   UI says so when the cap bites. A **cutoff date** next to the picker says how far back the
+   review reaches; see below.
 2. **List and filters** — free text over title and content, plus category, severity, review
    status, issue, important-only, created-date range, and inaccuracy reason.
 3. **Detail** — content as scrollable text, the window in both `24.07.2026 09:00` and its raw
    stored form, a map of everything the alert targets, and `locations_json` as a readable list of
    `name → lat, lng` (each pin also links out to OpenStreetMap) with the pretty-printed JSON
    folded underneath.
-4. **Verdict** — one of four, below. Written to `judgments.json` on every judgment, not at the
+4. **Verdict** — one of three, below. Written to `judgments.json` on every judgment, not at the
    end, so closing the tab never costs you the tail of a session.
 5. **Report** — `reports/review-<timestamp>.md` or `.json`, opened in the file manager as soon
    as it is written: issues with their alerts, the important ones first, reason counts, and
    category/severity breakdowns.
 
-## The four verdicts
+## The three verdicts
 
 | | | |
 |---|---|---|
 | **Accurate** | <kbd>y</kbd> | The parse matches the source message. Saves and moves on. |
 | **Inaccurate** | <kbd>n</kbd> | Something is wrong. Needs at least one reason from the taxonomy. |
 | **Not implemented yet** | <kbd>m</kbd> | The parse isn't *wrong*, the thing simply isn't built — the source says something nothing in the pipeline looks for. Reasons are optional here, because the taxonomy is about wrongness. |
-| **Old — excluded** | <kbd>o</kbd> | From a superseded pipeline and not worth arguing about. Counted once in the report and then left out of every breakdown, so a backlog of ancient rows can't skew the percentages. |
 
-`Accurate` and `Old` carry no reasons and no issues — they'd be dangling claims about an alert
-nobody is going to fix — so setting either drops both.
+`Accurate` carries no reasons and no issues — they'd be dangling claims about an alert nobody is
+going to fix — so setting it drops both.
+
+## The cutoff — how far back the review reaches
+
+A table that goes back far enough holds alerts from a pipeline that no longer exists. Arguing
+about those one at a time is wasted effort, and leaving them in drags every percentage in the
+report toward a version of the code nobody is going to change.
+
+So say it once: **ignore alerts created before** a date, in the field next to the source picker.
+Everything earlier goes out of scope — out of the list, out of the counts, out of the report —
+and the report states the date it covers rather than leaving you to wonder why a number looks
+low. Clear the field and they all come straight back; nothing is deleted, the rows stay loaded
+on the server and judgments made before you set it keep their entry in the file.
+
+The date is compared against `created_on_utc` converted to your local day, the same conversion
+the created-from/to filter uses, so the two can't disagree. An alert whose timestamp won't parse
+is always in scope: hiding a row because its date is unreadable is the kind of silent loss this
+tool exists to catch.
+
+The cutoff lives in `settings.json` and survives a restart. It replaced an *Old — excluded*
+verdict, which asked a reviewer to press <kbd>o</kbd> a few hundred times to state one fact
+about a date; leftover judgments carrying it are dropped at startup, with a line on the console
+saying how many.
 
 <kbd>i</kbd> marks an alert **important**, meaning fix this one first. It shows as `★` in the
 list, has its own filter, and gets its own section at the top of the report. It persists
@@ -97,8 +119,8 @@ Three ways to stamp:
 - **Clicking a chip** in the verdict panel attaches or detaches it for the current alert.
 - **"stamp all"** applies it to *every alert matching the current filter* in one call. Search
   for `Аспарухово`, stamp, done. Unjudged alerts take the issue's kind and reasons; alerts you
-  already judged keep their verdict and gain the issue; anything you marked **accurate** or
-  **old** is left alone, and the count of those comes back in the message.
+  already judged keep their verdict and gain the issue; anything you marked **accurate** is left
+  alone, and the count of those comes back in the message.
 
 **New issue from this alert** starts one prefilled with what you've already selected — the
 natural move the second time you write the same note. A saved issue becomes the selected one,
@@ -113,7 +135,7 @@ The point is getting through a few hundred alerts, so nothing needs the mouse:
 | Key | |
 |---|---|
 | <kbd>j</kbd> / <kbd>k</kbd>, <kbd>↓</kbd> / <kbd>↑</kbd> | next / previous alert |
-| <kbd>y</kbd> <kbd>n</kbd> <kbd>m</kbd> <kbd>o</kbd> | the four verdicts (<kbd>y</kbd> and <kbd>o</kbd> save and advance) |
+| <kbd>y</kbd> <kbd>n</kbd> <kbd>m</kbd> | the three verdicts (<kbd>y</kbd> saves and advances) |
 | <kbd>1</kbd>–<kbd>8</kbd> | toggle a reason (also flips the verdict to inaccurate) |
 | <kbd>s</kbd> | stamp the selected issue and advance |
 | <kbd>i</kbd> | important |
@@ -125,11 +147,12 @@ The point is getting through a few hundred alerts, so nothing needs the mouse:
 Set the status filter to **unreviewed** and each save drops the alert out of the list, sliding
 the next one into its place. That is the intended way to work through a backlog.
 
-## The two files
+## The three files
 
 `judgments.json` — a flat `{alert_id: judgment}` map, sorted keys, rewritten atomically on every
-verdict. `issues.json` is the same shape for the issue library. Both gitignored: they are one
-reviewer's opinions, not repo data, and the reports are the shareable artefact.
+verdict. `issues.json` is the same shape for the issue library, and `settings.json` holds the
+cutoff date and nothing else. All gitignored: they are one reviewer's opinions and scope, not
+repo data, and the reports are the shareable artefact.
 
 ```json
 {
@@ -149,8 +172,8 @@ reviewer's opinions, not repo data, and the reports are the shareable artefact.
 `issues` and `important` are written only when set, so an entry from an earlier session keeps
 its exact shape and the common case stays short. `title` and `category` are a snapshot so the
 file reads as something on its own and a report can still name an alert that has since aged out
-of the dataset. Judgments for alerts outside the loaded dataset are kept, not pruned, and the
-report says how many there are.
+of the dataset. Judgments for alerts outside the loaded dataset — or behind the cutoff — are
+kept, not pruned, and the report says how many there are.
 
 ## What the tool can and cannot tell you
 

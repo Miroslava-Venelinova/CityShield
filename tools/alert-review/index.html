@@ -190,6 +190,12 @@
       <button class="ghost" id="loadBtn" style="flex:.6">Load</button>
     </div>
     <div class="hint" id="sourceState">Nothing loaded yet.</div>
+    <div class="row tight">
+      <label for="cutoff" style="margin:0;align-self:center;flex:0 0 auto">Ignore alerts created before</label>
+      <input id="cutoff" type="date" style="flex:0 0 165px">
+      <button class="ghost" id="cutoffClear" style="flex:0 0 auto;width:auto">Clear</button>
+      <div class="hint" id="cutoffState" style="margin:0;align-self:center;flex:1;text-align:right"></div>
+    </div>
   </div>
 
   <div id="messages"></div>
@@ -281,9 +287,10 @@
 
       <div class="card">
         <h2>Report</h2>
-        <div class="hint" style="margin:0 0 10px">Covers the whole loaded dataset, not the current
+        <div class="hint" style="margin:0 0 10px">Covers everything in scope, not the current
         filter: issues with their alerts, the important ones first, reason counts, category and
-        severity breakdowns. Alerts marked old are left out. Opens in the file manager when written.</div>
+        severity breakdowns. Nothing from before the cutoff, and it says which date it covers.
+        Opens in the file manager when written.</div>
         <div class="row" style="margin-top:0">
           <button class="ghost" id="reportMd">Markdown</button>
           <button class="ghost" id="reportJson">JSON</button>
@@ -299,7 +306,7 @@
       <div class="card" id="detailCard">
         <div id="empty" class="muted">Load a source, then pick an alert. <kbd>j</kbd> / <kbd>k</kbd>
         move, <kbd>y</kbd> accurate, <kbd>n</kbd> inaccurate, <kbd>m</kbd> not implemented,
-        <kbd>o</kbd> old, <kbd>i</kbd> important, <kbd>1</kbd>–<kbd>8</kbd> reasons,
+        <kbd>i</kbd> important, <kbd>1</kbd>–<kbd>8</kbd> reasons,
         <kbd>s</kbd> stamp the selected issue, <kbd>g</kbd> map, <kbd>Enter</kbd> save,
         <kbd>u</kbd> unreview.</div>
 
@@ -352,7 +359,6 @@
         </div>
         <div class="row tight">
           <button class="todo" data-verdict="unimplemented">Not implemented <kbd>m</kbd></button>
-          <button class="ghost" data-verdict="stale">Old — ignore <kbd>o</kbd></button>
           <button class="ghost" id="btnStar" style="flex:.8">☆ Important <kbd>i</kbd></button>
         </div>
 
@@ -460,12 +466,6 @@ function fmtInstant(value) {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function localDay(value) {
-  const d = new Date(value);
-  if (!value || isNaN(d)) return "";
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
 // ── setup ────────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -519,8 +519,32 @@ async function load() {
   }
 }
 
+/**
+ * Move the line between "this review is about it" and "this predates the
+ * question". Nothing is deleted — the alerts stay loaded on the server and come
+ * straight back when the cutoff moves or clears.
+ */
+async function setCutoff(value) {
+  try {
+    const data = await api("/api/cutoff", { cutoff: value });
+    applyDataset(data);   // reselects when the current alert just went out of scope
+    message(data.cutoff
+      ? `Cutoff ${data.cutoff} — ${data.counts.excluded} older alert(s) are out of scope.`
+      : "Cutoff cleared — everything loaded is in scope again.", "ok");
+  } catch (e) {
+    message(e.message, "err");
+    $("cutoff").value = $("cutoff").dataset.value || "";
+  }
+}
+
 function applyDataset(data) {
   alerts = data.alerts;
+  // dataset.value is what a rejected edit falls back to.
+  $("cutoff").value = $("cutoff").dataset.value = data.cutoff || "";
+  $("cutoffState").textContent = !data.cutoff
+    ? "No cutoff — everything loaded is in scope."
+    : `${data.counts.excluded} older alert(s) out of scope: hidden from the list, `
+      + "the counts and the report.";
   $("sourceState").innerHTML = data.source
     ? `${alerts.length} alert(s) from <code>${esc(data.detail)}</code> · loaded ${esc(data.loaded_at)}`
       + (data.skipped ? ` · <span class="warn">${data.skipped} row(s) had no id and were skipped</span>` : "")
@@ -561,7 +585,8 @@ function renderProgress(counts) {
     <div><span class="err">${counts.inaccurate}</span><small>inaccurate</small></div>
     <div><span class="warn">${counts.unimplemented}</span><small>not impl.</small></div>
     <div><span class="star">${counts.important}</span><small>important</small></div>
-    <div><span class="muted">${counts.stale}</span><small>old</small></div>
+    ${counts.excluded ? `<div><span class="muted">${counts.excluded}</span>
+      <small>out of scope</small></div>` : ""}
     <div><span class="${counts.unreviewed ? "warn" : "ok"}">${counts.unreviewed}</span><small>to review</small></div>`;
 }
 
@@ -688,13 +713,13 @@ async function stampAll(id) {
   if (!ids.length) return message("The current filter matches nothing.", "warn");
   if (!confirm(`Stamp “${issues[id].title}” on all ${ids.length} alert(s) matching the current filter?\n\n`
     + `Unjudged ones become "${config.verdicts[issues[id].kind].label.toLowerCase()}" with the issue's reasons. `
-    + `Alerts already judged accurate or old are left alone.`)) return;
+    + `Alerts already judged accurate are left alone.`)) return;
   try {
     const data = await api("/api/stamp", { issue_id: id, ids });
     applyState(data);
     if (currentId) select(currentId);
     message(`Stamped on ${data.stamped} alert(s)`
-      + (data.skipped ? `; ${data.skipped} left alone (accurate or old).` : "."), "ok");
+      + (data.skipped ? `; ${data.skipped} left alone (already accurate).` : "."), "ok");
   } catch (e) {
     message(e.message, "err");
   }
@@ -718,13 +743,15 @@ function matches(alert) {
   } else if (issueFilter && !(judgment && (judgment.issues || []).includes(issueFilter))) {
     return false;
   }
-  const day = localDay(alert.created_on_utc);
+  // created_day is the server's local-day conversion of created_on_utc — the
+  // same string the cutoff compares against, so the two can never disagree.
+  const day = alert.created_day;
   if ($("fFrom").value && (!day || day < $("fFrom").value)) return false;
   if ($("fTo").value && (!day || day > $("fTo").value)) return false;
   return true;
 }
 
-const MARKS = { accurate: ["✓", "ok"], inaccurate: ["✕", "err"], unimplemented: ["◌", "warn"], stale: ["–", "muted"] };
+const MARKS = { accurate: ["✓", "ok"], inaccurate: ["✕", "err"], unimplemented: ["◌", "warn"] };
 
 function render() {
   filtered = alerts.filter(matches);
@@ -1225,6 +1252,9 @@ $("source").addEventListener("change", () =>
   $("csvPath").classList.toggle("hide", $("source").value !== "csv"));
 $("loadBtn").addEventListener("click", load);
 $("csvPath").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+// `change`, not `input`: a date field fires input on every half-typed year.
+$("cutoff").addEventListener("change", () => setCutoff($("cutoff").value));
+$("cutoffClear").addEventListener("click", () => setCutoff(""));
 
 const FILTERS = ["q", "fCategory", "fSeverity", "fStatus", "fReason", "fIssue", "fImportant", "fFrom", "fTo"];
 for (const id of FILTERS) {
@@ -1244,7 +1274,7 @@ $("prevBtn").addEventListener("click", () => step(-1));
 $("nextBtn").addEventListener("click", () => step(1));
 document.querySelectorAll("[data-verdict]").forEach((el) =>
   el.addEventListener("click", () => {
-    // Accurate and old are terminal — nothing more to say, so they save and move on.
+    // Accurate is terminal — nothing more to say, so it saves and moves on.
     const verdict = el.dataset.verdict;
     if (isFinding(verdict)) setVerdict(verdict); else save(verdict);
   }));
@@ -1327,7 +1357,6 @@ document.addEventListener("keydown", (e) => {
     case "y": save("accurate"); break;
     case "n": setVerdict("inaccurate"); break;
     case "m": setVerdict("unimplemented"); break;
-    case "o": save("stale"); break;
     case "i": toggleImportant(); break;
     case "g": toggleMap(); break;
     case "s": stampActive(); break;

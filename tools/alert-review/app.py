@@ -22,8 +22,8 @@ pinned to loopback — this process shells out to `wrangler d1 execute --remote`
 so no other page in the browser gets to reach it.
 
 Nothing here writes to D1: the only statement is a constant SELECT. The only
-files written are judgments.json and issues.json (both gitignored) and whatever
-lands in reports/.
+files written are judgments.json, issues.json and settings.json (all gitignored)
+and whatever lands in reports/.
 
 Standard library only: this is a developer tool that should run from a fresh
 checkout without a pip install.
@@ -48,11 +48,12 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
 
-# One verdict per alert id and the shared issue library, rewritten on every
-# change. Both gitignored: one reviewer's opinions, not repo data. Reports are
+# One verdict per alert id, the shared issue library, and the cutoff date.
+# All gitignored: one reviewer's opinions and scope, not repo data. Reports are
 # the shareable artefact.
 JUDGMENTS_FILE = HERE / "judgments.json"
 ISSUES_FILE = HERE / "issues.json"
+SETTINGS_FILE = HERE / "settings.json"
 REPORTS_DIR = HERE / "reports"
 
 D1_DATABASE = "cityshield-db"
@@ -82,14 +83,14 @@ CATEGORY_LABELS = {
     "heating": "Heating (Веолия)",
 }
 
-# Four dispositions, because "wrong" and "not built yet" are different work and
-# an alert from a superseded pipeline is neither. `stale` is the escape hatch:
-# it keeps the row out of every number in the report rather than skewing them.
+# Three dispositions, because "wrong" and "not built yet" are different work.
+# There is deliberately no verdict for "too old to argue about": a backlog from
+# a superseded pipeline is a property of when the alert was created, not a
+# judgment about it, and the cutoff below takes those out wholesale.
 VERDICTS = {
     "accurate": {"label": "Accurate", "key": "y"},
     "inaccurate": {"label": "Inaccurate", "key": "n"},
     "unimplemented": {"label": "Not implemented yet", "key": "m"},
-    "stale": {"label": "Old — excluded", "key": "o"},
 }
 # The two that describe a defect: they carry reasons and issues, and they are
 # what the report is about.
@@ -141,16 +142,20 @@ _lock = threading.Lock()
 _judgments: dict[str, dict] = {}
 _issues: dict[str, dict] = {}
 _dataset: dict = {"source": "", "detail": "", "loaded_at": "", "truncated": False, "alerts": []}
+# The one setting: alerts created before this local date are out of scope
+# entirely. "" means everything loaded is in scope.
+_cutoff: str = ""
 
 
-# ── the two JSON stores ───────────────────────────────────────────────────────
+# ── the JSON stores ───────────────────────────────────────────────────────────
 
 
 def read_store(path: Path) -> dict[str, dict]:
     """
-    Both files are plain {id: object} maps so they can be eyeballed and scripted
-    against. A corrupt one is not silently discarded — losing a review session
-    to a stray keystroke would be worse than failing to start.
+    The judgments and the issues are plain {id: object} maps so they can be
+    eyeballed and scripted against. A corrupt one is not silently discarded —
+    losing a review session to a stray keystroke would be worse than failing to
+    start. (settings.json is the exception, see read_cutoff.)
     """
     if not path.exists():
         return {}
@@ -173,6 +178,80 @@ def write_store_locked(path: Path, store: dict) -> None:
     temp = path.with_suffix(".json.tmp")
     temp.write_text(payload, encoding="utf-8")
     os.replace(temp, path)
+
+
+# ── the cutoff ────────────────────────────────────────────────────────────────
+
+
+def read_cutoff() -> str:
+    """A corrupt settings file is not worth failing to start over — the cutoff
+    is one date the reviewer can retype, unlike a session's verdicts."""
+    if not SETTINGS_FILE.exists():
+        return ""
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return valid_cutoff(data.get("cutoff", "")) if isinstance(data, dict) else ""
+    except (json.JSONDecodeError, ToolError, OSError):
+        return ""
+
+
+def valid_cutoff(value) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        raise ToolError(f"A cutoff is a date like 2026-07-01, not {value!r}.")
+
+
+def set_cutoff(value) -> dict:
+    """
+    Move the line between "this review is about it" and "this predates the
+    question". Nothing is deleted: the alerts stay loaded and come straight back
+    when the cutoff moves or clears, and judgments made before it was set keep
+    their entry in the file.
+    """
+    global _cutoff
+    value = valid_cutoff(value)
+    with _lock:
+        _cutoff = value
+        write_store_locked(SETTINGS_FILE, {"cutoff": value})
+    return dataset_payload()
+
+
+def local_day(created_on_utc: str) -> str:
+    """
+    The local calendar day an alert was created on, as `YYYY-MM-DD`.
+
+    `created_on_utc` really is an instant (unlike start_time/end_time — see the
+    README), so it converts rather than reformats. Computed once per alert on
+    load: the cutoff, the created-from/to filter and the browser all compare
+    the same string, and 2000 rows are not reparsed on every request.
+    """
+    text = (created_on_utc or "").strip()
+    if not text:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone().strftime("%Y-%m-%d")
+
+
+def in_scope(alert: dict) -> bool:
+    # An alert whose timestamp will not parse is always in scope: hiding a row
+    # because its date is unreadable is exactly the kind of silent loss this
+    # tool exists to catch.
+    return not _cutoff or not alert["created_day"] or alert["created_day"] >= _cutoff
+
+
+def visible() -> list:
+    """The alerts this review is about — everything loaded, minus what the
+    cutoff puts out of scope. Every count, list and report goes through here."""
+    return [alert for alert in _dataset["alerts"] if in_scope(alert)]
 
 
 # ── issues ────────────────────────────────────────────────────────────────────
@@ -255,21 +334,21 @@ def stamp(issue_id: str, alert_ids: list) -> dict:
     Apply one issue to many alerts in a single pass — the answer to "this same
     thing is wrong in forty of them". An untouched alert takes the issue's
     verdict and reasons; an alert already judged keeps its verdict and gains the
-    issue. Alerts judged accurate or old are left alone rather than silently
-    overruled, and the count of those comes back for the UI to report.
+    issue. Alerts judged accurate are left alone rather than silently overruled,
+    and the count of those comes back for the UI to report.
     """
     with _lock:
         issue = _issues.get(issue_id)
         if issue is None:
             raise ToolError(f"No such issue: {issue_id}")
 
-        known = {alert["id"] for alert in _dataset["alerts"]}
+        known = {alert["id"] for alert in visible()}
         stamped, skipped = 0, 0
         for alert_id in dict.fromkeys(str(i) for i in alert_ids):
             if alert_id not in known:
                 continue
             judgment = _judgments.get(alert_id)
-            if judgment and judgment.get("verdict") in ("accurate", "stale"):
+            if judgment and judgment.get("verdict") == "accurate":
                 skipped += 1
                 continue
             if judgment is None:
@@ -379,9 +458,10 @@ def find_alert(alert_id: str) -> dict | None:
 
 
 def counts() -> dict:
-    """Progress over the loaded dataset — judgments for alerts that aren't
-    loaded are real, but they are not this session's remaining work."""
-    loaded = _dataset["alerts"]
+    """Progress over the alerts in scope — judgments for alerts that aren't
+    loaded, or that the cutoff excludes, are real but are not this session's
+    remaining work."""
+    loaded = visible()
     judged = [_judgments[a["id"]] for a in loaded if a["id"] in _judgments]
     tally = {verdict: sum(1 for j in judged if j.get("verdict") == verdict) for verdict in VERDICTS}
     return {
@@ -390,6 +470,7 @@ def counts() -> dict:
         "judged": len(judged),
         "unreviewed": len(loaded) - len(judged),
         "important": sum(1 for j in judged if j.get("important")),
+        "excluded": len(_dataset["alerts"]) - len(loaded),
         "orphans": len(_judgments) - len(judged),
     }
 
@@ -444,6 +525,7 @@ def normalize(row: dict) -> dict | None:
         "locations": locations,
         "locations_error": error,
         "created_on_utc": text("created_on_utc"),
+        "created_day": local_day(text("created_on_utc")),
     }
 
 
@@ -474,7 +556,10 @@ def dataset_payload() -> dict:
         "loaded_at": _dataset["loaded_at"],
         "truncated": _dataset["truncated"],
         "skipped": _dataset.get("skipped", 0),
-        "alerts": _dataset["alerts"],
+        "cutoff": _cutoff,
+        # Only what the cutoff leaves in scope — the browser never sees the
+        # excluded rows, so no filter or count can accidentally include them.
+        "alerts": visible(),
         **state_payload(),
     }
 
@@ -608,13 +693,13 @@ def polygon_points(geometry, depth: int = 0) -> int:
 
 def summarize() -> dict:
     """
-    The whole loaded dataset, never the current filter: a report that silently
-    described a subset would be read as describing everything. Alerts marked
-    old are the one exception — they are counted once and then left out of
-    every breakdown, which is the point of that verdict.
+    Everything in scope, never the current filter: a report that silently
+    described a subset would be read as describing everything. The cutoff is
+    the one thing that narrows it, and the report says so at the top rather
+    than quietly reporting on less than it looks like.
     """
     with _lock:
-        alerts = list(_dataset["alerts"])
+        alerts = visible()
         judgments = dict(_judgments)
         issues = {k: dict(v) for k, v in _issues.items()}
         source, detail = _dataset["source"], _dataset["detail"]
@@ -632,10 +717,8 @@ def summarize() -> dict:
         verdict = judgment.get("verdict", "")
         if verdict in tally:
             tally[verdict] += 1
-        if verdict == "stale":
-            continue
 
-        for bucket, key in ((by_category, alert["category"] or "(none)"),
+        for bucket, key in((by_category, alert["category"] or "(none)"),
                             (by_severity, alert["severity"] or "(none)")):
             row = bucket.setdefault(key, {"loaded": 0, "accurate": 0,
                                           "inaccurate": 0, "unimplemented": 0})
@@ -690,6 +773,7 @@ def summarize() -> dict:
         "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         "source": source or "(nothing loaded)",
         "source_detail": detail,
+        "cutoff": _cutoff,
         "counts": counts(),
         "verdict_counts": tally,
         "reason_counts": reason_counts,
@@ -720,15 +804,21 @@ def render_markdown(summary: dict) -> str:
         f"Source: **{summary['source']}**"
         + (f" · `{summary['source_detail']}`" if summary["source_detail"] else ""),
         "",
-        f"{counted['loaded']} alerts loaded · {tally['accurate']} accurate · "
+        f"{counted['loaded']} alerts in scope · {tally['accurate']} accurate · "
         f"{tally['inaccurate']} inaccurate · {tally['unimplemented']} not implemented · "
         f"{counted['unreviewed']} unreviewed",
     ]
-    if tally["stale"]:
-        lines += ["", f"*{tally['stale']} alert(s) marked old and left out of every number below.*"]
+    # What the report is about is a decision, so it is stated rather than left
+    # to be inferred from a number that looks lower than expected.
+    if summary["cutoff"]:
+        since = datetime.strptime(summary["cutoff"], "%Y-%m-%d").strftime("%d.%m.%Y")
+        lines += ["", f"*Covers alerts created on or after **{since}**"
+                      + (f" — {counted['excluded']} older alert(s) are out of scope "
+                         "and appear in no number below." if counted["excluded"] else ".") + "*"]
     if counted["orphans"]:
         lines += ["", f"*{counted['orphans']} judgment(s) in `judgments.json` refer to alerts "
-                      "outside this dataset and are not counted here.*"]
+                      "outside this review — not loaded, or before the cutoff — and are not "
+                      "counted here.*"]
 
     if summary["important"]:
         lines += ["", f"## Fix first — {len(summary['important'])} marked important", ""]
@@ -974,6 +1064,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(load_d1(source))
                 else:
                     raise ToolError(f"Unknown source: {source}")
+            elif path == "/api/cutoff":
+                self._send_json(set_cutoff(body.get("cutoff", "")))
             elif path == "/api/judge":
                 self._send_json(judge(
                     body.get("id", ""), body.get("verdict", ""), body.get("reasons", []),
@@ -1014,8 +1106,21 @@ def main():
     if not BACKEND_DIR.is_dir():
         sys.exit(f"Expected the backend at {BACKEND_DIR} — run this from the CityShield repo.")
 
+    global _cutoff
     _judgments.update(read_store(JUDGMENTS_FILE))
     _issues.update(read_store(ISSUES_FILE))
+    _cutoff = read_cutoff()
+
+    # `old — excluded` used to be a verdict; it is the cutoff now. An entry left
+    # over from that era would otherwise sit in the file as an unknown verdict,
+    # counted nowhere and reachable from nothing.
+    retired = [i for i, j in _judgments.items() if j.get("verdict") not in VERDICTS]
+    for alert_id in retired:
+        del _judgments[alert_id]
+    if retired:
+        write_store_locked(JUDGMENTS_FILE, _judgments)
+        print(f"Dropped {len(retired)} judgment(s) with a retired verdict — "
+              "set a cutoff date instead to leave old alerts out.")
 
     if args.csv:
         try:
@@ -1027,7 +1132,10 @@ def main():
     port = free_port()
     url = f"http://127.0.0.1:{port}/?t={Handler.token}"
 
-    loaded = (f"{len(_dataset['alerts'])} alert(s) from {_dataset['detail']}"
+    in_scope_count = len(visible())
+    loaded = (f"{in_scope_count} alert(s) from {_dataset['detail']}"
+              + (f" ({len(_dataset['alerts']) - in_scope_count} before the {_cutoff} cutoff)"
+                 if len(_dataset["alerts"]) != in_scope_count else "")
               if _dataset["alerts"] else "nothing loaded yet — pick a source in the UI")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"Alert review → {url}\n"
