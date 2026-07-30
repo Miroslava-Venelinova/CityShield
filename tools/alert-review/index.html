@@ -161,9 +161,18 @@
   .issue .acts { display: flex; gap: 6px; }
   .issue .acts button { width: auto; font-size: 11px; padding: 2px 7px; }
 
-  .stat { display: flex; gap: 18px; flex-wrap: wrap; }
-  .stat div span { display: block; font-size: 20px; font-weight: 600; }
-  .stat div small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  /* One box per number: the row used to read as a single run of digits, and
+     which small caps belonged to which count took a second look. */
+  .stat { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat div {
+    min-width: 76px; padding: 6px 12px 7px; text-align: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .stat div span { display: block; font-size: 21px; font-weight: 600; line-height: 1.25; }
+  .stat div small {
+    color: var(--muted); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .05em; white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -356,10 +365,7 @@
         <div class="row" style="margin-top:0">
           <button class="yes" data-verdict="accurate">Accurate <kbd>y</kbd></button>
           <button class="no" data-verdict="inaccurate">Inaccurate <kbd>n</kbd></button>
-        </div>
-        <div class="row tight">
           <button class="todo" data-verdict="unimplemented">Not implemented <kbd>m</kbd></button>
-          <button class="ghost" id="btnStar" style="flex:.8">☆ Important <kbd>i</kbd></button>
         </div>
 
         <div id="findingPane" class="hide">
@@ -377,7 +383,10 @@
 
         <div class="row">
           <button id="saveBtn">Save <kbd>Enter</kbd></button>
-          <button class="ghost" id="unreviewBtn" style="flex:.5">Unreview <kbd>u</kbd></button>
+        </div>
+        <div class="row tight">
+          <button class="ghost" id="btnStar">☆ Important <kbd>i</kbd></button>
+          <button class="ghost" id="unreviewBtn">Unreview <kbd>u</kbd></button>
         </div>
         <div class="hint" id="judgeState"></div>
       </div>
