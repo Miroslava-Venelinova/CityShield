@@ -50,7 +50,7 @@
   ],
   "vars": {
     // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes
-    // JSON-schema mode on our nullable-union schemas, and the cheapest. Needs max_tokens: 8000.
+    // JSON-schema mode on our nullable-union schemas, and the cheapest. Needs a generous max_tokens (10k).
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
     // region_id=0 is the whole municipality; region_id=15 was the city of Varna
     // alone. Only used to seed the cursor on a fresh DB — the crawl itself walks

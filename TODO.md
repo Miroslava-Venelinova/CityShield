@@ -82,7 +82,8 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       to the next tick. Spike 2 clocked qwen3-30b at 4–21 s, which is what `RUN_TIMEOUT_MS
       = 30_000` was sized for; it is now routinely past 30 s.
       Why it matters beyond wasted neurons: a message can burn 90 s in retries, and the
-      10:00 tick used **175.9 s of the 180 s `DEADLINE_MS`**. Past that the runner starts
+      10:00 tick used **175.9 s of the then-180 s `DEADLINE_MS`** (raised to 5 min on
+      31.07.2026 to buy headroom — that bought time, it did not fix this). Past it the runner starts
       logging "Deadline reached before '<source>'" and skipping sources — so this
       degrades into *missed* alerts rather than slow ones, from a direction the deadline
       design did not anticipate (it assumed the AI was fast and Overpass was the risk).

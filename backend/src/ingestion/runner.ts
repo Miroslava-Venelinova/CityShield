@@ -1,5 +1,5 @@
 // Scheduled dispatcher (SPEC.md §1.7): the asyncio loops collapse into
-// one cron tick. Sources run sequentially under a 180 s deadline guard, and
+// one cron tick. Sources run sequentially under a 5 min deadline guard, and
 // the start order rotates by tick number so a slow source can't starve the
 // others. Worst case is delayed — never lost — alerts (cursor semantics).
 //
@@ -26,10 +26,11 @@ const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promis
 // Nominatim hops are all I/O — see spikes/RESULTS.md). The budget exists to
 // keep a tick well inside the 15-min cron cadence so the next tick never
 // overlaps this one (the cursor/state model assumes one writer per source at a
-// time), NOT because the platform kills at 30 s. 180 s gives the AI room to
+// time), NOT because the platform kills at 30 s. 5 min gives the AI room to
 // wait out its I/O — a qwen3 parse runs 4–21 s, and a message may need a retry
-// or two — without raising MAX_MESSAGES_PER_TICK.
-const DEADLINE_MS = 180_000;
+// or two — without raising MAX_MESSAGES_PER_TICK. It still leaves a 10-min gap
+// before the next 15-min tick, so two ticks can never overlap.
+const DEADLINE_MS = 300_000;
 const TICK_INTERVAL_MS = TICK_MINUTES * 60 * 1000;
 
 export async function runIngestion(env: Env): Promise<void> {

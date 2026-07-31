@@ -7,7 +7,7 @@ import { expired, sleepWithin, withTimeout } from "../shared/deadline";
 
 // Spike 2 (spikes/RESULTS.md): qwen3-30b is a reasoning model — at the
 // default 2000 tokens it burns the budget thinking and returns no JSON.
-const MAX_TOKENS = 8000;
+const MAX_TOKENS = 10_000;
 const ATTEMPTS = 3;
 
 // The AI binding accepts no AbortSignal, so a wedged inference request would
@@ -16,7 +16,7 @@ const ATTEMPTS = 3;
 // 8k tokens), so the old 20 s cap could abort a call that was about to succeed;
 // 30 s clears the observed tail while still bounding a truly wedged request.
 // The effective wait is min(this, remaining deadline) (deadline.ts), so the
-// tick budget (DEADLINE_MS, 180 s) is what actually lets this breathe.
+// tick budget (DEADLINE_MS, 5 min) is what actually lets this breathe.
 const RUN_TIMEOUT_MS = 30_000;
 
 export async function aiParse<T>(

@@ -545,12 +545,14 @@ source list is its stagger phase, so sources sharing an interval land on
 different ticks; the *run order* additionally rotates by tick number so a slow
 source cannot starve the others.
 
-**Time budget.** `DEADLINE_MS = 180_000`. The plan originally assumed a 30 s
-wall-clock cap on sub-hourly crons; that is wrong — only CPU is capped, and the
-AI/Overpass/Nominatim hops are all I/O. The budget exists so a tick finishes well
-inside the 15-minute cadence and the next tick never overlaps it (the cursor
-model assumes one writer per source). 180 s gives a qwen3 parse (4–21 s, plus
-retries) room to complete without raising the per-tick message cap. Every source
+**Time budget.** `DEADLINE_MS = 300_000` (5 min). The plan originally assumed a
+30 s wall-clock cap on sub-hourly crons; that is wrong — only CPU is capped, and
+the AI/Overpass/Nominatim hops are all I/O. The budget exists so a tick finishes
+well inside the 15-minute cadence and the next tick never overlaps it (the cursor
+model assumes one writer per source). It was 180 s until 31.07.2026, when a tick
+came within 4 s of it (TODO.md §2) because `AI.run` now routinely exceeds its
+30 s cap and retries are serial; 5 min restores headroom without raising the
+per-tick message cap, and still leaves a 10-min gap to the next tick. Every source
 gets the deadline threaded in *and* is wrapped in `withTimeout` as a
 belt-and-braces guard.
 
@@ -677,7 +679,7 @@ fills up:
 ### 1.8 Workers AI (`ingestion/ai.ts`)
 
 `env.AI.run(env.AI_MODEL, {messages, response_format:{type:"json_schema",
-json_schema}, max_tokens: 8000})`, three attempts with linear backoff, `null` on
+json_schema}, max_tokens: 10000})`, three attempts with linear backoff, `null` on
 any failure — the source then skips the message and retries next tick.
 
 - **Model: `@cf/qwen/qwen3-30b-a3b-fp8`**, a `vars` entry so it can be swapped
@@ -687,8 +689,10 @@ any failure — the source then skips the message and retries next tick.
   outright (error 5025), and `llama-3.3-70b-instruct-fp8-fast` fails on
   `"type":["string","null"]` (error 5024), which all three production schemas
   use.
-- **`max_tokens: 8000`** is required: qwen3 is a reasoning model and at the
-  default 2,000 it burns the budget thinking and returns no JSON.
+- **`max_tokens: 10000`** — a generous ceiling is required: qwen3 is a reasoning
+  model and at the default 2,000 it burns the budget thinking and returns no
+  JSON. Spike 2 sized this at 8,000; raised to 10,000 on 31.07.2026 so a long
+  message with many locations cannot get truncated mid-JSON.
 - The AI binding accepts no `AbortSignal`, so each run is wrapped in a **30 s**
   timeout (legitimate parses clock 4–21 s), bounded further by the remaining tick
   deadline. Starting an inference that cannot be waited out only burns neurons.
@@ -1185,7 +1189,8 @@ DNS rebinding.
 - **A tick's wall time is now the number to watch, not its CPU.** Since 30.07.2026
   `AI.run` frequently exceeds its 30 s cap (§1.8) — 6 timeouts against 8 ingested
   messages over three ticks — and retries are serial, so a tick reached 175.9 s of
-  the 180 s `DEADLINE_MS`. When ticks cross it the runner drops whole sources with
+  the then-180 s `DEADLINE_MS` (since raised to 5 min). When ticks cross it the
+  runner drops whole sources with
   "Deadline reached before '<source>'", which is a *silent* loss of coverage: the
   cursor model makes those alerts late rather than lost, but only if a later tick
   has room. Grep the tail for that line.

@@ -45,7 +45,7 @@ describe("processOutageMessage (mocked AI)", () => {
 
     const today = sofiaToday();
     const inputs = captured[0] as { messages: Array<{ role: string; content: string }>; max_tokens: number };
-    expect(inputs.max_tokens).toBe(8000); // qwen3 reasoning headroom (spike 2)
+    expect(inputs.max_tokens).toBe(10_000); // qwen3 reasoning headroom (spike 2)
     // The pipeline prepends the current date so the model can default it.
     expect(inputs.messages[1]!.content).toBe(`CURRENT_DATE: ${today}\nАвария\nСпиране на водата`);
 
