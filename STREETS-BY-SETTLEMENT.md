@@ -65,9 +65,9 @@ re-open the ambiguity.
 ## 3. Scope — which settlements to seed
 
 **Phase in община Варна first** (the ~99 regions inside the 15 km citywide radius),
-not all 252. Two reasons: it is where the users are, and row growth is the main
-risk to the CPU budget (§7). Extend outward to the rest of the province — vik does
-publish Долни чифлик and Аврен — only after §7's measurement holds.
+not all 252. It is where the users are, and it keeps the first pass small enough
+that §7's startup-budget check has an easy answer. Extend outward to the rest of
+the province — vik does publish Долни чифлик and Аврен — once that check holds.
 
 ## 4. Execution
 
@@ -235,6 +235,8 @@ Order matters, and the remote step is the only irreversible one:
 - New: the migration preserves `users.street_id` for city users.
 - Manual: watch a real vik village message through `wrangler tail` and confirm no
   `Skipping uncached geocode` / no Nominatim slot taken for its streets.
+- **Startup budget**: read the figure `wrangler deploy` prints before and after
+  the seed grows (§7). It was 27 ms against a 400 ms budget after `9a5776e`.
 
 ## 6. What this does **not** do
 
@@ -246,18 +248,46 @@ Order matters, and the remote step is the only irreversible one:
 
 ## 7. Risks
 
-**Trigram preparation on a bigger table — the one that could bite.** `prepare()`
-builds trigrams for *every* row on first call per cached array, in one synchronous
-burst. The 10 ms CPU cap applies to a burst, not to the invocation
-(`cold-isolate-cpu-outage`, 30.07.2026) — this is exactly the shape that caused
-that outage. At 1333 streets it is fine; nobody has measured it at 6000.
+**Trigram cost on a bigger table — smaller than it looks, and the measurement to
+take is not the obvious one.** `9a5776e` already moved gram building out of the
+request path: `place-names.ts` builds kind + grams for every *seeded* name in a
+module-scope `Map` at **module evaluation**, which is charged against the Worker's
+separate **400 ms startup budget** rather than the 10 ms an invocation gets
+(startup measured 27 ms after that fix). What request-time `prepare()` does now is
+a `Map` lookup and a small object per row — not tokenization.
 
-Mitigation, in order: measure `prepare()` at the projected row count *before*
-seeding remote; if it is close, prepare lazily per settlement rather than per
-table, which also makes the steady-state match cheaper than today (the scope
-filter skips non-settlement rows before `gramSimilarity`). This is the same
-pressure the deferred in-memory trigram index was meant to relieve — if it turns
-out to be the blocker, that work becomes a prerequisite rather than an option.
+So growing `streets` moves cost in three places, and only one of them is near a
+ceiling:
+
+| Where | Today | At ~6000 streets |
+|---|---|---|
+| module eval (`seeded`) | inside a 27 ms startup, budget 400 ms | ~3.8× the name count; the number to watch |
+| `prepare()` per isolate | ~0.8 ms first `matchStreet` | Map lookups, grows linearly, still small |
+| `matchCore` scoring loop | scores all 1333 rows | **falls**, because the step-4 scope filter skips other settlements before `gramSimilarity` |
+
+**The measurement is the startup budget, which `wrangler deploy` prints on every
+deploy** — not `prepare()`. If it ever approaches 400 ms (it will not at 6000
+names; it might if we later bundle the whole province), the fix is to stop
+bundling the seed JSON and build `seeded` lazily per settlement.
+
+Two things explicitly **not** the answer here, both considered and rejected:
+
+- **Trigrams stored in D1.** Rejected 21.07.2026 (an inverted-index table costs a
+  query per lookup against the free plan's 50-per-invocation ceiling; a
+  `trigrams_json` column costs ~10× wire payload plus a parse per row and enables
+  no skipping). `9a5776e` made it worse than that: the grams are already
+  precomputed at module evaluation, so moving them to D1 would drag that work
+  *back into* the 10 ms request path. It is strictly backwards.
+- **Splitting `prepare()` across bursts with `yieldBurst`,** the way
+  `buildBlockPolygon` splits (`7dba83e`). Right tool, wrong problem.
+  `buildBlockPolygon` was already `async` for its Overpass I/O, so yielding
+  between stages cost nothing structurally, and its worst cold burst was genuinely
+  14 ms. `matchRegion`/`matchStreet` are **synchronous**, and making `prepare()`
+  async turns `matchCore` → both matchers → `normalize.ts` (a deliberately pure
+  module) → `resolveCoordinates` → `getUserIdsInRange` async with it. That is a
+  large blast radius to spread ~1 ms, and `deadline.ts` says so directly: a yield
+  "is not a substitute for making the work smaller". The scope filter *is* making
+  it smaller.
 
 **Silent under-insert.** A street whose settlement is missing from `regions`
 inserts nothing. Covered by the count check in step 2/6, and the reason it is a
