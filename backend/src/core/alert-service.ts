@@ -3,9 +3,9 @@
 // store-only rule, the bus-line narrowing, the 1,000-char push-body cap.
 
 import * as q from "../db/queries";
-import { matchRegion, matchStreet, parseName, placeClass } from "./place-names";
+import { cityCenter, matchRegion, matchStreet, parseName, placeClass } from "./place-names";
 import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
-import { pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
+import { distanceKm, pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
 import { type PushNotification, sendPushToUsers } from "./onesignal";
 import { type AlertWindows, formatWindow, parseWindows } from "../shared/datetime";
@@ -155,6 +155,59 @@ async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
   return region ? q.getUserIdsByRegion(env, region.id) : [];
 }
 
+/**
+ * How far from the Варна centroid a "city-wide" alert still reaches.
+ *
+ * `city_wide` was designed when the whole product was the city, so "city-wide"
+ * and "every row in `users`" were the same set and `getAllUserIds` was a correct
+ * implementation of both. Seeding the province broke that equivalence and
+ * nothing downstream noticed: the regions table now spans 69 km, so a
+ * Топлофикация "всички абонати" message — district heating, a city-only network
+ * — was waking up villagers 40 km out who are not on it.
+ *
+ * 15 km is where the data separates rather than a round number: every
+ * settlement in община Варна is inside it (Каменар 3.8, Тополи 7.6, Аксаково
+ * 9.3, Константиново 12.2 — the farthest), and the next municipalities out start
+ * at Белослав 16.5, Аврен 23.1 and Долни чифлик 29.3. It is deliberately wider
+ * than place-names' IN_CITY_RADIUS_KM (9 km): that one breaks a near-tie between
+ * two candidate places, where being wrong costs one pin, and this one decides
+ * whether a person hears about an outage at all.
+ */
+const CITY_WIDE_RADIUS_KM = 15;
+
+/**
+ * The audience for a city-wide alert: everyone we cannot place outside the city.
+ *
+ * Note the direction — a user is dropped only when their position is known AND
+ * measures past the radius. Someone who registered and never set a location has
+ * no coordinates and no region, and nothing about that says "village": excluding
+ * them would silently stop a broadcast that reaches them today, on no evidence.
+ * The rule that earns the change is the one that removes only users we can prove
+ * are far away, which is the same shape as getUserIdsByStreets keeping its
+ * `street_id IS NULL` rows.
+ */
+async function getUserIdsCityWide(env: Env): Promise<string[]> {
+  const center = cityCenter(await q.getRegions(env));
+  const ids: string[] = [];
+  let dropped = 0;
+  for (const u of await q.getUsersForBroadcast(env)) {
+    // Their own point first; the region centroid is the coarse stand-in for
+    // someone who has a region but no point of their own.
+    const lat = u.latitude ?? u.region_lat;
+    const lng = u.longitude ?? u.region_lng;
+    if (lat === null || lng === null
+      || distanceKm(lat, lng, center.lat, center.lng) <= CITY_WIDE_RADIUS_KM) {
+      ids.push(u.user_id);
+    } else {
+      dropped++;
+    }
+  }
+  if (dropped > 0) {
+    console.log(`[targeting] City-wide: ${dropped} user(s) outside ${CITY_WIDE_RADIUS_KM} km excluded.`);
+  }
+  return ids;
+}
+
 async function getUserIdsInPolygonRange(env: Env, polygonJson: Json): Promise<string[]> {
   const ids = new Set<string>();
   for (const geometry of allGeometries(polygonJson)) {
@@ -234,18 +287,20 @@ export async function sendUsersNotification(env: Env, alert: AlertPayload): Prom
     console.warn(`Alert '${title}' (${category}) has no locations and city_wide=false — skipping notifications.`);
     return { recipients: [], delivered: true };
   } else {
-    // city_wide=true or a legacy payload without the flag: broadcast to
-    // everyone; the per-category preference filter below still applies.
+    // city_wide=true or a legacy payload without the flag: broadcast to the
+    // city and its own municipality, not to the whole province
+    // (getUserIdsCityWide). The per-category preference filter below still
+    // applies on top.
     //
     // Logged at warn because this is the widest thing the pipeline can do, and
     // the decision behind it was made by an LLM reading a third-party page —
     // so a source that starts publishing differently (or is tampered with)
     // shows up here as a broadcast that should not have been one, rather than
     // as an unexplained push to the whole user base.
-    userIds = await q.getAllUserIds(env);
+    userIds = await getUserIdsCityWide(env);
     console.warn(
       `Alert '${clamp(title, 80)}' (${category}) is city-wide — broadcasting to `
-      + `${userIds.length} user(s).`);
+      + `${userIds.length} user(s) within ${CITY_WIDE_RADIUS_KM} km.`);
   }
 
   // Alerts naming specific bus lines (vt route changes) go only to users

@@ -435,9 +435,8 @@ export const authRoutes = new Hono<AppEnv>()
     if (!user) return c.text("User does not exist", 404);
 
     // Reverse-geocode, then fuzzy-match region (and street) — port of
-    // AuthService.UpdateLocationAsync. Geocoding failure (including a Nominatim
-    // that never answers) just means no region/street match; the coordinates
-    // are still saved, and /me reports hasLocation off those.
+    // AuthService.UpdateLocationAsync. The coordinates are saved either way, and
+    // /me reports hasLocation off those.
     const address = await reverseGeocode(c.env, latitude, longitude, Date.now() + LOCATION_BUDGET_MS);
 
     // Walk the candidates most-specific-first and keep the first that matches,
@@ -448,7 +447,21 @@ export const authRoutes = new Hono<AppEnv>()
     const streets = await q.getStreets(c.env);
     const street = firstMatch(address.streetNames, streets, (s) => s.name);
 
-    await q.updateUserLocation(
-      c.env, user.user_id, latitude, longitude, region?.id ?? null, street?.id ?? null);
+    // A lookup that never completed says nothing about where this point is, so
+    // it must not be written as "matches no region and no street" — region and
+    // street ARE the targeting (getUserIdsInRange), so persisting that empty
+    // answer is how a user stops receiving alerts. Keep whatever they had:
+    // stale beats blank, and a re-send of the same point recovers it once
+    // Nominatim answers again. Only a completed lookup may clear the columns —
+    // that one is a real answer, e.g. a user who moved out of a seeded region.
+    const regionId = address.ok ? region?.id ?? null : user.region_id;
+    const streetId = address.ok ? street?.id ?? null : user.street_id;
+    if (!address.ok) {
+      console.warn(
+        `[location] Reverse geocode unavailable for ${user.user_id}; keeping `
+        + `region=${regionId ?? "none"} street=${streetId ?? "none"} and saving coordinates only.`);
+    }
+
+    await q.updateUserLocation(c.env, user.user_id, latitude, longitude, regionId, streetId);
     return c.body(null, 204);
   });

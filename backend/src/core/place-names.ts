@@ -212,6 +212,17 @@ function prepare(rows: readonly NamedRow[]): Prepared[] {
  */
 const centers = new WeakMap<object, { lat: number; lng: number }>();
 
+/**
+ * The Варна centroid, from the seeded `regions` rows.
+ *
+ * Exported for the city-wide fan-out (core/alert-service.ts), which measures its
+ * radius from the same point the in-city tie-break does. Same memo, so asking
+ * for it there costs nothing beyond the first call per cached array.
+ */
+export function cityCenter(rows: readonly NamedRow[]): { lat: number; lng: number } {
+  return centerOf(rows);
+}
+
 function centerOf(rows: readonly NamedRow[]): { lat: number; lng: number } {
   const memo = centers.get(rows as object);
   if (memo) return memo;

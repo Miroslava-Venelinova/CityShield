@@ -119,7 +119,7 @@ describe("targeting decision tree", () => {
     expect(stored).not.toBeNull();
   });
 
-  it("city_wide=true (or absent) broadcasts to everyone", async () => {
+  it("city_wide=true (or absent) broadcasts to everyone we cannot place", async () => {
     const a = await createUser();
     const b = await createUser();
     const res = await submit(basePayload({
@@ -127,6 +127,57 @@ describe("targeting decision tree", () => {
     }));
     const body = await res.json() as SubmitResponse;
     expect(new Set(body.user_ids)).toEqual(new Set([a, b]));
+  });
+
+  // "City-wide" used to mean getAllUserIds, which was correct only while the
+  // product was one city. The regions seed now spans 69 km of province, so a
+  // heating alert for the city network was reaching villages not on it.
+  describe("city_wide is bounded to the city and its own municipality", () => {
+    beforeEach(async () => {
+      // Coordinates matter here, and the outer beforeEach seeds names only.
+      await env.DB.prepare(
+        `INSERT INTO regions (region_name, lat, lng) VALUES
+           ('Варна', 43.2073873, 27.9166653),
+           ('Тополи', 43.2164126, 27.8212023),
+           ('Долни чифлик', 42.9925676, 27.7187564)`).run();
+      clearRefCaches(); // seeded after the outer beforeEach already cleared
+    });
+
+    const broadcast = async () => {
+      const res = await submit(basePayload({
+        processed_data: { locations: [], city_wide: true },
+      }));
+      return new Set(((await res.json()) as SubmitResponse).user_ids);
+    };
+
+    it("reaches the city and its municipality villages, not the next one over", async () => {
+      const inCity = await createUser({ region: "Варна" });
+      const inMunicipality = await createUser({ region: "Тополи" }); // 7.6 km
+      const farVillage = await createUser({ region: "Долни чифлик" }); // 29.3 km
+
+      const notified = await broadcast();
+      expect(notified).toEqual(new Set([inCity, inMunicipality]));
+      expect(notified.has(farVillage)).toBe(false);
+    });
+
+    // Their own point is the precise answer and outranks the region centroid —
+    // the region is only the stand-in for someone who never set one.
+    it("measures from the user's own coordinates when they have them", async () => {
+      const nearby = await createUser({ lat: 43.2164126, lng: 27.8212023 });
+      const distant = await createUser({ lat: 42.9925676, lng: 27.7187564 });
+
+      const notified = await broadcast();
+      expect(notified).toEqual(new Set([nearby]));
+      expect(notified.has(distant)).toBe(false);
+    });
+
+    // Only users we can PROVE are out of range are dropped. No location at all
+    // is not evidence of a village, and excluding them would silently cut off
+    // people who receive these alerts today.
+    it("keeps users with no position at all", async () => {
+      const placeless = await createUser();
+      expect(await broadcast()).toEqual(new Set([placeless]));
+    });
   });
 
   it("region+street location targets only matching users; receives_all and disabled-preference users handled", async () => {

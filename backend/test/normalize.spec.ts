@@ -153,6 +153,41 @@ describe("A3 · city-wide guard", () => {
   });
 });
 
+// ── A8 ───────────────────────────────────────────────────────────────────────
+
+describe("A8 · city-wide demotion", () => {
+  const guard = (cityWide: boolean, message: string) =>
+    applyCityWideGuard(parse([], cityWide), message);
+
+  // A3 only ever promoted INTO city-wide, so a city_wide the model invented
+  // outright reached sendUsersNotification unchecked — and an empty location
+  // list there is answered with a broadcast. The widest action in the system
+  // was running on the prompt's word alone.
+  it("demotes a city_wide the message never claims", () => {
+    const fixed = guard(true, "Прекъсване на водоснабдяването в кв. Аспарухово");
+    expect(fixed.city_wide).toBe(false);
+    expect(fixed.locations).toEqual([]);
+  });
+
+  it.each([
+    "Без вода ще остане цялата Варна",
+    "Прекъсване за всички абонати",
+    "Авария на територията на цялата община",
+  ])("keeps a city_wide the message does claim: '%s'", (message) => {
+    expect(guard(true, message).city_wide).toBe(true);
+  });
+
+  // Demotion must not become a way to turn a store-only alert into a broadcast.
+  it("never promotes an empty parse that was already false", () => {
+    expect(guard(false, "Прекъсване за всички абонати").city_wide).toBe(false);
+  });
+
+  it("runs as part of normalizeParse, not just standalone", () => {
+    const out = normalizeParse(parse([], true), "Авария на ул. Дубровник", refs);
+    expect(out.city_wide).toBe(false);
+  });
+});
+
 // ── A4 ───────────────────────────────────────────────────────────────────────
 
 describe("A4 · region-like sublocations", () => {

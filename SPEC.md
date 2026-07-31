@@ -306,7 +306,7 @@ and field casing are locked in by `frontend/src/services/api.ts`. Note the split
 | `POST /api/auth/refresh` | refresh token | `{refreshToken}` → `{token, refreshToken}`; 401 (empty body) on unknown/expired/spent |
 | `POST /api/auth/logout` | — | `{refreshToken}` → 204 always |
 | `GET /api/auth/me` | JWT | `{userId, email, latitude, longitude, hasLocation, regionName, streetName, emailVerified, createdOnUTC, updatedOnUTC}` |
-| `PUT /api/auth/location` | JWT | `{latitude, longitude}` → 204. Reverse-geocode, fuzzy-match region/street, persist |
+| `PUT /api/auth/location` | JWT | `{latitude, longitude}` → 204. Reverse-geocode, fuzzy-match region/street, persist. Coordinates are always saved; region/street are only rewritten by a lookup that **completed** (§1.5) |
 | `DELETE /api/auth/location` | JWT | → 204. Withdraw location consent (clears lat/lng + ids) |
 | `DELETE /api/auth/me` | JWT | → 204. Erasure, cascades |
 | `GET /api/auth/me/export` | JWT | → JSON of everything stored about the user |
@@ -453,7 +453,22 @@ Enrichment never throws: an alert without coordinates is still worth storing.
    The scraper explicitly said this is not city-wide yet produced no locations,
    which is almost certainly an LLM misparse of a street-level outage. This guard
    is load-bearing; do not "simplify" it.
-3. **No locations, `city_wide` true or absent** → everyone.
+3. **No locations, `city_wide` true or absent** → everyone **within
+   `CITY_WIDE_RADIUS_KM` (15 km) of the Варна centroid**, measured from the
+   user's own coordinates or, failing those, their region's seeded centroid.
+   `city_wide` was written when the product was one city, so "city-wide" and
+   "every row in `users`" were the same set and `getAllUserIds` implemented both;
+   seeding the province broke that and nothing downstream noticed — the regions
+   table spans 69 km, so a Топлофикация "всички абонати" message (a city-only
+   network) was waking villagers 40 km out. 15 km is where the data separates:
+   every settlement of община Варна is inside it (Каменар 3.8, Тополи 7.6,
+   Аксаково 9.3, Константиново 12.2 — the farthest), the next municipalities
+   start at Белослав 16.5, Аврен 23.1, Долни чифлик 29.3.
+   **A user is dropped only when their position is known *and* measures past the
+   radius.** Someone who never set a location has neither point nor region, and
+   that is not evidence of a village — excluding them would silently cut off
+   people this reaches today. Same shape as the `street_id IS NULL` rows in
+   `getUserIdsByStreets`.
 4. **`bus_lines` present** → drop users who picked lines and none of them match.
    Users with no selection have no filter and stay in the audience.
 5. Add `receives_all_alerts` users, dedupe, then drop users who opted out of the
@@ -479,6 +494,19 @@ specific first (`suburb`, `neighbourhood`, `quarter`, `city_district`, `city`,
 `town`, `village`), because Nominatim labels the same place at several
 granularities and only some of them exist in our tables — returning one name
 meant central Varna matched nothing at all.
+
+`ReverseAddress` carries an **`ok` flag separating "the lookup failed" from "this
+point matches nothing"**, which used to be the same empty result. `PUT
+/api/auth/location` wrote that empty result straight to `region_id`/`street_id`,
+and those two columns *are* the targeting (`getUserIdsInRange`) — so a throttled
+or timed-out Nominatim during signup produced an account with coordinates but no
+targeting, invisible to every region and street alert, and for an existing user
+it **erased an assignment that was already correct**. A failed lookup now leaves
+both columns as they were (stale beats blank, and re-sending the point recovers
+it once Nominatim answers); only a completed lookup may clear them, since that is
+a real answer about a real point — someone who moved out of a seeded region. The
+route still returns 204 either way: the coordinates were saved, and polygon
+targeting runs off those.
 
 ### 1.6 Push delivery (`core/onesignal.ts`)
 
@@ -618,6 +646,8 @@ in production output:
 | A4 | A sublocation carrying a region kind, ending in `зона`, or (under a bare city parent) matching a region row, is lifted out into a location of its own; the city before epro's `гр. X - кв. Y` dash is context and is dropped | The flat `(location_name, sublocations)` schema has no slot for that shape, so the district landed in the street array and targeted nobody |
 | A5 | Trailing house/block/entrance detail is stripped from `ул.`/`бул.` names (`ул. Пловдив 25` → `ул. Пловдив`), never when the strip would empty the core (`ул.7` is a truncated ordinal) | House numbers dragged the street match around |
 | A6 | An area cue in the message (`в района на`, `района около`, `прилежащите улици`, `в близост до`, `околните/съседните улици`) plus ≥1 street sets `region_wide` on the location | The streets in a hedged message say *where* the outage is, not who is in it — targeting only those exact streets asserted a precision the source never gave, and missed the resident one street over |
+| A7 | When exactly one district was lifted out by A4 and it *precedes* every street in the source order, the streets are that district's own and move under it | A4 left them behind under the city, so the alert kept a second pin on the city centre |
+| A8 | A `city_wide: true` with no locations is demoted to `false` unless the message says city-wide in words — the same phrases A3 promotes on | A3 only ever promoted *into* city-wide, so a `city_wide` the model invented outright reached `sendUsersNotification` unchecked, and an empty location list there is answered with a broadcast. The widest action in the system had no deterministic guard at all |
 
 **A6 changes targeting only.** The street list stays on the location, so the feed,
 the pin and the review tool still show the most specific thing the message said;
@@ -635,6 +665,14 @@ A3 is what remains of the original city-wide guard, a deterministic fix for a
 known model deviation (§1.8): roughly one run in five, qwen3 emits a single
 location `град Варна` instead of `city_wide: true` with an empty list. The shape
 is the same either way — what tells the two apart is the message.
+
+**A3 and A8 are the two halves of one rule**, gated on the same evidence: the
+message has to say city-wide, in words, for the alert to be one. They are
+deliberately asymmetric about *shape*, because they move the audience in
+opposite directions. A3 widens it, so it demands both a narrow shape (one lone
+`Варна`, no sublocations, not a polygon) and the phrase. A8 narrows it, so the
+phrase alone decides. A8 never promotes: an empty parse that arrived as
+`city_wide: false` stays false and stays store-only.
 
 **Times** come back from the model as a `schedule` object — a date range plus the
 clock windows inside it — because a flat start/end pair could express neither
@@ -1239,5 +1277,6 @@ parity checklist below passed on the Worker side; it remains in git history
 | All sources ingest real messages end to end | Verified per source at build time; ViK and epro were both re-worked afterwards and are worth re-observing (see TODO.md) |
 | A polygon alert notifies only in-polygon users | Tested (bbox + ray-cast targeting) |
 | A `city_wide=false` alert with no locations is stored, not broadcast | Tested |
+| A `city_wide` alert stops at the municipality (15 km), and unplaceable users stay in | Tested |
 | A `vt` alert respects bus-line filters | Tested |
 | Account deletion cascades | Tested |

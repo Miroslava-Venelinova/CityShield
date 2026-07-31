@@ -29,6 +29,9 @@
 //       district's OWN streets after it. A4 lifted the district out but left
 //       the streets behind under the city, so the alert kept a second pin on
 //       the city centre. Hand them to the district instead.
+//   A8  a city_wide=true the model invented had nothing checking it — A3 only
+//       ever promoted INTO city-wide, so the widest action in the system was
+//       taken on the prompt's word alone. Demote it unless the message says so.
 
 import { cleanName, matchRegion, matchStreet, parseName, placeClass } from "../core/place-names";
 import type { NamedRow } from "../db/queries";
@@ -159,24 +162,46 @@ export const hasCityWidePhrase = (message: string): boolean =>
 const LONE_VARNA = /^(?:гр\.\s*|град\s+)?варна$/iu;
 
 /**
- * Deterministic guard for spike 2's known qwen3 deviation: ~1/5 runs the model
+ * Both directions of the city-wide decision, gated on the same evidence: the
+ * message has to SAY city-wide, in words, for the alert to be one.
+ *
+ * **Promotion** covers spike 2's known qwen3 deviation: ~1/5 runs the model
  * emits a single location "град Варна" with no sublocations instead of
  * city_wide=true + empty locations.
  *
- * Narrowed after the 28.07 review: the rewrite now needs the message to say
- * city-wide in words. The guard fires on the same shape a *dropped district*
- * produces ("гр. Варна - кв. Владислав Варненчик" parsed to just "Варна"), and
- * `sendUsersNotification` answers city_wide with `getAllUserIds` — so five
- * extraction failures went out as pushes to the whole user base. Absent the
- * phrase, keep the location: region-wide Варна reaches far fewer people than it
- * should, but it never reaches people the message was not about.
+ * Narrowed after the 28.07 review: it needs the phrase, because the same shape
+ * is what a *dropped district* produces ("гр. Варна - кв. Владислав Варненчик"
+ * parsed to just "Варна") — and five such extraction failures went out as
+ * broadcasts. Absent the phrase, keep the location: region-wide Варна reaches
+ * far fewer people than it should, but never people the message was not about.
+ *
+ * **Demotion** is the missing half, and it is the one that costs. Everything
+ * above only ever narrows a parse the model got too wide in ONE shape; a
+ * `city_wide: true` the model invented outright was passed straight through,
+ * and `sendUsersNotification` answers an empty location list with a broadcast.
+ * So the widest action in the system had no deterministic guard on it at all —
+ * only the prompt, which is exactly the nondeterministic thing this module
+ * exists to backstop. If the message never says city-wide, it is not: fall back
+ * to `city_wide: false` with no locations, which the notify side already treats
+ * as store-only.
+ *
+ * The asymmetry with promotion is deliberate. Promotion widens the audience, so
+ * it demands a narrow shape AND the phrase. Demotion narrows it, so the phrase
+ * alone decides.
  */
 export function applyCityWideGuard(output: ProcessedData, message: string): ProcessedData {
+  const saysCityWide = hasCityWidePhrase(message);
+
+  if (output.locations.length === 0) {
+    // Nothing to target and no phrase to justify reaching everyone.
+    return output.city_wide && !saysCityWide ? { ...output, city_wide: false } : output;
+  }
+
   if (output.locations.length !== 1) return output;
   const only = output.locations[0]!;
   const name = cleanName(only.location_name ?? "");
   if (only.sublocations.length > 0 || only.is_polygon || !LONE_VARNA.test(name)) return output;
-  if (!hasCityWidePhrase(message)) return output;
+  if (!saysCityWide) return output;
   return { ...output, locations: [], city_wide: true };
 }
 

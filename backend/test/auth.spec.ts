@@ -235,6 +235,64 @@ describe("PUT /api/auth/location", () => {
     expect(dto.regionName).toBeNull();
   });
 
+  // region_id/street_id ARE the targeting (getUserIdsInRange), so writing the
+  // empty result of a lookup that never ran is how a working account goes
+  // silent. A failed lookup knows nothing about the point — it must not speak.
+  it("keeps the existing region and street when Nominatim fails", async () => {
+    const { token } = await registerAndLogin();
+
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({
+        address: { suburb: "кв. Аспарухово", road: "ул. Народни будители" },
+      }), { headers: { "Content-Type": "application/json" } });
+
+    await api("/api/auth/location", jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
+
+    // Same user moves a few metres; this time Nominatim is down.
+    resetNominatimThrottle();
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(429, "rate limited");
+
+    const res = await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 43.1865, longitude: 27.9152 }, token));
+    expect(res.status).toBe(204);
+
+    const dto = await (await api("/api/auth/me",
+      { headers: { Authorization: `Bearer ${token}` } })).json() as Record<string, unknown>;
+    expect(dto.latitude).toBeCloseTo(43.1865); // the new point IS saved
+    expect(dto.regionName).toBe("Аспарухово"); // the assignment survives
+    expect(dto.streetName).toBe("Народни будители");
+  });
+
+  // The other half: a lookup that COMPLETED and matched nothing is a real
+  // answer about a real point, and must still be able to clear the columns.
+  it("clears the region when a completed lookup matches nothing", async () => {
+    const { token } = await registerAndLogin();
+
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({
+        address: { suburb: "кв. Аспарухово", road: "ул. Народни будители" },
+      }), { headers: { "Content-Type": "application/json" } });
+
+    await api("/api/auth/location", jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
+
+    resetNominatimThrottle();
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({ address: { village: "Някъде другаде" } }),
+        { headers: { "Content-Type": "application/json" } });
+
+    await api("/api/auth/location", jsonInit("PUT", { latitude: 42.9, longitude: 27.7 }, token));
+
+    const dto = await (await api("/api/auth/me",
+      { headers: { Authorization: `Bearer ${token}` } })).json() as Record<string, unknown>;
+    expect(dto.regionName).toBeNull();
+    expect(dto.streetName).toBeNull();
+  });
+
   it("rejects out-of-range coordinates with 400", async () => {
     const { token } = await registerAndLogin();
     const res = await api("/api/auth/location",

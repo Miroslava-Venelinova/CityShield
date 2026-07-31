@@ -249,6 +249,34 @@ export function getReceivesAllUserIds(env: Env) {
   return idColumn(env.DB.prepare("SELECT user_id FROM users WHERE receives_all_alerts = 1"));
 }
 
+/**
+ * Every user with the best position we hold for them, for the city-wide fan-out.
+ *
+ * A user's own coordinates are the precise answer; their region's seeded
+ * centroid is the fallback for someone who has a region but no point (every
+ * region carries coordinates since migration 0005). Both can be NULL — a user
+ * who never set a location at all — and the caller decides what that means.
+ *
+ * The LEFT JOIN is what makes this one query instead of two: the alternative is
+ * reading the users table and then the regions table and pairing them in
+ * memory, and D1 bills rows examined on what is already the widest path there is.
+ */
+export async function getUsersForBroadcast(env: Env): Promise<BroadcastRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT u.user_id, u.latitude, u.longitude, r.lat AS region_lat, r.lng AS region_lng
+     FROM users u LEFT JOIN regions r ON r.id = u.region_id`,
+  ).all<BroadcastRow>();
+  return results;
+}
+
+export interface BroadcastRow {
+  user_id: string;
+  latitude: number | null;
+  longitude: number | null;
+  region_lat: number | null;
+  region_lng: number | null;
+}
+
 /** SQL bbox prefilter for point-in-polygon targeting (§1.3). */
 export async function getUsersInBBox(
   env: Env, minLat: number, maxLat: number, minLng: number, maxLng: number,

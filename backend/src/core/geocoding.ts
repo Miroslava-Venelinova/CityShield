@@ -22,6 +22,18 @@ const REQUEST_TIMEOUT_MS = 8_000;
 
 export interface ReverseAddress {
   /**
+   * Whether the lookup actually completed. False means Nominatim was throttled,
+   * timed out, or the budget ran out — NOT "this point has no address".
+   *
+   * The two used to be the same empty result, and the caller
+   * (PUT /api/auth/location) wrote the empty match straight to the user's
+   * region_id/street_id. So a Nominatim blip during signup produced an account
+   * with coordinates but no targeting — invisible to every region and street
+   * alert — and a blip for an existing user ERASED an assignment that was
+   * already correct. A failed lookup must leave the columns alone.
+   */
+  ok: boolean;
+  /**
    * Region candidates, most specific first — every populated address field,
    * not just the first one. Nominatim labels the same place at several
    * granularities and only some of them exist in our `regions` table: the
@@ -219,13 +231,11 @@ export function buildGeocodeQuery(name: string, anchor = "Варна"): string {
 export async function reverseGeocode(
   env: Env, lat: number, lon: number, deadline?: number,
 ): Promise<ReverseAddress> {
-  const none: ReverseAddress = { regionNames: [], streetNames: [] };
+  const failed: ReverseAddress = { ok: false, regionNames: [], streetNames: [] };
   try {
     if (!(await reserveNominatimSlot(deadline))) {
-      // No region/street match, coordinates still saved — the same degradation
-      // the caller already handles for an unreachable Nominatim.
       console.warn(`Skipping reverse geocode of (${lat}, ${lon}) — not enough time budget left.`);
-      return none;
+      return failed;
     }
     const url = `${env.NOMINATIM_URL}/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1`;
     const res = await fetch(url, {
@@ -234,11 +244,14 @@ export async function reverseGeocode(
     });
     if (!res.ok) {
       console.warn(`Nominatim reverse returned ${res.status} for (${lat}, ${lon})`);
-      return none;
+      return failed;
     }
     const body = (await res.json()) as { address?: Record<string, unknown> };
-    if (!body.address) return none;
+    // A 200 with no address is a real answer about a real point — open sea, or
+    // somewhere OSM has nothing for. Nothing matched, but the lookup worked.
+    if (!body.address) return { ok: true, regionNames: [], streetNames: [] };
     return {
+      ok: true,
       // Same preference order as NominatimGeocodingService.cs, but every
       // level is kept so the caller can fall back down the list.
       regionNames: pickAll(body.address,
@@ -247,6 +260,6 @@ export async function reverseGeocode(
     };
   } catch (e) {
     console.warn(`Reverse geocoding failed for (${lat}, ${lon}): ${e}`);
-    return none;
+    return failed;
   }
 }
