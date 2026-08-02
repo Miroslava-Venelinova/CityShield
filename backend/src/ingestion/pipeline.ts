@@ -164,7 +164,13 @@ export async function processOutageMessage(
       console.warn(`[${tag}] Skipping polygon build for ${msgRef} — low on time budget.`);
       continue;
     }
-    const polygon = await buildPolygonForStreets(env, location.sublocations, deadline);
+    // `location.settlement` is available here now, and it is what the Overpass
+    // scope bug needs — polygon.ts hardcodes area["name"="Варна"], which matches
+    // the province. Threading it through is not enough on its own (the city and
+    // the province share the name, so it also needs admin_level pinning, and
+    // villages have no boundary relation to pin at all), so that fix lands
+    // separately. See SPEC.md §1.7.
+    const polygon = await buildPolygonForStreets(env, location.streets, deadline);
     location.polygon_geojson = polygon ?? undefined;
   }
 

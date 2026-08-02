@@ -183,9 +183,13 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
   beforeEach(async () => {
     clearRefCaches();
     clearOverpassCache();
+    await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Варна')").run();
     await env.DB.prepare(
-      `INSERT OR IGNORE INTO streets (street_name) VALUES
-       ('Йордан Йовков'), ('Хан Кубрат'), ('Ивац Войвода'), ('Тихомир'), ('Розова долина')`,
+      `INSERT OR IGNORE INTO streets (street_name, region_id)
+       SELECT name, (SELECT id FROM regions WHERE region_name = 'Варна') FROM (
+         SELECT 'Йордан Йовков' AS name UNION ALL SELECT 'Хан Кубрат'
+         UNION ALL SELECT 'Ивац Войвода' UNION ALL SELECT 'Тихомир'
+         UNION ALL SELECT 'Розова долина')`,
     ).run();
   });
 

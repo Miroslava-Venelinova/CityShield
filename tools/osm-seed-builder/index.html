@@ -66,6 +66,9 @@
   .stat div span { display: block; font-size: 20px; font-weight: 600; }
   .stat div small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .hide { display: none; }
+  /* The area controls are inert while an "around a settlement" kind is
+     selected — that query has no area in it at all. */
+  .dim { opacity: .45; }
   .cheat { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
   .cheat summary { cursor: pointer; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   .cheat summary:hover { color: var(--text); }
@@ -82,9 +85,117 @@
   generate <code>seed.sql</code> there and apply it to D1. <code>backend/seeds/</code> is only
   touched by the explicit merge in step 4.</p>
 
+  <div class="card" id="sweepCard">
+    <h2>1 · Sweep a province</h2>
+    <p class="muted" style="margin:0 0 14px">One input, the whole seed. Every city and village in
+    the province, the districts inside each of them, and their streets — extracted in the three
+    levels the app targets by: <strong>settlement → district → street</strong>. A district is
+    found <em>inside</em> its settlement's own boundary, so which city it belongs to is not
+    guessed afterwards. Everything lands in <code>output/</code>; nothing is applied yet.</p>
+
+    <div class="row">
+      <div style="flex:1">
+        <label for="sweepEndpoint">Overpass endpoint</label>
+        <select id="sweepEndpoint"></select>
+      </div>
+      <div style="flex:1">
+        <label for="province">Province <span class="muted">— admin_level 4</span></label>
+        <input id="province" placeholder="e.g. Варна">
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:1">
+        <label for="sweepRadius">Radius fallback (m) <span class="muted">— for settlements OSM maps as a bare point</span></label>
+        <input id="sweepRadius" type="number" value="2500" min="200" max="20000" step="100">
+      </div>
+      <div style="flex:1">
+        <label class="check" style="margin-top:26px">
+          <input type="checkbox" id="sweepCyrillic" checked>
+          <span>Cyrillic names only</span>
+        </label>
+        <label class="check" style="margin-top:8px">
+          <input type="checkbox" id="sweepOverwrite">
+          <span>Re-resolve entries already in output/ <span class="muted">— replaces
+            coordinates and district → settlement links a previous sweep wrote</span></span>
+        </label>
+      </div>
+    </div>
+    <div class="row">
+      <button id="sweepBtn">Sweep province → output</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:10px 0 0">
+      Hundreds of Overpass queries in one go — use the self-hosted endpoint. A public mirror will
+      rate-limit long before the end. Re-running is safe: the merge only ever adds, unless you
+      tick the box above.</p>
+    <div id="sweepProgress" class="hide" style="margin-top:14px">
+      <div id="sweepBar" style="height:6px;border-radius:3px;background:#2a2f3a;overflow:hidden">
+        <div id="sweepFill" style="height:100%;width:0;background:#4a9eff;transition:width .3s"></div>
+      </div>
+      <div id="sweepPhase" class="muted" style="font-size:12px;margin-top:8px"></div>
+      <div class="stat" style="margin-top:10px">
+        <div><span id="sweepSettlements">0</span><small>settlements</small></div>
+        <div><span id="sweepDistricts">0</span><small>districts</small></div>
+        <div><span id="sweepStreets">0</span><small>streets</small></div>
+      </div>
+      <div id="sweepSkipped" class="muted hide" style="font-size:12px;margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:20px">
+    <div class="card">
+      <h2>2 · Review and apply</h2>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        What the sweep wrote, in the tool's own <code>output/</code>. Turn it into SQL, then
+        apply it — local first. Nothing here touches the checked-in seeds.
+      </div>
+      <div id="outputDir" class="muted" style="font-size:12px;margin-bottom:8px"></div>
+      <div id="outputStatus" class="muted">loading…</div>
+
+      <div class="row">
+        <button class="ghost" id="genBtn">Generate seed.sql</button>
+      </div>
+      <div id="sqlStatus" class="muted" style="font-size:12px;margin-top:8px"></div>
+
+      <div class="row">
+        <button class="ghost" id="applyLocal">Apply → local D1</button>
+        <button class="danger" id="applyRemote">Apply → remote D1</button>
+      </div>
+      <pre id="cmdOut" class="hide" style="margin-top:12px"></pre>
+
+      <div class="row">
+        <button class="ghost" id="revealBtn">Open in Explorer</button>
+        <button class="ghost" id="wipeBtn">Wipe output</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>3 · Promote to backend/seeds</h2>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        The checked-in seed data the app is built from. <strong>Only this button writes here</strong>,
+        so everything above stays free of consequence for the repo. Read the git diff before
+        committing — a district that took the wrong settlement is visible there and nowhere else.
+      </div>
+      <div id="backendStatus" class="muted">loading…</div>
+      <div class="check">
+        <input type="checkbox" id="promoteOverwrite">
+        <label for="promoteOverwrite" style="margin:0">Overwrite coordinates and parent links already in backend/seeds</label>
+      </div>
+      <div class="row">
+        <button class="ghost" id="promoteBtn">Merge output → backend/seeds</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="messages"></div>
+
+  <p class="sub" style="margin-top:30px">Extract one thing at a time — for refining what the
+  sweep produced, or for pulling a single settlement.<br>
+  <strong>Regions first, then streets</strong> — a street is filed under a settlement, and that
+  settlement has to exist as a region before its streets can be seeded.</p>
+
   <div class="grid">
     <div>
-      <div class="card">
+      <div class="card" id="areaCard">
         <h2>1 · Source</h2>
         <label for="endpoint">Overpass endpoint</label>
         <select id="endpoint"></select>
@@ -115,8 +226,13 @@
               <tr><td>10</td><td>квартал — neighbourhood (rare)</td><td>Дебър, Любеново</td></tr>
             </tbody>
           </table>
-          <p><strong>Pick 4</strong> to cover a whole province — that is the scope the
-          current seed data was built at. <strong>Pick 8</strong> for a single city.</p>
+          <p><strong>Regions: pick 4</strong> to cover a whole province in one go — that is
+          the scope the current regions seed was built at.</p>
+          <p><strong>Streets: pick 8</strong>, one settlement at a time. A street row points
+          at the settlement it is in (migration 0015), and a level 4 or 5 boundary spans
+          hundreds of them, so there would be no single right answer to file the results
+          under. It is more runs, but it is the only scope that carries the information
+          the seed needs.</p>
           <p>The Bulgaria extract also carries thin border strips of the neighbouring
           countries, which number their levels differently. Keeping the country field
           set to България is what keeps those out of your results.</p>
@@ -127,6 +243,19 @@
         <h2>2 · What to extract</h2>
         <label for="kind">Kind</label>
         <select id="kind"></select>
+
+        <div id="settlementBox" class="hide">
+          <label for="settlement">Settlement
+            <span class="muted">— the streets are filed under this, and it must match a region exactly</span></label>
+          <input id="settlement" list="regionNames" placeholder="e.g. Аврен">
+          <datalist id="regionNames"></datalist>
+          <div id="settlementNote" class="muted" style="font-size:12px;margin-top:6px"></div>
+        </div>
+
+        <div id="radiusBox" class="hide">
+          <label for="radius">Radius around its centre (metres)</label>
+          <input id="radius" type="number" value="2500" min="200" max="20000" step="100">
+        </div>
 
         <label for="timeout">Overpass timeout (seconds)</label>
         <input id="timeout" type="number" value="180" min="30" max="900">
@@ -157,47 +286,9 @@
         </div>
       </div>
 
-      <div class="card">
-        <h2>3 · Output</h2>
-        <div id="outputDir" class="muted" style="font-size:12px;margin-bottom:8px"></div>
-        <div id="outputStatus" class="muted">loading…</div>
-
-        <div class="row">
-          <button class="ghost" id="genBtn">Generate seed.sql</button>
-        </div>
-        <div id="sqlStatus" class="muted" style="font-size:12px;margin-top:8px"></div>
-
-        <div class="row">
-          <button class="ghost" id="applyLocal">Apply → local D1</button>
-          <button class="danger" id="applyRemote">Apply → remote D1</button>
-        </div>
-        <pre id="cmdOut" class="hide" style="margin-top:12px"></pre>
-
-        <div class="row">
-          <button class="ghost" id="revealBtn">Open in Explorer</button>
-          <button class="ghost" id="wipeBtn">Wipe output</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>4 · backend/seeds</h2>
-        <div class="muted" style="font-size:12px;margin-bottom:8px">
-          The checked-in seed data. Nothing above writes here — this button does.
-        </div>
-        <div id="backendStatus" class="muted">loading…</div>
-        <div class="check">
-          <input type="checkbox" id="promoteOverwrite">
-          <label for="promoteOverwrite" style="margin:0">Overwrite coordinates already in backend/seeds</label>
-        </div>
-        <div class="row">
-          <button class="ghost" id="promoteBtn">Merge output → backend/seeds</button>
-        </div>
-      </div>
     </div>
 
     <div>
-      <div id="messages"></div>
-
       <div class="card">
         <h2>Results</h2>
         <div id="resultsEmpty" class="muted">Run a query to see extracted rows here.</div>
@@ -227,9 +318,12 @@
 
           <label for="target">Merge into <span class="muted">— output/</span></label>
           <select id="target"></select>
+
+          <div id="mergeSettlement" class="muted hide" style="font-size:12px;margin-top:8px"></div>
+
           <div class="check">
             <input type="checkbox" id="overwrite">
-            <label for="overwrite" style="margin:0">Overwrite coordinates on entries that already have them</label>
+            <label for="overwrite" style="margin:0">Overwrite coordinates and parent links on entries that already have them</label>
           </div>
           <div class="row">
             <button id="mergeBtn">Merge selected into output</button>
@@ -250,10 +344,23 @@ const token = new URLSearchParams(location.search).get("t") || "";
 const $ = (id) => document.getElementById(id);
 let rows = [];       // rows returned by the last query
 let selected = new Set();
-// Names already in output/, per target — drives the "not in output" count so
-// you can see what a merge would add before writing anything.
-let existingNames = { regions: new Set(), streets: new Set() };
+// Keys already in output/, per target — drives the "not in output" count so you
+// can see what a merge would add before writing anything. Streets are keyed on
+// (settlement, name), the same key the UNIQUE constraint uses since migration
+// 0015: a name being present says nothing until you say for which settlement.
+let existingKeys = { regions: new Set(), streets: new Set() };
+let bySettlement = { regions: false, streets: true };
+let knownRegions = new Set();   // settlements a street may be filed under
+let regionsWithoutPoint = new Set();  // ...of which these have no centre to search around
 let lastSeeds = null;   // last /api/config status, for the wipe confirmation
+let lastArea = null;    // the boundary the last query ran against
+let settlementLevel = "8";  // admin_level whose name IS a settlement
+
+/** The seed key for a row under the currently selected target. */
+function keyOf(name) {
+  const target = $("target").value;
+  return bySettlement[target] ? `${$("settlement").value.trim()}\u0000${name}` : name;
+}
 
 async function api(path, body) {
   const res = await fetch(path, {
@@ -285,13 +392,23 @@ function busy(button, on, label) {
 async function init() {
   const cfg = await api("/api/config");
 
-  $("endpoint").innerHTML = cfg.endpoints
+  const endpointOptions = cfg.endpoints
     .map((e) => `<option value="${e.url}">${e.label}</option>`).join("");
+  $("endpoint").innerHTML = endpointOptions;
+  $("sweepEndpoint").innerHTML = endpointOptions;
   $("country").value = cfg.default_country;
+  $("province").value = cfg.default_province || "";
+  if (cfg.default_radius) $("sweepRadius").value = cfg.default_radius;
   $("kind").innerHTML = cfg.kinds
-    .map((k) => `<option value="${k.id}" data-target="${k.target}">${k.label}</option>`).join("");
-  $("target").innerHTML = cfg.targets
-    .map((t) => `<option value="${t}">${t}</option>`).join("");
+    .map((k) => `<option value="${k.id}" data-target="${k.target}"${k.needs_point ? " data-needs-point=\"1\"" : ""}>${k.label}</option>`).join("");
+  // A server started before the settlement field existed still sends plain
+  // strings here; treat that as "nothing is keyed by settlement" rather than
+  // rendering [object Object] into the dropdown.
+  const targets = cfg.targets.map((t) => (typeof t === "string" ? { id: t, by_settlement: false } : t));
+  $("target").innerHTML = targets.map((t) => `<option value="${t.id}">${t.id}</option>`).join("");
+  bySettlement = Object.fromEntries(targets.map((t) => [t.id, !!t.by_settlement]));
+  settlementLevel = cfg.settlement_level || settlementLevel;
+  if (cfg.default_radius) $("radius").value = cfg.default_radius;
 
   renderSeedStatus(cfg.seeds);
   syncTarget();
@@ -301,8 +418,12 @@ async function init() {
 function renderSeedStatus(seeds) {
   lastSeeds = seeds;
   for (const [target, s] of Object.entries(seeds.output.targets)) {
-    existingNames[target] = new Set(s.names);
+    existingKeys[target] = new Set(s.keys ?? s.names ?? []);
   }
+  knownRegions = new Set(seeds.regions_known ?? []);
+  regionsWithoutPoint = new Set(seeds.regions_without_point ?? []);
+  $("regionNames").innerHTML = [...knownRegions]
+    .map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
   $("outputDir").textContent = seeds.output.dir;
   $("outputStatus").innerHTML = storeLines(seeds.output);
   $("backendStatus").innerHTML = storeLines(seeds.backend, seeds.output);
@@ -314,17 +435,27 @@ function renderSeedStatus(seeds) {
 }
 
 // One line per table. When a comparison store is given (output vs backend),
-// also show how many names one side has that the other does not.
+// also show how many entries one side has that the other does not.
 function storeLines(store, compare) {
   return Object.entries(store.targets).map(([target, s]) => {
+    const keys = s.keys ?? s.names ?? [];
     let extra = "";
     if (compare) {
-      const known = new Set(s.names);
-      const pending = compare.targets[target].names.filter((n) => !known.has(n)).length;
+      const known = new Set(keys);
+      const other = compare.targets[target];
+      const pending = (other.keys ?? other.names ?? []).filter((k) => !known.has(k)).length;
       extra = pending ? ` · <span class="warn">${pending} in output not here yet</span>` : "";
     }
+    // Streets are counted per settlement too: "1333 entries" says nothing about
+    // whether the villages you extracted actually landed.
+    const places = Object.entries(s.settlements ?? {});
+    const breakdown = places.length
+      ? `<div class="muted" style="font-size:12px;margin-left:12px">${
+          places.slice(0, 6).map(([n, c]) => `${escapeHtml(n)} ${c}`).join(" · ")}${
+          places.length > 6 ? ` · +${places.length - 6} more` : ""}</div>`
+      : "";
     return `<div><strong>${target}</strong>: ${s.total} entries, ` +
-      `<span class="${s.with_coords === s.total ? "ok" : "warn"}">${s.with_coords} with coordinates</span>${extra}</div>`;
+      `<span class="${s.with_coords === s.total ? "ok" : "warn"}">${s.with_coords} with coordinates</span>${extra}</div>${breakdown}`;
   }).join("");
 }
 
@@ -335,6 +466,144 @@ async function refreshStatus() {
 function syncTarget() {
   const option = $("kind").selectedOptions[0];
   if (option) $("target").value = option.dataset.target;
+  syncSettlement();
+}
+
+/**
+ * Show and check the settlement field, which only streets have (migration
+ * 0015). It is checked here rather than only on the server because getting it
+ * wrong is invisible afterwards: a street filed under a name that is not a
+ * region inserts NOTHING at apply time and reports no error, so a village can
+ * disappear between "merged 94 streets" and a database that gained none.
+ */
+function syncSettlement() {
+  const needed = bySettlement[$("target").value];
+  const around = !!$("kind").selectedOptions[0]?.dataset.needsPoint;
+  $("settlementBox").classList.toggle("hide", !needed);
+  $("radiusBox").classList.toggle("hide", !around);
+  // The area controls only mean anything to a boundary query.
+  $("areaCard").classList.toggle("dim", around);
+
+  const value = $("settlement").value.trim();
+  $("mergeSettlement").classList.toggle("hide", !needed);
+  $("mergeSettlement").innerHTML = value
+    ? `Filing under <strong>${escapeHtml(value)}</strong>.`
+    : `<span class="warn">No settlement chosen yet</span> — set it in step 2.`;
+  if (!needed) return;
+
+  const note = $("settlementNote");
+  if (!value) {
+    note.innerHTML = around
+      ? `<span class="warn">Required.</span> Pick one of the ${knownRegions.size} seeded `
+        + `regions; its stored centre is what the radius is measured from.`
+      : `<span class="warn">Required.</span> Resolve a settlement-level area `
+        + `(admin_level ${settlementLevel}) and it fills in from the boundary's own name.`;
+  } else if (!knownRegions.has(value)) {
+    note.innerHTML = `<span class="err">"${escapeHtml(value)}" is not in either regions.json.</span> `
+      + `Streets filed under it would insert nothing at apply time. Extract it as a region `
+      + `first (kind "Cities / towns / villages"), or fix the spelling.`;
+  } else if (around && regionsWithoutPoint.has(value)) {
+    note.innerHTML = `<span class="err">"${escapeHtml(value)}" has no coordinates</span>, so there `
+      + `is no centre to search around. Re-extract it as a region to give it one, or use the `
+      + `boundary-based street kind.`;
+  } else {
+    const held = lastSeeds?.output?.targets?.streets?.settlements?.[value] ?? 0;
+    note.innerHTML = `<span class="ok">Matches a region.</span> output/ currently holds `
+      + `${held} street${held === 1 ? "" : "s"} for it.`;
+  }
+  updateStats();
+}
+
+// ── province sweep ───────────────────────────────────────────────────────────
+//
+// Polled rather than streamed: the sweep is one request per settlement — 170 of
+// them for Варна province — so it runs on a worker thread server-side and the
+// page asks how it is going. A silent minute would be indistinguishable from a
+// hang, which is the failure this progress exists to rule out.
+
+let sweepTimer = null;
+
+function renderSweep(s) {
+  const total = s.total || 0;
+  const done = s.done || 0;
+  $("sweepProgress").classList.remove("hide");
+  $("sweepFill").style.width = total ? `${Math.round((done / total) * 100)}%` : "0";
+  $("sweepPhase").textContent = s.state === "error"
+    ? `Failed: ${s.error}`
+    : [s.phase, total ? `${done}/${total}` : "", s.current].filter(Boolean).join(" · ");
+  $("sweepSettlements").textContent = s.settlements ?? 0;
+  $("sweepDistricts").textContent = s.districts ?? 0;
+  $("sweepStreets").textContent = s.streets ?? 0;
+
+  const skipped = s.skipped || [];
+  const resolved = s.resolved || [];
+  $("sweepSkipped").classList.toggle("hide", skipped.length === 0 && resolved.length === 0);
+  const parts = [];
+  if (skipped.length) {
+    // Named, not just counted: a skipped settlement is a hole in the seed, and
+    // the only place it is ever visible is here.
+    parts.push(`<strong>${skipped.length} skipped</strong> — nothing was seeded for these:<br>` +
+      skipped.map((x) => escapeHtml(x)).join("<br>"));
+  }
+  if (resolved.length) {
+    // Reported rather than silent: the tie-break is a rule, and a rule you
+    // cannot see applied is one you cannot notice being wrong.
+    parts.push(
+      `<strong>${resolved.length} district name(s) claimed by more than one settlement</strong> — ` +
+      `a boundary match beats a radius one, then the larger settlement wins:<br>` +
+      resolved.map((x) => escapeHtml(x)).join("<br>"));
+  }
+  $("sweepSkipped").innerHTML = parts.join("<br><br>");
+}
+
+async function pollSweep() {
+  const s = await api("/api/sweep/status");
+  renderSweep(s);
+  if (s.state === "running") return;
+
+  clearInterval(sweepTimer);
+  sweepTimer = null;
+  busy($("sweepBtn"), false);
+  if (s.state === "error") {
+    message(`Sweep failed: ${s.error}`, "err");
+  } else {
+    message(
+      `Sweep finished: ${s.settlements} settlements, ${s.districts} districts, ` +
+      `${s.streets} streets merged into output/.`, "ok");
+    // The counts below the fold are stale the moment the sweep writes, and the
+    // next step reads them.
+    if (s.seeds) renderSeedStatus(s.seeds);
+    else await refreshStatus();
+  }
+}
+
+async function startSweep() {
+  const province = $("province").value.trim();
+  if (!province) { message("Enter a province to sweep.", "err"); return; }
+  if (!confirm(
+    `Sweep ${province} province?\n\n` +
+    `This runs one Overpass query per settlement — a few hundred against a province — ` +
+    `and merges every result into output/. It does not touch backend/seeds or any database.`
+  )) return;
+
+  busy($("sweepBtn"), true, "Sweeping…");
+  try {
+    await api("/api/sweep", {
+      endpoint: $("sweepEndpoint").value,
+      province,
+      radius: Number($("sweepRadius").value) || undefined,
+      cyrillic_only: $("sweepCyrillic").checked,
+      overwrite: $("sweepOverwrite").checked,
+    });
+    sweepTimer = setInterval(() => pollSweep().catch((e) => {
+      clearInterval(sweepTimer); sweepTimer = null;
+      busy($("sweepBtn"), false);
+      message(e.message, "err");
+    }), 1000);
+  } catch (e) {
+    busy($("sweepBtn"), false);
+    message(e.message, "err");
+  }
 }
 
 // ── area resolution ──────────────────────────────────────────────────────────
@@ -350,13 +619,27 @@ async function resolveArea() {
     $("areaResult").innerHTML =
       `<div class="muted" style="font-size:12px;margin-bottom:6px">Pick the matching boundary:</div>` +
       candidates.map((c) => `
-        <button class="ghost" style="text-align:left;margin-bottom:6px" data-area="${c.area_id}">
-          ${c.name} · <span class="muted">admin_level ${c.admin_level} · relation ${c.relation_id}</span>
+        <button class="ghost" style="text-align:left;margin-bottom:6px" data-area="${c.area_id}"
+                data-name="${escapeHtml(c.name)}" data-level="${escapeHtml(String(c.admin_level))}">
+          ${escapeHtml(c.name)} · <span class="muted">admin_level ${escapeHtml(String(c.admin_level))}
+          ${String(c.admin_level) === String(settlementLevel) ? "— a settlement" : ""}
+          · relation ${c.relation_id}</span>
         </button>`).join("");
     $("areaResult").querySelectorAll("[data-area]").forEach((b) =>
-      b.addEventListener("click", () => { $("areaId").value = b.dataset.area; selectionChanged(); }));
+      b.addEventListener("click", () => {
+        $("areaId").value = b.dataset.area;
+        // The chosen boundary decides which settlement the next extraction is
+        // filed under, and the tool knows its admin_level right here — so fill
+        // it in now rather than waiting for the query to come back.
+        lastArea = { name: b.dataset.name, admin_level: b.dataset.level };
+        $("settlement").value = "";
+        applyAreaToSettlement();
+        selectionChanged();
+      }));
     // One match is unambiguous — save the click.
-    if (candidates.length === 1) { $("areaId").value = candidates[0].area_id; selectionChanged(); }
+    if (candidates.length === 1) {
+      $("areaResult").querySelector("[data-area]").click();
+    }
   } catch (e) {
     message(e.message, "err");
   } finally {
@@ -381,14 +664,30 @@ function selectionChanged() {
   refreshQuery();
 }
 
+/** Everything that decides what the query says — shared by preview and run. */
+function queryPayload() {
+  return {
+    kind: $("kind").value,
+    area_id: $("areaId").value.trim() || 0,
+    timeout: $("timeout").value,
+    settlement: $("settlement").value.trim(),
+    radius: $("radius").value,
+  };
+}
+
 async function refreshQuery() {
   if ($("rawMode").checked) return;   // never clobber a hand-edited query
-  const areaId = $("areaId").value.trim();
-  if (!areaId) { $("query").value = "// Resolve an area first."; return; }
+  const around = !!$("kind").selectedOptions[0]?.dataset.needsPoint;
+  if (!around && !$("areaId").value.trim()) {
+    $("query").value = "// Resolve an area first.";
+    return;
+  }
+  if (around && !$("settlement").value.trim()) {
+    $("query").value = "// Pick the settlement to extract around.";
+    return;
+  }
   try {
-    const { query } = await api("/api/build-query", {
-      kind: $("kind").value, area_id: areaId, timeout: $("timeout").value,
-    });
+    const { query } = await api("/api/build-query", queryPayload());
     $("query").value = query;
   } catch (e) {
     $("query").value = `// ${e.message}`;
@@ -400,8 +699,8 @@ async function runQuery() {
   busy(button, true, "Querying Overpass…");
   try {
     const payload = {
-      endpoint: $("endpoint").value, kind: $("kind").value,
-      area_id: $("areaId").value.trim() || 0, timeout: $("timeout").value,
+      ...queryPayload(),
+      endpoint: $("endpoint").value,
       cyrillic_only: $("cyrillicOnly").checked,
     };
     if ($("rawMode").checked) payload.raw = $("query").value;
@@ -409,6 +708,8 @@ async function runQuery() {
 
     rows = data.rows;
     selected = new Set(rows.map((r) => r.name));
+    lastArea = data.area ?? null;
+    applyAreaToSettlement();
     renderRows();
     message(`Overpass returned ${rows.length} distinct names.`, "ok");
     // A server started before the filter existed returns no `dropped` key and
@@ -433,6 +734,29 @@ async function runQuery() {
   } finally {
     busy(button, false);
   }
+}
+
+/**
+ * Fill the settlement in from the boundary the query actually ran against.
+ *
+ * Only from a settlement-level boundary, and never over something already
+ * typed. A province or municipality (admin_level 4/5) spans many settlements
+ * and a city district (9/10) is inside one, so neither name is a settlement —
+ * filing a whole extraction under one would be wrong in a way nothing
+ * downstream can detect, which is why that case says so instead of guessing.
+ */
+function applyAreaToSettlement() {
+  if (!bySettlement[$("target").value] || !lastArea?.name) return;
+
+  if (String(lastArea.admin_level) === String(settlementLevel)) {
+    if (!$("settlement").value.trim()) $("settlement").value = lastArea.name;
+  } else {
+    message(`"${lastArea.name}" is admin_level ${lastArea.admin_level}, not a settlement `
+      + `(${settlementLevel}). Streets are stored per settlement, so extract one `
+      + `city/town/village at a time — or set the settlement below by hand if you `
+      + `know these streets all belong to one.`, "warn");
+  }
+  syncSettlement();
 }
 
 // ── results ──────────────────────────────────────────────────────────────────
@@ -468,9 +792,12 @@ function renderRows() {
 function updateStats() {
   $("statTotal").textContent = rows.length;
   $("statSelected").textContent = selected.size;
-  const known = existingNames[$("target").value];
+  const known = existingKeys[$("target").value];
+  // Counted against the settlement key, so a Varna street name that also exists
+  // in the village being extracted still reads as new — which it is. Under the
+  // old name-only key half an extraction looked like a duplicate of the city.
   $("statNew").textContent = known && known.size
-    ? rows.filter((r) => !known.has(r.name)).length : "—";
+    ? rows.filter((r) => !known.has(keyOf(r.name))).length : "—";
 }
 
 function escapeHtml(s) {
@@ -484,15 +811,23 @@ async function merge() {
   const button = $("mergeBtn");
   const chosen = rows.filter((r) => selected.has(r.name));
   if (chosen.length === 0) { message("Nothing selected.", "warn"); return; }
+  const target = $("target").value;
+  const settlement = $("settlement").value.trim();
+  if (bySettlement[target] && !settlement) {
+    message("Say which settlement these streets are in — a street row points at one, "
+      + "and the seed cannot be written without it.", "warn");
+    return;
+  }
 
   busy(button, true, "Merging…");
   try {
     const report = await api("/api/merge", {
-      target: $("target").value, rows: chosen, overwrite_coords: $("overwrite").checked,
+      target, rows: chosen, settlement, overwrite: $("overwrite").checked,
     });
     $("mergeCard").classList.remove("hide");
     $("mergeReport").innerHTML = `
       <div class="msg"><strong>${report.file}</strong> now holds ${report.total} entries
+      ${report.settlement ? `(${escapeHtml(report.settlement)} merged in) ` : ""}
       (${report.without_coords} still without coordinates).</div>
       <div class="stat">
         <div><span class="ok">${report.added.length}</span><small>added</small></div>
@@ -597,7 +932,7 @@ async function promote() {
   busy(button, true, "Merging…");
   try {
     const { reports } = await api("/api/promote", {
-      overwrite_coords: $("promoteOverwrite").checked,
+      overwrite: $("promoteOverwrite").checked,
     });
     $("mergeCard").classList.remove("hide");
     $("mergeReport").innerHTML = reports.map((r) => `
@@ -623,11 +958,16 @@ async function promote() {
 
 // ── wiring ───────────────────────────────────────────────────────────────────
 
+$("sweepBtn").addEventListener("click", startSweep);
 $("resolveBtn").addEventListener("click", resolveArea);
 $("runBtn").addEventListener("click", runQuery);
 $("mergeBtn").addEventListener("click", merge);
 $("kind").addEventListener("change", () => { syncTarget(); selectionChanged(); updateStats(); });
-$("target").addEventListener("change", updateStats);
+$("target").addEventListener("change", () => { syncSettlement(); updateStats(); });
+// The settlement is part of the query for an "around" kind, so a change to it
+// invalidates a hand-edited one exactly as the area does.
+$("settlement").addEventListener("input", () => { syncSettlement(); selectionChanged(); });
+$("radius").addEventListener("change", selectionChanged);
 $("areaId").addEventListener("change", selectionChanged);
 $("timeout").addEventListener("change", selectionChanged);
 $("country").addEventListener("change", selectionChanged);

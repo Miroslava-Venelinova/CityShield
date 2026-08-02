@@ -6,5 +6,6 @@
     { "label": "Coffee mirror (private)", "url": "https://overpass.private.coffee/api/interpreter" },
     { "label": "openstreetmap.ru", "url": "https://overpass.openstreetmap.ru/api/interpreter" }
   ],
-  "default_country": "България"
+  "default_country": "България",
+  "default_province": "Варна"
 }

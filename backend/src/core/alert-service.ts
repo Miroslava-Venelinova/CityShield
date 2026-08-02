@@ -36,6 +36,17 @@ const CATEGORY_SEVERITY: Record<string, string> = {
 };
 
 export interface AlertLocationDTO {
+  /** The settlement slot (schemas.ts): "гр. Варна", "с. Аврен", or null. */
+  settlement: string | null;
+  /** The area inside it — "кв. Виница", "м-т Ваялар" — or null. */
+  area: string | null;
+  /**
+   * Derived display fields, kept because the shipped app reads them
+   * (frontend/src/services/api.ts) and every alert stored before the three-slot
+   * split holds this pair inside locations_json. `location_name` is the most
+   * specific place named, which is what the flat schema always meant by it, so
+   * old rows and old clients keep rendering unchanged.
+   */
   location_name: string;
   sublocations: string[];
   is_polygon: boolean;
@@ -117,36 +128,112 @@ function allGeometries(polygonJson: Json): Json[] {
 
 // ── Targeting ─────────────────────────────────────────────────────────────────
 
-async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
-  const locationName = typeof location.location_name === "string" ? location.location_name : "";
-  const region = matchRegion(locationName, await q.getRegions(env));
+/** One location's three slots, plus the A6 marker. */
+interface LocationSlots {
+  settlement: string | null;
+  area: string | null;
+  streets: string[];
+  region_wide: boolean;
+}
 
-  const sublocations = Array.isArray(location.sublocations)
-    ? location.sublocations.filter((s): s is string => typeof s === "string")
-    : [];
+/**
+ * Read a location in either shape.
+ *
+ * Targeting runs on whatever the caller sent: the crawler hands over
+ * normalize.ts's three slots, but /api/alerts/submit-data passes
+ * `processed_data.locations` straight through (api/alerts.ts), so the flat
+ * (location_name, sublocations) pair is still a live input and not merely a
+ * historical one. It maps on without a guess — a flat `location_name` was the
+ * most specific place the message named, which is what `area` is.
+ */
+function readLocation(location: Json): LocationSlots {
+  const str = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() !== "" ? v : null;
+  const list = (v: unknown): string[] | null =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : null;
+
+  const hasSlots = "settlement" in location || "area" in location;
+  return {
+    settlement: hasSlots ? str(location.settlement) : null,
+    area: hasSlots ? str(location.area) : str(location.location_name),
+    // `sublocations` is also the fallback for an enriched DTO fed back in, which
+    // carries the slots but keeps its street list under the display name.
+    streets: list(location.streets) ?? list(location.sublocations) ?? [],
+    region_wide: location.region_wide === true,
+  };
+}
+
+async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
+  const { settlement: settlementName, area, streets: named, region_wide } = readLocation(location);
+  const regions = await q.getRegions(env);
+
+  // The settlement is resolved first because the area's resolution depends on
+  // it: since migration 0017 two settlements can hold a district of the same
+  // name, and the slot is the only thing that says which one is meant.
+  const settlement = settlementScope(settlementName, area, regions);
+
+  // The audience is the most specific place named. That is what the flat schema
+  // put in location_name, so splitting the slots left this resolution identical
+  // apart from the scope.
+  const region = matchRegion(
+    area ?? settlementName ?? "", regions, undefined, settlement?.id);
 
   // "в района на ул. X, ул. Y" (A6) names streets to say where the outage is,
   // not who is in it: a resident one street over is affected just as much, and
   // the message never says how far it reaches. Target the whole region instead.
   //
-  // Only when a region actually resolved, though. Vik routinely names streets
-  // and no district at all, and there is no street→region link in the schema to
-  // recover one — so with nothing to widen *to*, the named streets are still a
-  // far better audience than nobody.
-  const areaOnly = location.region_wide === true && region !== null;
+  // Only when an AREA resolved, though. Vik routinely names streets under a bare
+  // city, and widening those to the entire settlement is not what the hedge
+  // claimed — before the split the city simply failed to resolve and the streets
+  // were kept, which is the behaviour worth preserving now that a settlement is
+  // present on every entry.
+  const areaOnly = region_wide && area !== null && region !== null;
 
-  // Streets resolve independently of the region: scraped alerts often name only
-  // a street, and street_name is globally unique, so an unmatched region must
-  // not discard an otherwise perfectly good street match.
-  if (sublocations.length > 0 && !areaOnly) {
+  // Streets resolve independently of the *region*: scraped alerts often name
+  // only a street, so an unmatched region must not discard an otherwise
+  // perfectly good street match.
+  //
+  // They do not resolve independently of the settlement. Street names repeat
+  // across settlements (52% of the names around Тополи, Аврен and Долни чифлик
+  // are also Varna street names), and this is the path where that used to go
+  // wrong: with no region resolved — routine for vik, which names streets and no
+  // district — the query became `street_id IN (…)` over the whole table, so an
+  // outage on a Долни чифлик street notified Varna residents of the like-named
+  // one 30 km away.
+  //
+  // An unresolvable settlement scopes to nothing rather than to everything:
+  // falling back to an unscoped match here would restore exactly that bug, on
+  // exactly the inputs that trigger it. The alert still reaches the region below.
+  if (named.length > 0 && !areaOnly && settlement !== null) {
     const streets = await q.getStreets(env);
     const streetIds = new Set<number>();
-    for (const streetName of sublocations) {
-      const street = matchStreet(streetName, streets);
+    for (const streetName of named) {
+      const street = matchStreet(streetName, streets, settlement.id);
       if (street) streetIds.add(street.id);
     }
     // All matched streets resolve in one query rather than one query each.
-    if (streetIds.size > 0) return q.getUserIdsByStreets(env, [...streetIds], region?.id ?? null);
+    if (streetIds.size > 0) {
+      const ids = [...streetIds];
+      // Pairing the street list with the region narrows a boulevard that runs
+      // through several districts to the one named, and carries that region's
+      // street-less users along. Right when the region IS a district — and wrong
+      // when it is the settlement, because users register under districts and
+      // never under "Варна", so `region_id = Варна` would drop every
+      // district-registered user the street list just matched.
+      if (region !== null && region.id !== settlement.id) {
+        return q.getUserIdsByStreets(env, ids, region.id);
+      }
+      // So the settlement case takes the two halves apart instead of losing one.
+      // The street match stands alone — the ids were resolved inside this
+      // settlement's scope, so they cannot reach a like-named street elsewhere —
+      // and the street-less users are added back by region rather than used to
+      // constrain it. Villages are why that second half matters: there the
+      // settlement row IS the region people register under, so AND-ing it was
+      // harmless and dropping it silently stopped notifying them.
+      const onStreet = await q.getUserIdsByStreets(env, ids, null);
+      if (region === null) return onStreet;
+      return [...new Set([...onStreet, ...await q.getUserIdsUnplacedInRegion(env, region.id)])];
+    }
     // None of the named streets exist in our table — the street detail is
     // unusable, so fall through to region-wide rather than notifying nobody.
   }
@@ -453,14 +540,18 @@ async function enrichLocations(
     const location = asObject(raw);
     if (!location) continue;
 
+    const slots = readLocation(location);
     const dto: AlertLocationDTO = {
-      location_name: typeof location.location_name === "string" ? location.location_name : "",
-      sublocations: Array.isArray(location.sublocations)
-        ? location.sublocations.filter((s): s is string => typeof s === "string")
-        : [],
+      settlement: slots.settlement,
+      area: slots.area,
+      // The display pair, derived: the most specific place named, and the
+      // streets under it. Byte-identical to what the flat schema stored for
+      // every shape it could express.
+      location_name: slots.area ?? slots.settlement ?? "",
+      sublocations: slots.streets,
       is_polygon: location.is_polygon === true,
     };
-    if (location.region_wide === true) dto.region_wide = true;
+    if (slots.region_wide) dto.region_wide = true;
 
     // Normalize the polygon to a bare GeoJSON geometry — the scraper sends a
     // FeatureCollection, the app expects {type, coordinates}.
@@ -501,19 +592,71 @@ function geocodableName(name: string): string {
 }
 
 /**
- * The settlement a location sits in, as a scope for Nominatim.
+ * The city every source we crawl is written against, and so the scope for any
+ * location we cannot place in a settlement of its own.
+ */
+const DEFAULT_SETTLEMENT = "Варна";
+
+/**
+ * The settlement a name sits in, from the written kind alone.
  *
  * A "гр." or "с." names a settlement in its own right, so it *is* the scope —
  * Долни чифлик is not inside Варна, and scoping it there is what sent an
  * unseeded village street to a like-named street in the city. Everything else
  * (кв., ж.к., м-т, к.к., or a bare name we cannot classify) keeps the Варна
- * scope the sources are written against, which is also the previous behaviour
- * for every location that has one.
+ * scope the sources are written against.
+ *
+ * All the schema could answer before migration 0016, and still the answer for a
+ * region we hold no parent link for — see settlementScope.
  */
 function settlementOf(locationName: string): string {
   const { kind, core } = parseName(locationName);
   const cls = placeClass(kind);
-  return (cls === "city" || cls === "village") && core ? core : "Варна";
+  return (cls === "city" || cls === "village") && core ? core : DEFAULT_SETTLEMENT;
+}
+
+/**
+ * The regions row for a location's settlement — the scope its street lookups
+ * take (`streets.region_id`, migration 0015).
+ *
+ * Deliberately not the same thing as the `region` a location matches. For
+ * "кв. Виница" the region is the district and the settlement is Варна; only the
+ * latter can scope a street, because `streets.region_id` always points at a
+ * settlement-class region and never at a district.
+ *
+ * Both slots are offered because either can carry the answer: the settlement
+ * slot when the message stated one, the area slot when it named only a district
+ * and migration 0016 knows which settlement that district is in. The link is
+ * what makes "ж.к. Младост (Белослав)" scope to Белослав — the written kind
+ * cannot, and answering Варна for it is a district of the wrong town.
+ *
+ * A region with no link falls back to the written kind, which is exactly the
+ * pre-0016 behaviour: unlinked data cannot tell a district from a settlement
+ * (both have a NULL parent), so the guess stays the conservative one.
+ *
+ * Null means we could not place the location in any settlement we know, and
+ * every caller treats that as "no street lookup is possible here" rather than
+ * as "search everywhere".
+ */
+function settlementScope(
+  settlement: string | null, area: string | null, regions: readonly q.NamedRow[],
+): q.NamedRow | null {
+  for (const name of [settlement, area]) {
+    if (name === null) continue;
+    const row = matchRegion(name, regions);
+    if (row && row.settlement_id !== null && row.settlement_id !== undefined) {
+      const parent = regions.find((r) => r.id === row.settlement_id);
+      if (parent) return parent;
+    }
+    // Settlement-class rows only. `written` is a settlement name by
+    // construction, and since migration 0017 a district may carry the same one —
+    // resolving to it would hand `matchStreet` a district id as its scope, and
+    // `streets.region_id` never points at a district (0015), so every street
+    // lookup under it would silently find nothing.
+    const written = settlementOf(name);
+    if (written !== DEFAULT_SETTLEMENT) return matchRegion(written, regions, undefined, null);
+  }
+  return matchRegion(DEFAULT_SETTLEMENT, regions, undefined, null);
 }
 
 /**
@@ -533,28 +676,46 @@ function seededPoint(row: q.NamedRow | null): GeoPoint | null {
  * Geocoding strategy (ResolveCoordinatesAsync): canonicalize names against
  * our own DB first (trigram fuzzy match), then ask Nominatim.
  *
- * Region-first for the pin: when a location names a district/locality it
- * usually lists several streets within it, and dropping the pin on one of
- * them reads as "the outage is here" when it spans the whole area — so the
- * region centroid is the better marker. Streets are only used when no region
- * was given (or the named region resolves to nothing). This is the pin only;
- * notification targeting stays street-first — see getUserIdsInRange.
+ * Area-first for the pin: when a location names a district/locality it usually
+ * lists several streets within it, and dropping the pin on one of them reads as
+ * "the outage is here" when it spans the whole area — so the region centroid is
+ * the better marker. Streets are only used when no area was given (or the named
+ * area resolves to nothing). This is the pin only; notification targeting stays
+ * street-first — see getUserIdsInRange.
+ *
+ * The settlement is the LAST resort, below the streets, and that ordering is
+ * what keeps the three-slot split from moving every pin. Under the flat schema
+ * a street-only city alert arrived with location_name "" and went straight to
+ * its streets; now the city is stated on every entry, so pinning the settlement
+ * at step 1 would answer "гр. Варна, ул. Дубровник" with the city centre. A
+ * street inside the named settlement is strictly the better marker, and falling
+ * back to the settlement centroid still beats no pin at all.
  */
 async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: number) {
   // Everything this location looks up is searched inside its own settlement,
   // so a village street is never resolved against the like-named city one.
-  const settlement = settlementOf(dto.location_name);
+  const regions = await q.getRegions(env);
+  // The settlement as a row, for scoping the street table. Null when we hold no
+  // region for it, which means no seeded street can be trusted to be this
+  // location's — Nominatim answers those, as it did for every village street
+  // before they could be seeded at all.
+  const scope = settlementScope(dto.settlement, dto.area ?? dto.location_name, regions);
+  // The same thing as a string, for the Nominatim anchor. The resolved row's
+  // name is the canonical spelling; settlementOf only sees what was written.
+  const settlement = scope?.name ?? settlementOf(dto.settlement ?? dto.area ?? dto.location_name);
 
-  // 1. District / locality level: a named region pins the whole area.
-  if (dto.location_name.trim()) {
-    const match = matchRegion(dto.location_name, await q.getRegions(env));
+  // 1. District / locality level: a named area pins the whole of it — the one
+  // inside this location's settlement, which is the whole point of scoping here:
+  // Варна's "Цветен квартал" and Белослав's are 17.5 km apart and share a name.
+  if (dto.area?.trim()) {
+    const match = matchRegion(dto.area, regions, undefined, scope?.id);
     const seeded = seededPoint(match);
     if (seeded) return seeded;
 
     const point = await geocode(
-      env, buildGeocodeQuery(match?.name ?? geocodableName(dto.location_name), settlement), deadline);
+      env, buildGeocodeQuery(match?.name ?? geocodableName(dto.area), settlement), deadline);
     if (point) return point;
-    // Region named but unresolvable — fall through to the streets rather than
+    // Area named but unresolvable — fall through to the streets rather than
     // leaving the alert with no pin at all.
   }
 
@@ -563,17 +724,31 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
   if (candidates.length > 0) {
     const streets = await q.getStreets(env); // hoisted: constant across the loop
     for (const raw of candidates) {
-      const match = matchStreet(raw, streets);
+      // Scoped to this location's settlement, so a matched row IS this
+      // location's street — which is what lets its seeded coordinate be used
+      // directly. The old code had to refuse any match outside Варна, because a
+      // seeded row could only be a city street; that guard is what sent every
+      // village street to Nominatim, one 1,100 ms throttle slot plus an
+      // up-to-8 s request at a time, on the ingest deadline.
+      const match = scope === null ? null : matchStreet(raw, streets, scope.id);
       const seeded = seededPoint(match);
-      // A seeded street row is a *Варна* street (the streets seed covers the
-      // city only), so it is not this location's street when the location is
-      // some other settlement — take the name but let Nominatim place it.
-      if (seeded && settlement === "Варна") return seeded;
+      if (seeded) return seeded;
 
       const point = await geocode(
         env, buildGeocodeQuery(match?.name ?? geocodableName(raw), settlement), deadline);
       if (point) return point;
     }
+  }
+
+  // 3. Settlement level: no area and no street resolved, so the city or village
+  // centroid is all that is left. Below the streets deliberately — see above.
+  if (dto.settlement?.trim()) {
+    const seeded = seededPoint(scope);
+    if (seeded) return seeded;
+
+    const point = await geocode(
+      env, buildGeocodeQuery(scope?.name ?? geocodableName(dto.settlement), settlement), deadline);
+    if (point) return point;
   }
 
   return null;

@@ -749,6 +749,12 @@ def summarize() -> dict:
             "locations": [
                 {
                     "location_name": str(location.get("location_name", "")),
+                    # The slots behind the display name. Without them the review
+                    # renders {"гр. Варна", "кв. Виница"} and {null, "кв. Виница"}
+                    # identically, and telling those apart is the whole point of
+                    # reviewing a three-slot parse. None on pre-split alerts.
+                    "settlement": location.get("settlement"),
+                    "area": location.get("area"),
                     "lat": location.get("lat"),
                     "lng": location.get("lng"),
                     "is_polygon": bool(location.get("is_polygon")),
@@ -920,7 +926,12 @@ def render_markdown(summary: dict) -> str:
                 # The streets below were listed but not targeted — say so, or the
                 # line reads as street-level targeting that it deliberately isn't.
                 wide = " · region-wide" if location["region_wide"] else ""
-                lines.append(f"- {location['location_name'] or '(unnamed)'} → {pin}{polygon}{wide}{subs}")
+                # The settlement is shown beside the name, not instead of it:
+                # what a review has to be able to see is whether the model put
+                # the district and its city in the right slots.
+                scope = f" [in {location['settlement']}]" if location["settlement"] else ""
+                lines.append(
+                    f"- {location['location_name'] or '(unnamed)'}{scope} → {pin}{polygon}{wide}{subs}")
         elif finding["locations_error"]:
             lines += ["", f"**Locations:** {finding['locations_error']}"]
         else:

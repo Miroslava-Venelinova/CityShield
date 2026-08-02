@@ -51,6 +51,21 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       corpus has a long-list case; if fresh alerts show it recurring, the answer is a
       count check — ask the model how many places it found, and re-prompt on a mismatch —
       not a better sentence in the prompt.
+- [ ] **Seed the village streets.** Migration 0015 and everything around it landed on
+      31.07.2026 — `streets` now carries a settlement, targeting and enrichment are
+      scoped by it, and `tools/osm-seed-builder` extracts one settlement at a time. What
+      has *not* happened is the extraction itself: the table still holds only the 1,333
+      Варна streets, so villages keep falling through to Nominatim exactly as before.
+      Nothing is wrong until this runs; it is the payoff that is missing.
+      Do община Варна first (the ~99 regions inside the 15 km city-wide radius, where the
+      users are), against the self-hosted Overpass — the public endpoints rate-limited
+      after three queries when this was tried. Use the *around a settlement* kind: most
+      villages have no boundary relation to query. Then extend to the rest of the
+      province; vik does publish Долни чифлик and Аврен.
+      Two checks after applying, both in SPEC §1.2: the street count matches the JSON
+      (a settlement missing from `regions` inserts nothing, silently), and the
+      **startup budget** `wrangler deploy` prints — it was 27 ms against 400 ms, and the
+      seed growing ~4× is the one number worth watching.
 - [ ] **Grow `region_aliases` from what the sources actually write.** The table (0013)
       holds two rows today. Every name the review flags as unmatched but obviously real
       is an alias row, and an alias is cheaper and more exact than loosening the matcher.

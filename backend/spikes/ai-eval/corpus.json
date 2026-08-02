@@ -1,5 +1,5 @@
 {
-  "comment": "Eval corpus for the outage/vt prompts. Messages are realistic source texts in the exact shape each service feeds the LLM — outage inputs carry the CURRENT_DATE line processOutageMessage prepends, so dates are graded the way production resolves them. Outage times are graded through the production normalizeSchedule(), i.e. on what would actually be stored rather than on the literal strings the model wrote. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin). `forbidden_location_names` fails a case that emits a non-place as a location, whatever else it got right.",
+  "comment": "Eval corpus for the outage/vt prompts. Messages are realistic source texts in the exact shape each service feeds the LLM — outage inputs carry the CURRENT_DATE line processOutageMessage prepends, so dates are graded the way production resolves them. Outage times are graded through the production normalizeSchedule(), i.e. on what would actually be stored rather than on the literal strings the model wrote. bus_lines comparison is normalized (Cyrillic А/В/Е/К/М → Latin). `forbidden_location_names` fails a case that emits a non-place, in any of the three location slots, whatever else it got right. An outage location is (settlement, area, streets); `lenient.name` waives both name slots. The sharpest cases for that split are heating-district, where no city is named and the model must leave `settlement` null rather than inventing \"гр. Варна\" now that it is being asked for one, and vik-complex-and-locality, where one sentence puts one name in `area` and the other in `settlement`. epro-district-with-own-streets, epro-street-then-localities and vik-village-street were added with the split: the corpus had no case for a district carrying its own streets, which is the shape the whole three-slot change exists for.",
   "current_date": "2026-07-27",
   "cases": [
     {
@@ -9,8 +9,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "гр. Варна",
-            "sublocations": [
+            "settlement": "гр. Варна",
+            "area": null,
+            "streets": [
               "ул. Дубровник",
               "ул. Студентска"
             ],
@@ -37,8 +38,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": null,
-            "sublocations": [
+            "settlement": null,
+            "area": null,
+            "streets": [
               "ул. Русе",
               "ул. Бачо Киро",
               "ул. Козлодуй",
@@ -60,7 +62,7 @@
         "city_wide": false
       },
       "lenient": {
-        "location_name": true
+        "name": true
       },
       "forbidden_location_names": [
         "карето",
@@ -76,8 +78,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "гр. Варна",
-            "sublocations": [
+            "settlement": "гр. Варна",
+            "area": null,
+            "streets": [
               "ул. Дубровник"
             ],
             "is_polygon": false
@@ -103,8 +106,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "кв. Чайка",
-            "sublocations": [],
+            "settlement": null,
+            "area": "кв. Чайка",
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -147,13 +151,15 @@
       "expected": {
         "locations": [
           {
-            "location_name": "ж.к. Възраждане",
-            "sublocations": [],
+            "settlement": null,
+            "area": "ж.к. Възраждане",
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Тополи",
-            "sublocations": [],
+            "settlement": "с. Тополи",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -177,8 +183,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "кв. Аспарухово",
-            "sublocations": [],
+            "settlement": "гр. Варна",
+            "area": "кв. Аспарухово",
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -202,8 +209,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "с. Тополи",
-            "sublocations": [],
+            "settlement": "с. Тополи",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -231,8 +239,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "кв. Владислав Варненчик",
-            "sublocations": [],
+            "settlement": "гр. Варна",
+            "area": "кв. Владислав Варненчик",
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -256,18 +265,21 @@
       "expected": {
         "locations": [
           {
-            "location_name": "гр. Игнатиево",
-            "sublocations": [],
+            "settlement": "гр. Игнатиево",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Припек",
-            "sublocations": [],
+            "settlement": "с. Припек",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Баново",
-            "sublocations": [],
+            "settlement": "с. Баново",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -296,8 +308,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "ж.к. Възраждане",
-            "sublocations": [],
+            "settlement": null,
+            "area": "ж.к. Възраждане",
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -325,28 +338,33 @@
       "expected": {
         "locations": [
           {
-            "location_name": "с. Игнатиево",
-            "sublocations": [],
+            "settlement": "с. Игнатиево",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Припек",
-            "sublocations": [],
+            "settlement": "с. Припек",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Слънчево",
-            "sublocations": [],
+            "settlement": "с. Слънчево",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Баново",
-            "sublocations": [],
+            "settlement": "с. Баново",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           },
           {
-            "location_name": "с. Тополи",
-            "sublocations": [],
+            "settlement": "с. Тополи",
+            "area": null,
+            "streets": [],
             "is_polygon": false
           }
         ],
@@ -370,8 +388,9 @@
       "expected": {
         "locations": [
           {
-            "location_name": "гр. Варна",
-            "sublocations": [
+            "settlement": "гр. Варна",
+            "area": null,
+            "streets": [
               "ул. Пловдив",
               "бул. Чаталджа"
             ],
@@ -517,6 +536,103 @@
           "to_date": "2026-08-04",
           "windows": []
         }
+      }
+    },
+    {
+      "id": "epro-district-with-own-streets",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n28.07.2026 09:00-16:00\nгр. Варна - кв. Виница, ул. Свети Пророк Илия, ул. Константин Павлов",
+      "expected": {
+        "locations": [
+          {
+            "settlement": "гр. Варна",
+            "area": "кв. Виница",
+            "streets": [
+              "ул. Свети Пророк Илия",
+              "ул. Константин Павлов"
+            ],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-28",
+          "to_date": "2026-07-28",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "16:00"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "epro-street-then-localities",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nПрекъсване на електрозахранването\n28.07.2026 09:00-16:00\nгр. Варна - част от: ул. Арх. Стоян Доков, м-ст Ваялар и м-ст Свети Никола",
+      "expected": {
+        "locations": [
+          {
+            "settlement": "гр. Варна",
+            "area": null,
+            "streets": [
+              "ул. Арх. Стоян Доков"
+            ],
+            "is_polygon": false
+          },
+          {
+            "settlement": "гр. Варна",
+            "area": "м-т Ваялар",
+            "streets": [],
+            "is_polygon": false
+          },
+          {
+            "settlement": "гр. Варна",
+            "area": "м-т Свети Никола",
+            "streets": [],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-28",
+          "to_date": "2026-07-28",
+          "windows": [
+            {
+              "start": "09:00",
+              "end": "16:00"
+            }
+          ]
+        },
+        "city_wide": false
+      }
+    },
+    {
+      "id": "vik-village-street",
+      "kind": "outage",
+      "input": "CURRENT_DATE: 2026-07-27\nАвария на водопровод\nПоради отстраняване на авария е нарушено водоподаването в с. Аврен, ул. Тича. Възстановяване до 16:00 ч.",
+      "expected": {
+        "locations": [
+          {
+            "settlement": "с. Аврен",
+            "area": null,
+            "streets": [
+              "ул. Тича"
+            ],
+            "is_polygon": false
+          }
+        ],
+        "schedule": {
+          "from_date": "2026-07-27",
+          "to_date": "2026-07-27",
+          "windows": [
+            {
+              "start": null,
+              "end": "16:00"
+            }
+          ]
+        },
+        "city_wide": false
       }
     }
   ]

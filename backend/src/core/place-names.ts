@@ -259,6 +259,7 @@ function matchCore(
   accepts: (cls: PlaceClass | null) => boolean,
   threshold: number,
   preferInCity: boolean,
+  inScope: ((row: NamedRow) => boolean) | null = null,
 ): NamedRow | null {
   const { kind, core } = parseName(raw);
   const queryClass = placeClass(kind);
@@ -272,6 +273,15 @@ function matchCore(
   let top = 0;
   const scored: Array<{ p: Prepared; score: number }> = [];
   for (const p of prepare(rows)) {
+    // Settlement scope, applied inside this loop rather than by filtering the
+    // array at the call site: `prepare` memoizes on array *identity*, so a
+    // freshly filtered array per call would throw the memo away and re-parse
+    // every row — the exact cost the memo exists to avoid, on a 10 ms budget.
+    // A predicate rather than an id compare because the two tables answer it
+    // with different columns — a street's scope is its `region_id`, a region's
+    // its `settlement_id` — and either way it runs before the row is scored,
+    // which is what makes it cheap.
+    if (inScope !== null && !inScope(p.row)) continue;
     if (!kindsCompatible(queryClass, p.cls)) continue;
     const score = gramSimilarity(queryGrams, p.grams);
     if (score < threshold) continue;
@@ -283,9 +293,9 @@ function matchCore(
   // In-city preference, applied only among candidates close enough to the top
   // score to be genuine alternatives — a distant place that simply scores much
   // better is still the better answer.
+  const center = centerOf(rows);
   let pool = scored.filter((s) => s.score >= top - NEAR_TIE_BAND);
   if (preferInCity) {
-    const center = centerOf(rows);
     const inCity = pool.filter((s) => isInCity(s.p.row, center));
     if (inCity.length > 0) pool = inCity;
   }
@@ -311,6 +321,36 @@ function matchCore(
         winner = s;
       }
     }
+
+    // Two rows can now be spelled IDENTICALLY: migration 0017 dropped the global
+    // UNIQUE on region_name, so Варна's "Цветен квартал" and Белослав's are both
+    // just that. The literal comparison above scores identical names identically
+    // by construction, so it cannot separate them and "strictly greater" would
+    // leave the answer to whichever the seed listed first.
+    //
+    // The in-city band settles most such pairs on its own — Белослав's district
+    // is 16.5 km out, so it never reaches this line. What it cannot settle is a
+    // pair on the SAME side of the 9 km threshold: two `с.о.` villa zones out
+    // among the villages, 12 km and 39 km from the centre, are both simply "not
+    // in the city" and both stay in the pool. Measured: without the line below,
+    // those two swap answers when the array order changes.
+    //
+    // Distance is the same judgement preferInCity already makes, at a finer
+    // grain. It is a tie-break, not an answer — the caller that KNOWS which
+    // settlement was meant should pass a scope, and this is only for the one
+    // that does not.
+    if (preferInCity) {
+      const stillTied = tied.filter(
+        (s) => similarity(raw, s.p.row.name) === literalBest
+          && s.p.row.lat !== null && s.p.row.lng !== null);
+      for (const s of stillTied) {
+        if (distanceKm(s.p.row.lat!, s.p.row.lng!, center.lat, center.lng)
+          < distanceKm(winner.p.row.lat ?? Infinity, winner.p.row.lng ?? Infinity,
+            center.lat, center.lng)) {
+          winner = s;
+        }
+      }
+    }
   }
   return winner.p.row;
 }
@@ -324,21 +364,59 @@ const isStreetClass = (cls: PlaceClass | null) => cls === null || cls === "stree
  * A name carrying a street kind ("ул. Пловдив") is never a region, and a name
  * whose kind disagrees with the row's ("к.к. Чайка" vs "кв. Чайка") is never
  * that row.
+ *
+ * `inSettlement` is the settlement the name was written inside, and is what
+ * tells Варна's "Цветен квартал" from Белослав's — two rows that carry the same
+ * name since migration 0017 dropped the global UNIQUE, and which nothing in the
+ * name itself can separate. A settlement id matches that settlement's own row
+ * and any district linked to it; `null` asks for settlement-class rows only,
+ * which is how a settlement slot is resolved without a district of the same name
+ * winning it.
+ *
+ * Preference, not restriction: it retries unscoped when the scope matches
+ * nothing. 181 of the 261 seeded regions still carry no parent link — every row
+ * predating the province sweep — and a hard filter would make those unreachable
+ * whenever a settlement happened to be named, turning a correct answer into no
+ * answer. Scoping can therefore only ever move a match onto a better row, never
+ * take one away.
  */
 export function matchRegion(
   raw: string, rows: readonly NamedRow[], threshold = CORE_MATCH_THRESHOLD,
+  inSettlement?: number | null,
 ): NamedRow | null {
+  if (inSettlement !== undefined) {
+    const scoped = matchCore(raw, rows, isRegionClass, threshold, true,
+      inSettlement === null
+        ? (r) => r.settlement_id === null || r.settlement_id === undefined
+        : (r) => r.settlement_id === inSettlement || r.id === inSettlement);
+    if (scoped !== null) return scoped;
+  }
   return matchCore(raw, rows, isRegionClass, threshold, true);
 }
 
 /**
  * The streets row a written street name refers to, or null.
  *
- * No in-city preference: street_name is unique across the table and every row
- * in it is already inside the crawled area, so there is no ambiguity to break.
+ * `scopeRegionId` is the settlement the lookup is happening in, and rows in any
+ * other settlement are not candidates. It is what makes a street name usable at
+ * all now that the table holds several settlements: 52% of the street names
+ * around Тополи, Аврен and Долни чифлик also exist in Варна, so an unscoped
+ * "ул. Тича" is a coin toss between places 25 km apart.
+ *
+ * Omitting it searches every settlement, which is right for a caller asking
+ * whether a name is a street *anywhere* (ingestion/normalize.ts) and wrong for
+ * one resolving a particular location — those must pass a scope, and must treat
+ * an unresolvable settlement as "no scope exists" rather than falling back to
+ * this, which would silently restore the ambiguity on exactly the inputs that
+ * trigger it.
+ *
+ * No in-city preference: within one settlement there is no city/village
+ * ambiguity left to break — the scope is what broke it.
  */
 export function matchStreet(
-  raw: string, rows: readonly NamedRow[], threshold = CORE_MATCH_THRESHOLD,
+  raw: string, rows: readonly NamedRow[],
+  scopeRegionId: number | null = null, threshold = CORE_MATCH_THRESHOLD,
 ): NamedRow | null {
-  return matchCore(raw, rows, isStreetClass, threshold, false);
+  return matchCore(raw, rows, isStreetClass, threshold, false,
+    scopeRegionId === null ? null : (r) => r.region_id === scopeRegionId);
 }

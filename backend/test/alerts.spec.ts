@@ -23,16 +23,26 @@ beforeEach(async () => {
   // spacing, which is module-scope and shared with every other spec file in
   // this isolate. Left hot, it delays whatever runs next (see auth.spec.ts).
   resetNominatimThrottle();
+  // Варна carries its centroid because it is both the city-wide fan-out's
+  // origin and, since migration 0015, the settlement every street below belongs
+  // to — a location that names no settlement of its own scopes its streets here.
   await env.DB.prepare(
-    "INSERT INTO regions (region_name) VALUES ('Аспарухово'), ('Левски')").run();
+    `INSERT INTO regions (region_name, lat, lng) VALUES
+       ('Варна', 43.2073873, 27.9166653), ('Аспарухово', NULL, NULL), ('Левски', NULL, NULL)`).run();
   await env.DB.prepare(
-    "INSERT INTO streets (street_name) VALUES ('Дубровник'), ('Розова долина')").run();
+    `INSERT INTO streets (street_name, region_id)
+     SELECT name, (SELECT id FROM regions WHERE region_name = 'Варна')
+       FROM (SELECT 'Дубровник' AS name UNION ALL SELECT 'Розова долина')`).run();
 });
 
 interface TestUser {
   userId: string;
   region?: string;
   street?: string;
+  /** The street's settlement — only needed when the name exists in more
+   *  than one (migration 0015). Defaults to Варна, where every street the
+   *  outer beforeEach seeds lives. */
+  streetIn?: string;
   lat?: number;
   lng?: number;
   receivesAll?: boolean;
@@ -48,8 +58,10 @@ async function createUser(opts: Omit<TestUser, "userId"> = {}): Promise<string> 
         .bind(opts.region).first<{ id: number }>())!.id
     : null;
   const streetId = opts.street
-    ? (await env.DB.prepare("SELECT id FROM streets WHERE street_name = ?")
-        .bind(opts.street).first<{ id: number }>())!.id
+    ? (await env.DB.prepare(
+        `SELECT s.id FROM streets s JOIN regions r ON r.id = s.region_id
+         WHERE s.street_name = ? AND r.region_name = ?`)
+        .bind(opts.street, opts.streetIn ?? "Варна").first<{ id: number }>())!.id
     : null;
   const now = new Date().toISOString();
   await env.DB.prepare(
@@ -134,10 +146,10 @@ describe("targeting decision tree", () => {
   // heating alert for the city network was reaching villages not on it.
   describe("city_wide is bounded to the city and its own municipality", () => {
     beforeEach(async () => {
-      // Coordinates matter here, and the outer beforeEach seeds names only.
+      // The two settlements the radius has to separate; Варна (the origin) is
+      // seeded with its centroid by the outer beforeEach.
       await env.DB.prepare(
         `INSERT INTO regions (region_name, lat, lng) VALUES
-           ('Варна', 43.2073873, 27.9166653),
            ('Тополи', 43.2164126, 27.8212023),
            ('Долни чифлик', 42.9925676, 27.7187564)`).run();
       clearRefCaches(); // seeded after the outer beforeEach already cleared
@@ -279,6 +291,405 @@ describe("targeting decision tree", () => {
     // The street detail is unusable, so the region alone decides.
     expect(new Set(body.user_ids)).toEqual(new Set([onOtherStreet, regionOnly]));
     expect(body.user_ids).not.toContain(otherRegion);
+  });
+
+  // The bug migration 0015 exists to close. `streets` was Varna-only and
+  // street_name was globally UNIQUE, so matchStreet had nothing to scope on:
+  // an outage on a village street resolved to the like-named Varna row and
+  // notified people 25 km away. Half the street names around Тополи, Аврен and
+  // Долни чифлик are also Varna street names, so this is the common case, not
+  // an unlucky one.
+  describe("a street name that exists in two settlements", () => {
+    beforeEach(async () => {
+      await env.DB.prepare(
+        "INSERT INTO regions (region_name, lat, lng) VALUES ('Аврен', 43.1138714, 27.6658571)").run();
+      await env.DB.prepare(
+        `INSERT INTO streets (street_name, region_id, lat, lng)
+         SELECT 'Тича', id, 43.1138, 27.6658 FROM regions WHERE region_name = 'Аврен'`).run();
+      await env.DB.prepare(
+        `INSERT INTO streets (street_name, region_id, lat, lng)
+         SELECT 'Тича', id, 43.2166, 27.9166 FROM regions WHERE region_name = 'Варна'`).run();
+      clearRefCaches();
+    });
+
+    it("notifies the village street's residents, not the city street's", async () => {
+      const inVillage = await createUser({ region: "Аврен", street: "Тича", streetIn: "Аврен" });
+      const inCity = await createUser({ region: "Варна", street: "Тича", streetIn: "Варна" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            location_name: "с. Аврен", sublocations: ["ул. Тича"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([inVillage]));
+      expect(body.user_ids).not.toContain(inCity);
+    });
+
+    // The shape the bug actually fired in, and the one the region_id in
+    // getUserIdsByStreets cannot mask: vik routinely names streets and no
+    // district at all, so nothing narrows the audience but the street itself.
+    // Unscoped, "ул. Тича" resolved to whichever of the two rows the seed
+    // happened to hold first — here the village's — and an outage in the city
+    // notified a village 25 km away instead. A location that names no
+    // settlement of its own is the city's, which is what every source we crawl
+    // is written against.
+    it("defaults a district-less alert to the city, not to whichever row came first", async () => {
+      const inVillage = await createUser({ region: "Аврен", street: "Тича", streetIn: "Аврен" });
+      const inCity = await createUser({ region: "Варна", street: "Тича", streetIn: "Варна" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{ location_name: "", sublocations: ["ул. Тича"], is_polygon: false }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([inCity]));
+      expect(body.user_ids).not.toContain(inVillage);
+    });
+
+    // Same two decisions, stated rather than inferred: the settlement slot says
+    // which Тича is meant instead of settlementOf() having to guess it.
+    it("scopes the streets to the named settlement slot", async () => {
+      const inVillage = await createUser({ region: "Аврен", street: "Тича", streetIn: "Аврен" });
+      const inCity = await createUser({ region: "Варна", street: "Тича", streetIn: "Варна" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "с. Аврен", area: null, streets: ["ул. Тича"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([inVillage]));
+      expect(body.user_ids).not.toContain(inCity);
+    });
+
+    it("still defaults to the city when all three slots are empty", async () => {
+      const inVillage = await createUser({ region: "Аврен", street: "Тича", streetIn: "Аврен" });
+      const inCity = await createUser({ region: "Варна", street: "Тича", streetIn: "Варна" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: null, area: null, streets: ["ул. Тича"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([inCity]));
+      expect(body.user_ids).not.toContain(inVillage);
+    });
+
+    // The saving the change was really for: a village street used to be
+    // unpinnable from our own tables. A seeded row could only be a Varna
+    // street, so enrichment refused it and every village street went to
+    // Nominatim — a 1,100 ms throttle slot plus an up-to-8 s request each, on
+    // the ingest deadline. Scoped, the row IS this location's street.
+    it("pins a village street from its own seeded row, with no Nominatim call", async () => {
+      // No coordinates on the region, so the region step cannot pin it and
+      // enrichment falls through to the streets — the path being tested.
+      await env.DB.prepare(
+        "UPDATE regions SET lat = NULL, lng = NULL WHERE region_name = 'Аврен'").run();
+      clearRefCaches();
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            location_name: "с. Аврен", sublocations: ["ул. Тича"], is_polygon: false,
+          }],
+        },
+      }));
+      const { alert_id } = await res.json() as SubmitResponse;
+
+      const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+        .bind(alert_id).first<{ locations_json: string }>();
+      const [loc] = JSON.parse(row!.locations_json);
+      // The village's Тича (27.6658), not the city's (27.9166).
+      expect(loc.lat).toBeCloseTo(43.1138);
+      expect(loc.lng).toBeCloseTo(27.6658);
+
+      const cache = await env.DB.prepare("SELECT COUNT(*) AS n FROM geocode_cache")
+        .first<{ n: number }>();
+      expect(cache!.n).toBe(0);
+    });
+
+    // The other half of the same change: the pin. The village row carries its
+    // own centroid, so no Nominatim call happens at all — no interceptor is
+    // registered here, and net connect is disabled, so one would throw.
+    it("pins the village street's own centroid, with no Nominatim call", async () => {
+      // Аврен's region row would pin the alert first, so name no region: this
+      // is vik's shape anyway — streets, and the town in the free text.
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            location_name: "гр. Аврен", sublocations: ["ул. Тича"], is_polygon: false,
+          }],
+        },
+      }));
+      const { alert_id } = await res.json() as SubmitResponse;
+
+      const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+        .bind(alert_id).first<{ locations_json: string }>();
+      const [loc] = JSON.parse(row!.locations_json);
+      // The region matched first and pinned its centroid — the village's, and
+      // nowhere near the city street's 27.9166.
+      expect(loc.lng).toBeCloseTo(27.6658571);
+
+      const cache = await env.DB.prepare("SELECT COUNT(*) AS n FROM geocode_cache")
+        .first<{ n: number }>();
+      expect(cache!.n).toBe(0);
+    });
+  });
+
+  // The three-slot shape (schemas.ts). Every test above feeds the flat
+  // (location_name, sublocations) pair, which readLocation still accepts and
+  // which is what the shipped app and every stored alert hold — so those
+  // passing unchanged IS the compatibility evidence. These are their twins in
+  // the new shape, and they answer identically.
+  //
+  // Two of them would not, without the fixes that go with an always-present
+  // settlement: the flat schema left location_name empty on vik's street-only
+  // messages, so the city never resolved and neither the region pairing nor the
+  // A6 widening had anything to fire on. Both fire now.
+  describe("the three-slot location shape", () => {
+    it("targets a settlement+area+streets entry exactly as the flat pair did", async () => {
+      const match = await createUser({ region: "Аспарухово", street: "Дубровник" });
+      const regionOnlyUser = await createUser({ region: "Аспарухово" });
+      const sameRegionOtherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+      const otherRegion = await createUser({ region: "Левски", street: "Дубровник" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "гр. Варна", area: "кв. Аспарухово",
+            streets: ["ул. Дубровник"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      // The area is a district, so pairing it with the street list still narrows
+      // a street that runs through several of them.
+      expect(new Set(body.user_ids)).toEqual(new Set([match, regionOnlyUser]));
+      expect(body.user_ids).not.toContain(sameRegionOtherStreet);
+      expect(body.user_ids).not.toContain(otherRegion);
+    });
+
+    // Users register under districts, never under "Варна". Pairing the street
+    // list with the settlement would filter on region_id = Варна and exclude
+    // every one of them — an alert that reaches nobody.
+    it("does not pair a street list with the settlement itself", async () => {
+      const onStreet = await createUser({ region: "Аспарухово", street: "Дубровник" });
+      const sameStreetOtherRegion = await createUser({ region: "Левски", street: "Дубровник" });
+      const otherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+      // Street-less, and under the settlement itself rather than a district —
+      // the half that the pairing used to carry and must not lose.
+      const unplacedInSettlement = await createUser({ region: "Варна" });
+      const unplacedInDistrict = await createUser({ region: "Аспарухово" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "гр. Варна", area: null, streets: ["ул. Дубровник"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids))
+        .toEqual(new Set([onStreet, sameStreetOtherRegion, unplacedInSettlement]));
+      expect(body.user_ids).not.toContain(otherStreet);
+      // Their district was not named, so nothing places them on these streets.
+      expect(body.user_ids).not.toContain(unplacedInDistrict);
+    });
+
+    // A village is where the settlement row IS the region people register under,
+    // so a street-less resident of it must still hear about its street outage.
+    // The settlement/district asymmetry is invisible in the schema — `regions`
+    // mixes both with no kind column — which is exactly why this is a test.
+    it("keeps a street-less villager in a village street's audience", async () => {
+      await env.DB.prepare(
+        "INSERT INTO regions (region_name, lat, lng) VALUES ('Тополи', 43.2416, 27.8236)").run();
+      await env.DB.prepare(
+        `INSERT INTO streets (street_name, region_id, lat, lng)
+         SELECT 'Бреза', id, 43.1976, 27.8170 FROM regions WHERE region_name = 'Тополи'`).run();
+      clearRefCaches();
+
+      const onStreet = await createUser({ region: "Тополи", street: "Бреза", streetIn: "Тополи" });
+      const streetless = await createUser({ region: "Тополи" });
+      const inCity = await createUser({ region: "Варна", street: "Дубровник" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "с. Тополи", area: null, streets: ["ул. Бреза"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([onStreet, streetless]));
+      expect(body.user_ids).not.toContain(inCity);
+    });
+
+    // A6 widens to a named area, not to the whole settlement. "в района на
+    // ул. X" under a bare city is still about those streets; widening it to
+    // every Varna user is a claim the message never made.
+    it("does not widen a hedged street list to the whole settlement", async () => {
+      const onNamedStreet = await createUser({ region: "Аспарухово", street: "Дубровник" });
+      const otherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "гр. Варна", area: null, streets: ["ул. Дубровник"],
+            is_polygon: false, region_wide: true,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([onNamedStreet]));
+      expect(body.user_ids).not.toContain(otherStreet);
+    });
+
+    // The wire contract: the app reads location_name/sublocations, and so does
+    // every alert stored before the split.
+    it("stores the slots and the derived display pair together", async () => {
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "гр. Варна", area: "кв. Аспарухово",
+            streets: ["ул. Дубровник"], is_polygon: false,
+          }],
+        },
+      }));
+      const { alert_id } = await res.json() as SubmitResponse;
+      const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+        .bind(alert_id).first<{ locations_json: string }>();
+      const [loc] = JSON.parse(row!.locations_json);
+
+      expect(loc.settlement).toBe("гр. Варна");
+      expect(loc.area).toBe("кв. Аспарухово");
+      expect(loc.location_name).toBe(loc.area);          // most specific place named
+      expect(loc.sublocations).toEqual(["ул. Дубровник"]);
+    });
+
+    // Migration 0016. A district of another town is the case the written kind
+    // can never get right: "ж.к." says district and says nothing about which
+    // settlement, so settlementOf answers Варна and the streets are looked up
+    // 20 km from the outage. The link is the only thing that knows.
+    it("scopes streets to the settlement a district is linked to", async () => {
+      await env.DB.prepare(
+        "INSERT INTO regions (region_name, lat, lng) VALUES ('Белослав', 43.1958, 27.7042)").run();
+      await env.DB.prepare(
+        `INSERT INTO regions (region_name, lat, lng, settlement_id)
+         SELECT 'ж.к. Младост', 43.1961, 27.7050, id FROM regions WHERE region_name = 'Белослав'`).run();
+      // The same street name in both settlements — the whole point of the scope.
+      for (const s of ["Белослав", "Варна"]) {
+        await env.DB.prepare(
+          `INSERT INTO streets (street_name, region_id) SELECT 'Тест', id
+             FROM regions WHERE region_name = ?`).bind(s).run();
+      }
+      clearRefCaches();
+
+      const inDistrict = await createUser({
+        region: "ж.к. Младост", street: "Тест", streetIn: "Белослав",
+      });
+      const inCity = await createUser({ region: "Варна", street: "Тест", streetIn: "Варна" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: null, area: "ж.к. Младост", streets: ["ул. Тест"], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([inDistrict]));
+      expect(body.user_ids).not.toContain(inCity);
+    });
+
+    // Migration 0017 lets the table hold both real "Цветен квартал"s — Варна's
+    // node and Белослав's, 17.5 km apart — instead of renaming one of them
+    // "Цветен квартал (Белослав)", a name no source ever writes. Nothing in the
+    // name separates them, so the settlement slot is the only thing that can,
+    // and this is the end of that chain: two audiences, one written name.
+    it("targets the district in the settlement the message named", async () => {
+      const parent = async (name: string, lat: number, lng: number) => {
+        await env.DB.prepare(
+          "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES (?, ?, ?)")
+          .bind(name, lat, lng).run();
+        return (await env.DB.prepare(
+          "SELECT id FROM regions WHERE region_name = ? AND settlement_id IS NULL")
+          .bind(name).first<{ id: number }>())!.id;
+      };
+      const varna = await parent("Варна", 43.2073873, 27.9166653);
+      const beloslav = await parent("Белослав", 43.1958, 27.7042);
+      // Same name, different parent — impossible before 0017.
+      const district = async (settlementId: number, lat: number, lng: number) => {
+        await env.DB.prepare(
+          "INSERT INTO regions (region_name, lat, lng, settlement_id) VALUES ('Цветен квартал', ?, ?, ?)")
+          .bind(lat, lng, settlementId).run();
+        return (await env.DB.prepare(
+          "SELECT id FROM regions WHERE region_name = 'Цветен квартал' AND settlement_id = ?")
+          .bind(settlementId).first<{ id: number }>())!.id;
+      };
+      const inVarna = await district(varna, 43.2238681, 27.9138306);
+      const inBeloslav = await district(beloslav, 43.1816837, 27.7038);
+      clearRefCaches();
+
+      // createUser resolves a region by name, which is exactly the ambiguity
+      // under test — so these two are placed by id.
+      const place = async (regionId: number) => {
+        const id = await createUser();
+        await env.DB.prepare("UPDATE users SET region_id = ? WHERE user_id = ?")
+          .bind(regionId, id).run();
+        return id;
+      };
+      const varnaUser = await place(inVarna);
+      const beloslavUser = await place(inBeloslav);
+
+      const audience = async (settlement: string) => {
+        const res = await submit(basePayload({
+          processed_data: {
+            locations: [{
+              settlement, area: "Цветен квартал", streets: [], is_polygon: false,
+            }],
+          },
+        }));
+        return new Set((await res.json() as SubmitResponse).user_ids);
+      };
+
+      expect(await audience("гр. Белослав")).toEqual(new Set([beloslavUser]));
+      expect(await audience("гр. Варна")).toEqual(new Set([varnaUser]));
+    });
+
+    // The pin is area → streets → settlement. Settlement last is what stops a
+    // street-only alert, which used to arrive with location_name "", from
+    // answering with the city centre now that the city is always stated.
+    it("pins the street rather than the city centre when no area is named", async () => {
+      await env.DB.prepare(
+        `UPDATE streets SET lat = 43.1900, lng = 27.8971
+          WHERE street_name = 'Дубровник'`).run();
+      clearRefCaches();
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "гр. Варна", area: null, streets: ["ул. Дубровник"], is_polygon: false,
+          }],
+        },
+      }));
+      const { alert_id } = await res.json() as SubmitResponse;
+      const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+        .bind(alert_id).first<{ locations_json: string }>();
+      const [loc] = JSON.parse(row!.locations_json);
+
+      // The street (27.8971), not the Варна centroid (27.9166653).
+      expect(loc.lat).toBeCloseTo(43.1900);
+      expect(loc.lng).toBeCloseTo(27.8971);
+    });
   });
 
   it("unmatched region and unmatched street notifies nobody", async () => {

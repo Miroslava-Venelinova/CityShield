@@ -44,6 +44,17 @@ export interface ReverseAddress {
   regionNames: string[];
   /** Street candidates, most specific first. */
   streetNames: string[];
+  /**
+   * Settlement candidates only — the city/town/village this point is in, never
+   * a district of one.
+   *
+   * A subset of `regionNames`, kept separate because it answers a different
+   * question: which settlement's streets is this address on. `regionNames`
+   * leads with suburb/quarter precisely because that is the most specific
+   * *region* for targeting, and a suburb is exactly what a street scope must
+   * not be — `streets.region_id` always points at a settlement (migration 0015).
+   */
+  settlementNames: string[];
 }
 
 /** Every populated field among `keys`, in order, deduped. */
@@ -231,7 +242,8 @@ export function buildGeocodeQuery(name: string, anchor = "Варна"): string {
 export async function reverseGeocode(
   env: Env, lat: number, lon: number, deadline?: number,
 ): Promise<ReverseAddress> {
-  const failed: ReverseAddress = { ok: false, regionNames: [], streetNames: [] };
+  const failed: ReverseAddress =
+    { ok: false, regionNames: [], streetNames: [], settlementNames: [] };
   try {
     if (!(await reserveNominatimSlot(deadline))) {
       console.warn(`Skipping reverse geocode of (${lat}, ${lon}) — not enough time budget left.`);
@@ -249,7 +261,9 @@ export async function reverseGeocode(
     const body = (await res.json()) as { address?: Record<string, unknown> };
     // A 200 with no address is a real answer about a real point — open sea, or
     // somewhere OSM has nothing for. Nothing matched, but the lookup worked.
-    if (!body.address) return { ok: true, regionNames: [], streetNames: [] };
+    if (!body.address) {
+      return { ok: true, regionNames: [], streetNames: [], settlementNames: [] };
+    }
     return {
       ok: true,
       // Same preference order as NominatimGeocodingService.cs, but every
@@ -257,6 +271,7 @@ export async function reverseGeocode(
       regionNames: pickAll(body.address,
         ["suburb", "neighbourhood", "quarter", "city_district", "city", "town", "village"]),
       streetNames: pickAll(body.address, ["road", "pedestrian", "path"]),
+      settlementNames: pickAll(body.address, ["city", "town", "village"]),
     };
   } catch (e) {
     console.warn(`Reverse geocoding failed for (${lat}, ${lon}): ${e}`);

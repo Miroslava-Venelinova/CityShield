@@ -35,7 +35,7 @@ describe("processOutageMessage (mocked AI)", () => {
     clearRefCaches();
     await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Аспарухово')").run();
     const captured = mockAI({
-      locations: [{ location_name: "кв. Аспарухово", sublocations: [], is_polygon: false }],
+      locations: [{ settlement: null, area: "кв. Аспарухово", streets: [], is_polygon: false }],
       schedule: { from_date: null, to_date: null, windows: [{ start: "09:00", end: "17:00" }] },
       city_wide: false,
     });
@@ -65,7 +65,7 @@ describe("processOutageMessage (mocked AI)", () => {
   // The envelope alone read as 55 continuous hours (13 alerts, 28.07 review).
   it("stores the daily windows a date range implies (migration 0012)", async () => {
     mockAI({
-      locations: [{ location_name: "кв. Аспарухово", sublocations: [], is_polygon: false }],
+      locations: [{ settlement: null, area: "кв. Аспарухово", streets: [], is_polygon: false }],
       schedule: {
         from_date: "2026-07-30", to_date: "2026-07-31",
         windows: [{ start: "08:30", end: "17:00" }],
@@ -91,7 +91,7 @@ describe("processOutageMessage (mocked AI)", () => {
 
   it("applies the city-wide guard before storing", async () => {
     mockAI({
-      locations: [{ location_name: "град Варна", sublocations: [], is_polygon: false }],
+      locations: [{ settlement: "град Варна", area: null, streets: [], is_polygon: false }],
       schedule: { from_date: null, to_date: null, windows: [] },
       city_wide: false,
     });
@@ -108,7 +108,7 @@ describe("processOutageMessage (mocked AI)", () => {
   // not a broadcast — the alert must keep its location (guard A3, SPEC.md §1.7).
   it("keeps a lone Варна when the message does not say city-wide", async () => {
     mockAI({
-      locations: [{ location_name: "град Варна", sublocations: [], is_polygon: false }],
+      locations: [{ settlement: "град Варна", area: null, streets: [], is_polygon: false }],
       schedule: { from_date: null, to_date: null, windows: [] },
       city_wide: false,
     });
@@ -122,15 +122,15 @@ describe("processOutageMessage (mocked AI)", () => {
     expect(JSON.parse(row!.locations_json)).toHaveLength(1);
   });
 
-  // 406268df +8: the district arrives in the street array and has to be lifted
-  // out into a location of its own before enrichment pins the city centre.
-  it("promotes a district out of the street array (guard A4, SPEC.md §1.7)", async () => {
+  // 406268df +8: the district arrives in the street array and has to be moved
+  // into the area slot before enrichment pins the city centre.
+  it("lifts a district out of the street array (guard A4, SPEC.md §1.7)", async () => {
     clearRefCaches();
     await env.DB.prepare(
       "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES ('ж.к. Младост', 43.2309578, 27.879652)",
     ).run();
     mockAI({
-      locations: [{ location_name: "Варна", sublocations: ["Младост"], is_polygon: false }],
+      locations: [{ settlement: "Варна", area: null, streets: ["Младост"], is_polygon: false }],
       schedule: { from_date: null, to_date: null, windows: [] },
       city_wide: false,
     });
@@ -142,6 +142,11 @@ describe("processOutageMessage (mocked AI)", () => {
       .first<{ locations_json: string }>();
     const locations = JSON.parse(row!.locations_json) as Array<Record<string, unknown>>;
     expect(locations).toHaveLength(1);
+    // The city is no longer dropped — it is the settlement of the same entry.
+    expect(locations[0]!.settlement).toBe("Варна");
+    expect(locations[0]!.area).toBe("Младост");
+    // The derived display field is what the shipped app reads, and it still
+    // answers with the most specific place named.
     expect(locations[0]!.location_name).toBe("Младост");
     expect(locations[0]!.lat).toBeCloseTo(43.2309578);
   });

@@ -1,9 +1,16 @@
 // AI output schemas (SPEC.md §1.8). Two layers per source, same trick as
 // Pydantic's SkipJsonSchema: the JSON schema sent to Workers AI as the
-// constrained-decoding target (validated against the live models in the
-// Phase 0 eval — keep byte-identical), and the zod schema used as the
-// post-parse backstop. polygon_geojson / bus_lines are filled in
-// programmatically and never shown to the model.
+// constrained-decoding target, and the zod schema used as the post-parse
+// backstop. polygon_geojson / bus_lines are filled in programmatically and
+// never shown to the model.
+//
+// What the Phase 0 eval established is that the live models' constrained
+// decoder handles the *constructs* used here — `["string","null"]`, an array of
+// `string`, a `boolean` — not that these exact bytes are load-bearing. (It read
+// "keep byte-identical" until the location split, which added another property
+// of an already-proven kind and no new construct.) Any change here is
+// re-validated by spikes/ai-eval/run-eval.mjs, which imports these constants
+// directly: 3 runs × 3 candidate models, compared per case id.
 
 import { z } from "zod";
 import type { AlertWindows } from "./datetime";
@@ -54,6 +61,19 @@ const scheduleAiSchema = z.object({
   })).default([]),
 }).default({ from_date: null, to_date: null, windows: [] });
 
+// One entry is one place, in three slots: the settlement, the area inside it,
+// and the streets inside that. It replaced a flat (location_name, sublocations)
+// pair, where a city district and a village occupied the same field — so
+// "гр. Варна - кв. Виница, ул. A, ул. B" had nowhere to put the city, the model
+// pushed the district into the street array, and normalize.ts had to
+// reconstruct the missing level by reading the order the source listed things
+// in. The slots are independently nullable, so a region-only alert is just
+// {settlement, null, []} and needs no separate shape.
+//
+// Deliberately flat rather than nested (`areas: [{name, streets}]`): every entry
+// resolves to exactly one audience and one map pin, and nesting would push that
+// two-level structure through targeting, enrichment and the app's map. Several
+// districts in one city are several entries repeating the settlement.
 export const OUTAGE_JSON_SCHEMA = {
   type: "object",
   properties: {
@@ -62,11 +82,12 @@ export const OUTAGE_JSON_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          location_name: { type: ["string", "null"] },
-          sublocations: { type: "array", items: { type: "string" } },
+          settlement: { type: ["string", "null"] },
+          area: { type: ["string", "null"] },
+          streets: { type: "array", items: { type: "string" } },
           is_polygon: { type: "boolean" },
         },
-        required: ["location_name", "sublocations", "is_polygon"],
+        required: ["settlement", "area", "streets", "is_polygon"],
       },
     },
     schedule: SCHEDULE_JSON_SCHEMA,
@@ -77,8 +98,9 @@ export const OUTAGE_JSON_SCHEMA = {
 
 export const outageAiSchema = z.object({
   locations: z.array(z.object({
-    location_name: z.string().nullable().default(null),
-    sublocations: z.array(z.string()).default([]),
+    settlement: z.string().nullable().default(null),
+    area: z.string().nullable().default(null),
+    streets: z.array(z.string()).default([]),
     is_polygon: z.boolean().default(false),
   })).default([]),
   schedule: scheduleAiSchema,

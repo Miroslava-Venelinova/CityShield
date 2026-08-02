@@ -165,8 +165,15 @@ describe("GET /api/auth/me", () => {
 describe("PUT /api/auth/location", () => {
   beforeEach(async () => {
     clearRefCaches(); // module-scope cache survives D1 isolation resets
-    await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Аспарухово'), ('Владислав Варненчик')").run();
-    await env.DB.prepare("INSERT OR IGNORE INTO streets (street_name) VALUES ('Народни будители'), ('Александър Дякович')").run();
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO regions (region_name) VALUES
+       ('Варна'), ('Аспарухово'), ('Владислав Варненчик')`).run();
+    // Streets belong to a settlement, never to a district (migration 0015):
+    // Аспарухово is a quarter of Варна, and its streets are Варна's.
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO streets (street_name, region_id)
+       SELECT name, (SELECT id FROM regions WHERE region_name = 'Варна')
+         FROM (SELECT 'Народни будители' AS name UNION ALL SELECT 'Александър Дякович')`).run();
   });
 
   it("reverse-geocodes, fuzzy-matches and persists — then /me reflects it", async () => {
@@ -175,7 +182,9 @@ describe("PUT /api/auth/location", () => {
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/reverse") })
       .reply(200, JSON.stringify({
-        address: { suburb: "кв. Аспарухово", road: "ул. Народни будители" },
+        // `city` is what scopes the street lookup: a suburb names a district,
+        // and a street belongs to the settlement behind it, not to the district.
+        address: { suburb: "кв. Аспарухово", city: "Варна", road: "ул. Народни будители" },
       }), { headers: { "Content-Type": "application/json" } });
 
     const res = await api("/api/auth/location",
@@ -244,7 +253,9 @@ describe("PUT /api/auth/location", () => {
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/reverse") })
       .reply(200, JSON.stringify({
-        address: { suburb: "кв. Аспарухово", road: "ул. Народни будители" },
+        // `city` is what scopes the street lookup: a suburb names a district,
+        // and a street belongs to the settlement behind it, not to the district.
+        address: { suburb: "кв. Аспарухово", city: "Варна", road: "ул. Народни будители" },
       }), { headers: { "Content-Type": "application/json" } });
 
     await api("/api/auth/location", jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
@@ -274,7 +285,9 @@ describe("PUT /api/auth/location", () => {
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/reverse") })
       .reply(200, JSON.stringify({
-        address: { suburb: "кв. Аспарухово", road: "ул. Народни будители" },
+        // `city` is what scopes the street lookup: a suburb names a district,
+        // and a street belongs to the settlement behind it, not to the district.
+        address: { suburb: "кв. Аспарухово", city: "Варна", road: "ул. Народни будители" },
       }), { headers: { "Content-Type": "application/json" } });
 
     await api("/api/auth/location", jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
@@ -291,6 +304,42 @@ describe("PUT /api/auth/location", () => {
       { headers: { Authorization: `Bearer ${token}` } })).json() as Record<string, unknown>;
     expect(dto.regionName).toBeNull();
     expect(dto.streetName).toBeNull();
+  });
+
+  // Migration 0015. Before it, `streets` held city streets only, so a village
+  // resident's road name could only ever match a Varna street — and that stale
+  // id is worse than none: getUserIdsByStreets selects `street_id IN (…) OR
+  // street_id IS NULL`, so once their village's streets are seeded, a user
+  // holding a city street id is neither, and drops out of their own alerts.
+  it("assigns a village user their own village's street, not the city's", async () => {
+    const { token, email } = await registerAndLogin();
+    await env.DB.prepare("INSERT OR IGNORE INTO regions (region_name) VALUES ('Аврен')").run();
+    // The same street name in both settlements — the common case: 52% of the
+    // names around the villages are also Varna street names.
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO streets (street_name, region_id)
+       SELECT 'Тича', id FROM regions WHERE region_name IN ('Варна', 'Аврен')`).run();
+    clearRefCaches();
+
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/reverse") })
+      .reply(200, JSON.stringify({ address: { village: "Аврен", road: "ул. Тича" } }),
+        { headers: { "Content-Type": "application/json" } });
+
+    const res = await api("/api/auth/location",
+      jsonInit("PUT", { latitude: 43.1138, longitude: 27.6658 }, token));
+    expect(res.status).toBe(204);
+
+    // /me reports only the street NAME, which is identical in both settlements
+    // — the settlement behind it is the whole question, so read the row itself.
+    const assigned = await env.DB.prepare(
+      `SELECT s.street_name, r.region_name FROM users u
+         JOIN streets s ON s.id = u.street_id
+         JOIN regions r ON r.id = s.region_id
+        WHERE u.email = ?`).bind(email).first<{ street_name: string; region_name: string }>();
+    expect(assigned).not.toBeNull();
+    expect(assigned!.street_name).toBe("Тича");
+    expect(assigned!.region_name).toBe("Аврен");
   });
 
   it("rejects out-of-range coordinates with 400", async () => {

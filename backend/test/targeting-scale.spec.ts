@@ -65,10 +65,13 @@ describe("targeting queries past D1's bound-parameter ceiling", () => {
 
   it("matches users across more than 100 streets in one call", async () => {
     // The street list itself can exceed the ceiling, so this path chunks.
+    const { meta: region } = await env.DB.prepare(
+      "INSERT INTO regions (region_name) VALUES ('Варна')").run();
     const streetIds: number[] = [];
     for (let i = 0; i < 120; i++) {
-      const { meta } = await env.DB.prepare("INSERT INTO streets (street_name) VALUES (?)")
-        .bind(`Улица ${i}`).run();
+      const { meta } = await env.DB.prepare(
+        "INSERT INTO streets (street_name, region_id) VALUES (?, ?)")
+        .bind(`Улица ${i}`, region.last_row_id).run();
       streetIds.push(meta.last_row_id);
     }
     await env.DB.prepare("UPDATE users SET street_id = ? WHERE user_id = ?")

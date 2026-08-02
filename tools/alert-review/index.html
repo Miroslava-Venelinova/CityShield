@@ -865,6 +865,7 @@ function renderDetail(alert) {
           >${hasPin ? shape.n : "–"}</span>
         <div class="grow">
           <div class="n">${esc(loc.location_name) || '<span class="muted">(unnamed)</span>'}
+            ${loc.settlement ? `<span class="muted">in ${esc(loc.settlement)}</span>` : ""}
             ${polygonBadge(loc, shape)}
             ${loc.region_wide ? '<span class="badge">region-wide</span>' : ""}</div>
           <div>${pin}</div>

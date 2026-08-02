@@ -22,6 +22,7 @@ checkout without a pip install.
 """
 
 import json
+import math
 import re
 import secrets
 import socket
@@ -58,10 +59,27 @@ OVERPASS_TIMEOUT_S = 300
 
 # Reference tables the extracts can be merged into, and the key each JSON
 # object uses once written (matching the column names in migrations/0001_init.sql).
+#
+# `by_settlement` mirrors migration 0015: streets are unique per
+# (street_name, region_id), so the seed file is keyed the same way and one name
+# can appear once per settlement. Regions stay keyed on the name alone.
 TARGETS = {
-    "regions": {"file": "regions.json", "table": "regions", "column": "region_name"},
-    "streets": {"file": "streets.json", "table": "streets", "column": "street_name"},
+    "regions": {"file": "regions.json", "table": "regions", "column": "region_name",
+                "by_settlement": False},
+    "streets": {"file": "streets.json", "table": "streets", "column": "street_name",
+                "by_settlement": True},
 }
+
+# The settlement a street entry written before migration 0015 belongs to — the
+# whole seed was the city back then. Matches DEFAULT_SETTLEMENT in
+# backend/seeds/generate-seed.mjs, which reads these files.
+DEFAULT_SETTLEMENT = "Варна"
+
+# OSM's admin_level for населено място — a city, town or village. It is the only
+# level whose name is a settlement, which is what a street row has to point at:
+# level 4/5 is a province or municipality (many settlements), level 9/10 a
+# district *inside* one, whose streets belong to the city behind it.
+SETTLEMENT_ADMIN_LEVEL = "8"
 
 # Highway classes worth seeding: everything a person would call an address.
 # Excludes service roads, tracks and footpaths — they are overwhelmingly
@@ -116,6 +134,20 @@ KINDS = {
             '["name"](area.searchArea);',
         ],
     },
+    # Most Bulgarian villages have NO admin_level 8 boundary relation — Тополи,
+    # in община Варна, is a bare place=village node — so there is no area to
+    # query and the boundary workflow simply cannot reach them. Their centre is
+    # already known (regions.json carries a coordinate for all 252 settlements),
+    # so extract around that instead. `around` also sidesteps the province-scope
+    # trap the boundary path has: a radius is exactly as big as you say it is.
+    "streets_around": {
+        "label": "Streets — around a settlement (no boundary needed)",
+        "target": "streets",
+        "needs_point": True,
+        "statements": [
+            f'way["highway"~"^({STREET_HIGHWAYS})$"]["name"](around:{{radius}},{{lat}},{{lng}});',
+        ],
+    },
 }
 
 QUERY_TEMPLATE = """\
@@ -126,6 +158,64 @@ area({area_id})->.searchArea;
 );
 out tags center;\
 """
+
+AROUND_TEMPLATE = """\
+[out:json][timeout:{timeout}];
+(
+{statements}
+);
+out tags center;\
+"""
+
+# OSM's admin_level for област — a province. The scope one sweep covers.
+PROVINCE_ADMIN_LEVEL = "4"
+
+# `place` values that name a settlement, and those that name a district inside
+# one. Deliberately disjoint: a sweep files every result as exactly one of the
+# two, and a value in both would make that ambiguous.
+SETTLEMENT_PLACES = "city|town|village|hamlet"
+DISTRICT_PLACES = "suburb|neighbourhood|quarter|borough"
+
+# One settlement's whole contribution to the seed, in one round trip: its
+# streets and its districts, both bounded by its own admin_level 8 boundary.
+#
+# `map_to_area` on the named relation rather than `area["name"=…]` is what keeps
+# this off the province-scope trap the polygon builder still has — the city of
+# Варна and the province of Варна share a name, and the bare area lookup matches
+# whichever it likes. Resolving the relation by name AND level, then converting
+# that one relation to an area, can only ever mean the settlement.
+SETTLEMENT_SWEEP_TEMPLATE = """\
+[out:json][timeout:{timeout}];
+relation["name"="{name}"]["boundary"="administrative"]["admin_level"="{level}"];
+map_to_area->.s;
+(
+  way(area.s)["highway"~"^({streets})$"]["name"];
+  node(area.s)["place"~"^({districts})$"]["name"];
+  way(area.s)["place"~"^({districts})$"]["name"];
+  relation(area.s)["place"~"^({districts})$"]["name"];
+);
+out tags center;\
+"""
+
+# The same for a settlement OSM maps as a bare node with no boundary to bound
+# anything — 13 of Варна province's 171, and Тополи among them. A radius is the
+# only container available, and it is exactly as big as it says it is.
+SETTLEMENT_SWEEP_AROUND_TEMPLATE = """\
+[out:json][timeout:{timeout}];
+(
+  way(around:{radius},{lat},{lng})["highway"~"^({streets})$"]["name"];
+  node(around:{radius},{lat},{lng})["place"~"^({districts})$"]["name"];
+  way(around:{radius},{lat},{lng})["place"~"^({districts})$"]["name"];
+  relation(around:{radius},{lat},{lng})["place"~"^({districts})$"]["name"];
+);
+out tags center;\
+"""
+
+# How far around a settlement's centre to look for its streets, in metres.
+# 2500 is what the survey behind migration 0015 used around Тополи, Аврен and
+# Долни чифлик; villages are small and the next settlement over is further than
+# this, which is what keeps a neighbour's streets out of the results.
+DEFAULT_RADIUS_M = 2500
 
 
 class ToolError(Exception):
@@ -175,11 +265,47 @@ def overpass_post(endpoint: str, query: str) -> dict:
         raise ToolError("Overpass returned a non-JSON body (usually an error page).") from e
 
 
-def build_query(kind: str, area_id: int, timeout: int = 180) -> str:
+def build_query(kind: str, area_id: int = 0, timeout: int = 180,
+                point: tuple[float, float] | None = None,
+                radius: int = DEFAULT_RADIUS_M) -> str:
     if kind not in KINDS:
         raise ToolError(f"Unknown extraction kind: {kind}")
+
+    if KINDS[kind].get("needs_point"):
+        if point is None:
+            raise ToolError(
+                "Pick the settlement to extract around — this kind searches a radius "
+                "from its seeded centre rather than a boundary.")
+        lat, lng = point
+        statements = "\n".join(
+            "  " + s.format(radius=int(radius), lat=lat, lng=lng)
+            for s in KINDS[kind]["statements"])
+        return AROUND_TEMPLATE.format(timeout=timeout, statements=statements)
+
     statements = "\n".join(f"  {s}" for s in KINDS[kind]["statements"])
     return QUERY_TEMPLATE.format(timeout=timeout, area_id=area_id, statements=statements)
+
+
+def settlement_point(name: str) -> tuple[float, float]:
+    """
+    The seeded centre of a settlement, for the `around` extraction kinds.
+
+    Read from the seed files rather than looked up in OSM: the coordinate is
+    already there for all 252 settlements (migration 0005), and taking it from
+    the same place the settlement NAME has to match removes the only way the two
+    could disagree.
+    """
+    wanted = name.strip()
+    for store in STORES:
+        for entry in load_seed("regions", store):
+            if entry["name"] == wanted:
+                lat, lng = entry.get("lat"), entry.get("lng")
+                if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+                    return (lat, lng)
+                raise ToolError(
+                    f'"{wanted}" is a region but has no coordinates, so there is no point '
+                    f"to search around. Extract it as a region first to give it one.")
+    raise ToolError(f'"{wanted}" is not a region in either seed file.')
 
 
 # Country bounding boxes, resolved once per endpoint+country and reused.
@@ -275,6 +401,43 @@ def resolve_areas(endpoint: str, name: str, country: str = "") -> list[dict]:
     return candidates
 
 
+# Name + admin_level per resolved area, so an extraction can say which
+# settlement it is for without the browser having to be believed about it.
+_area_cache: dict[tuple[str, int], dict] = {}
+
+
+def area_info(endpoint: str, area_id: int) -> dict:
+    """
+    The boundary relation behind an Overpass area id, as {name, admin_level}.
+
+    Read from Overpass rather than taken from the request, because it decides
+    which settlement a whole extraction is filed under — and a wrong settlement
+    is not visible in the data afterwards (see the invariant in migration 0015).
+
+    An id that is not a relation area, or a relation that no longer exists,
+    comes back empty rather than raising: it only ever pre-fills a field the
+    user can see and correct.
+    """
+    key = (endpoint, area_id)
+    if key in _area_cache:
+        return _area_cache[key]
+
+    blank = {"name": "", "admin_level": "?"}
+    if area_id < 3600000000:
+        return blank
+    query = f"[out:json][timeout:60];\nrelation({area_id - 3600000000});\nout tags;"
+    try:
+        elements = overpass_post(endpoint, query).get("elements", [])
+    except ToolError:
+        return blank
+    for element in elements:
+        tags = element.get("tags", {})
+        info = {"name": tags.get("name", ""), "admin_level": tags.get("admin_level", "?")}
+        _area_cache[key] = info
+        return info
+    return blank
+
+
 def group_elements(elements: list[dict]) -> list[dict]:
     """
     Collapse raw OSM elements into one row per name with an averaged centre.
@@ -282,6 +445,11 @@ def group_elements(elements: list[dict]) -> list[dict]:
     A street is many `way` elements sharing one `name` tag, so the per-element
     centres are averaged into a single representative point. That point is
     deliberately crude — it is the map pin for an alert, not the geometry.
+
+    Each row also keeps the OSM ids it was built from. The name is not an
+    identity — two settlements can hold two different places that share one —
+    so the ids are what lets a caller tell "the same place, seen from two
+    sweeps" from "two places, one name". See resolve_district_rows.
     """
     grouped: dict[str, dict] = {}
     for element in elements:
@@ -297,10 +465,12 @@ def group_elements(elements: list[dict]) -> list[dict]:
         if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
             continue
 
-        row = grouped.setdefault(name, {"name": name, "lat_sum": 0.0, "lng_sum": 0.0, "parts": 0})
+        row = grouped.setdefault(
+            name, {"name": name, "lat_sum": 0.0, "lng_sum": 0.0, "parts": 0, "ids": set()})
         row["lat_sum"] += lat
         row["lng_sum"] += lng
         row["parts"] += 1
+        row["ids"].add(f"{element.get('type', '?')}/{element.get('id', '')}")
 
     rows = [
         {
@@ -308,6 +478,7 @@ def group_elements(elements: list[dict]) -> list[dict]:
             "lat": round(r["lat_sum"] / r["parts"], 7),
             "lng": round(r["lng_sum"] / r["parts"], 7),
             "parts": r["parts"],
+            "ids": r["ids"],
         }
         for r in grouped.values()
     ]
@@ -352,14 +523,43 @@ def store_dir(store: str) -> Path:
     return STORES[store]["dir"]
 
 
+def by_settlement(target: str) -> bool:
+    if target not in TARGETS:
+        raise ToolError(f"Unknown target table: {target}")
+    return TARGETS[target]["by_settlement"]
+
+
+def entry_key(target: str, entry: dict):
+    """
+    What counts as the same row — the same key the UNIQUE constraint uses, so a
+    merge here and an `INSERT ... ON CONFLICT` there agree on what a duplicate
+    is. Migration 0015 moved the streets constraint to (street_name, region_id)
+    and 0017 moved the regions one to (region_name, settlement); this moved with
+    both.
+
+    The empty string stands in for a region with no parent — a settlement, which
+    is inside nothing — and is the same fold `COALESCE(settlement_id, 0)` does in
+    the index. Both halves matter: without it "Цветен квартал" in Варна and in
+    Белослав are one row here and two there, and the merge would drop one of
+    them before the database ever saw it.
+    """
+    if by_settlement(target):
+        return (entry.get("settlement") or DEFAULT_SETTLEMENT, entry["name"])
+    return (entry.get("settlement") or "", entry["name"])
+
+
 def load_seed(target: str, store: str) -> list[dict]:
     """
     Read a seed file, accepting both the legacy flat `["name", ...]` form and
-    the `[{"name", "lat", "lng"}, ...]` form this tool writes.
+    the `[{"name", "settlement", "lat", "lng"}, ...]` form this tool writes.
+
+    A street entry with no `settlement` is read as Варна — the seed held city
+    streets and nothing else before migration 0015, which is the same reading
+    generate-seed.mjs applies to the same files.
     """
-    if target not in TARGETS:
+    path = store_dir(store) / TARGETS[target]["file"] if target in TARGETS else None
+    if path is None:
         raise ToolError(f"Unknown target table: {target}")
-    path = store_dir(store) / TARGETS[target]["file"]
     if not path.exists():
         return []
 
@@ -367,19 +567,58 @@ def load_seed(target: str, store: str) -> list[dict]:
     if not isinstance(data, list):
         raise ToolError(f"{path.name}: expected a JSON array.")
 
+    keyed = by_settlement(target)
     entries = []
     for item in data:
         if isinstance(item, str):
             name = item.strip()
-            if name:
-                entries.append({"name": name, "lat": None, "lng": None})
+            if not name:
+                continue
+            entry = {"name": name, "lat": None, "lng": None}
         elif isinstance(item, dict) and str(item.get("name", "")).strip():
-            entries.append({
+            entry = {
                 "name": str(item["name"]).strip(),
                 "lat": item.get("lat"),
                 "lng": item.get("lng"),
-            })
+            }
+        else:
+            continue
+        settlement = str(item.get("settlement", "")).strip() if isinstance(item, dict) else ""
+        if keyed:
+            entry = {"name": entry["name"], "settlement": settlement or DEFAULT_SETTLEMENT,
+                     "lat": entry["lat"], "lng": entry["lng"]}
+        elif settlement and settlement != entry["name"]:
+            # A region's settlement is its PARENT (migration 0016) — the city a
+            # district sits inside. Absent on a settlement row, which is in
+            # nothing, and never itself: a self-link would say a place contains
+            # itself, and generate-seed.mjs would write a cycle into the FK.
+            entry["settlement"] = settlement
+        entries.append(entry)
     return entries
+
+
+def known_region_names() -> set[str]:
+    """
+    Every SETTLEMENT name either seed store holds — the settlements a street may
+    claim.
+
+    Settlement-class rows only, i.e. those with no parent of their own. A street
+    is filed under a settlement and never under a district (migration 0015's
+    invariant), and since 0017 a district may share its name with one, so
+    accepting any region here would let a street be filed against a row
+    `streets.region_id` must never point at.
+
+    A street whose settlement has no `regions` row inserts NOTHING at apply
+    time and says nothing about it (the INSERT ... SELECT finds no region), so
+    a whole village can vanish between "merged 94 streets" and a database that
+    gained none. Checking the name here is the one place that failure is cheap
+    to catch.
+    """
+    names = set()
+    for store in STORES:
+        names.update(entry["name"] for entry in load_seed("regions", store)
+                     if not entry.get("settlement"))
+    return names
 
 
 def display_path(path: Path) -> str:
@@ -396,24 +635,71 @@ def save_seed(target: str, store: str, entries: list[dict]) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / TARGETS[target]["file"]
     # Sorted and newline-terminated so that re-running the tool produces a
-    # git diff containing only the rows that actually changed.
-    entries = sorted(entries, key=lambda e: e["name"])
+    # git diff containing only the rows that actually changed. Settlement first
+    # where there is one, so a village's streets read as one block in the diff
+    # instead of interleaving with the city's.
+    if by_settlement(target):
+        entries = sorted(entries, key=lambda e: (e.get("settlement") or "", e["name"]))
+        entries = [{"name": e["name"], "settlement": e.get("settlement") or DEFAULT_SETTLEMENT,
+                    "lat": e["lat"], "lng": e["lng"]} for e in entries]
+    else:
+        # Name first, parent only as the tie-break: a district keeps its place
+        # in the diff when its parent is filled in later, and two districts
+        # sharing a name still get a stable order. The parent is written only
+        # when there is one, which keeps a settlement row byte-identical to what
+        # the tool wrote before migration 0016.
+        entries = sorted(entries, key=lambda e: (e["name"], e.get("settlement") or ""))
+        entries = [
+            {"name": e["name"], **({"settlement": e["settlement"]} if e.get("settlement") else {}),
+             "lat": e["lat"], "lng": e["lng"]}
+            for e in entries
+        ]
     path.write_text(json.dumps(entries, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
 
 
-def merge_into_seed(target: str, incoming: list[dict], overwrite_coords: bool,
-                    store: str = "output") -> dict:
+def merge_into_seed(target: str, incoming: list[dict], overwrite: bool,
+                    store: str = "output", settlement: str | None = None,
+                    authoritative: bool = False) -> dict:
     """
-    Merge rows into a seed file, keyed on the exact name — the same key the
-    `UNIQUE` constraint on region_name / street_name uses, so a merge here and
-    an `INSERT ... ON CONFLICT` there agree on what a duplicate is.
+    Merge rows into a seed file, keyed the way the `UNIQUE` constraint is (see
+    entry_key), so a merge here and an `INSERT ... ON CONFLICT` there agree on
+    what a duplicate is.
 
     The same function serves both hops: Overpass rows into output/, and output/
     into backend/seeds/. They are the same operation over the same key.
+
+    `settlement` stamps every incoming row, and is how an extraction files its
+    results: the browser sends rows, never which settlement they are in. Left
+    None — the promote hop — each row keeps the settlement it already carries.
+
+    `overwrite` decides what happens to a value that is already there, and covers
+    both of them: coordinates and a district's parent link. A missing value is
+    always filled in without it.
+
+    `authoritative` says the incoming rows are the COMPLETE set for the names
+    they carry, which is the only condition under which a row can be retired —
+    see the removal pass below. Only a whole-province sweep can claim it; a hand
+    merge of a few extracted rows cannot, and saying so wrongly would delete a
+    district's namesake in another settlement.
     """
-    existing = {entry["name"]: entry for entry in load_seed(target, store)}
+    keyed = by_settlement(target)
+    if keyed and settlement is not None:
+        settlement = settlement.strip()
+        if not settlement:
+            raise ToolError("A street extraction needs the settlement its streets are in.")
+        known = known_region_names()
+        if settlement not in known:
+            raise ToolError(
+                f'"{settlement}" is not a region in either seed file, so every street filed '
+                f"under it would insert nothing at apply time. Extract it as a region first "
+                f'(kind "Cities / towns / villages"), or correct the spelling — the name has '
+                f"to match a regions entry exactly."
+            )
+
+    existing = {entry_key(target, e): e for e in load_seed(target, store)}
     added, enriched, updated, unchanged = [], [], [], 0
+    seen_keys, seen_names = set(), set()
 
     for row in incoming:
         name = str(row.get("name", "")).strip()
@@ -422,30 +708,84 @@ def merge_into_seed(target: str, incoming: list[dict], overwrite_coords: bool,
         lat, lng = row.get("lat"), row.get("lng")
         has_coords = isinstance(lat, (int, float)) and isinstance(lng, (int, float))
 
-        current = existing.get(name)
+        entry = {"name": name, "lat": lat if has_coords else None,
+                 "lng": lng if has_coords else None}
+        row_parent = str(row.get("settlement", "")).strip()
+        if keyed:
+            entry["settlement"] = settlement or row_parent or DEFAULT_SETTLEMENT
+        elif row_parent and row_parent != name:
+            entry["settlement"] = row_parent
+        key = entry_key(target, entry)
+        seen_keys.add(key)
+        seen_names.add(name)
+
+        current = existing.get(key)
         if current is None:
-            existing[name] = {"name": name, "lat": lat if has_coords else None,
-                              "lng": lng if has_coords else None}
+            existing[key] = entry
             added.append(name)
-        elif not has_coords:
+            continue
+
+        # A region already present can still gain its parent link, the same way
+        # it can gain coordinates: the sweep learns which settlement a district
+        # is in, and the 252 regions seeded before migration 0016 have none.
+        #
+        # Replacing one that disagrees needs `overwrite`, for the same reason
+        # coordinates do — but it has to be reachable, or a link the sweep wrote
+        # before its resolution was corrected can never be put right. That is not
+        # hypothetical: the first sweep of Варна province filed four `с.о.` villa
+        # zones under Варна, because the city's `admin_level 8` relation is the
+        # whole municipality.
+        if not keyed and entry.get("settlement"):
+            if not current.get("settlement"):
+                current["settlement"] = entry["settlement"]
+                if name not in enriched:
+                    enriched.append(name)
+            elif overwrite and current["settlement"] != entry["settlement"]:
+                current["settlement"] = entry["settlement"]
+                if name not in updated:
+                    updated.append(name)
+
+        if not has_coords:
             unchanged += 1
         elif current.get("lat") is None or current.get("lng") is None:
             current["lat"], current["lng"] = lat, lng
-            enriched.append(name)
-        elif overwrite_coords:
+            if name not in enriched:
+                enriched.append(name)
+        elif overwrite:
             current["lat"], current["lng"] = lat, lng
             updated.append(name)
         else:
             unchanged += 1
+
+    # A parent link is half a region's key since migration 0017, so a district
+    # whose settlement changed does not land on its old entry — it lands beside
+    # it, and the stale one would be seeded as a second region.
+    #
+    # Retiring it needs BOTH flags, and they say different things. `overwrite` is
+    # the user's permission to change what is already there; `authoritative` is
+    # the caller's promise that this batch is every row those names have, so an
+    # entry the batch did not produce is one the source no longer has.
+    #
+    # Without that second condition this would be a trap rather than a repair: a
+    # hand merge of Белослав's "Цветен квартал" alone would look exactly like a
+    # sweep that had stopped finding Варна's, and delete it.
+    removed = []
+    if not keyed and overwrite and authoritative:
+        for key, entry in list(existing.items()):
+            if entry["name"] in seen_names and key not in seen_keys:
+                del existing[key]
+                removed.append(f"{entry['name']} ({entry.get('settlement') or 'no parent'})")
 
     entries = list(existing.values())
     path = save_seed(target, store, entries)
     return {
         "target": target,
         "file": display_path(path),
+        "settlement": settlement if keyed else None,
         "added": added,
         "enriched": enriched,
         "updated": updated,
+        "removed": removed,
         "unchanged": unchanged,
         "total": len(entries),
         "without_coords": sum(1 for e in entries if e["lat"] is None or e["lng"] is None),
@@ -454,22 +794,42 @@ def merge_into_seed(target: str, incoming: list[dict], overwrite_coords: bool,
 
 def seed_status() -> dict:
     """
-    Per-store counts plus the full name list. The names drive the "not in
+    Per-store counts plus the full key list. The keys drive the "not in
     output"/"not in backend" figures in the UI, which is how you see what a
-    merge would actually change before anything is written.
+    merge would actually change before anything is written — so they are the
+    UNIQUE key, not the bare name: "ул. Тича" being present says nothing about
+    whether it is present *for the settlement being extracted*.
+
+    Keys travel as "settlement\\u0000name" because JSON has no tuples; the UI
+    joins the same way. `settlements` is the readable form of the same fact.
     """
     status = {}
     for store, meta in STORES.items():
         status[store] = {"label": meta["label"], "dir": display_path(meta["dir"]), "targets": {}}
         for target in TARGETS:
             entries = load_seed(target, store)
+            settlements: dict[str, int] = {}
+            for entry in entries:
+                if by_settlement(target):
+                    name = entry.get("settlement") or DEFAULT_SETTLEMENT
+                    settlements[name] = settlements.get(name, 0) + 1
             status[store]["targets"][target] = {
                 "total": len(entries),
                 "with_coords": sum(
                     1 for e in entries if e["lat"] is not None and e["lng"] is not None),
-                "names": [e["name"] for e in entries],
+                "keys": ["\u0000".join(entry_key(target, e)) if by_settlement(target)
+                         else e["name"] for e in entries],
+                "settlements": dict(sorted(settlements.items(), key=lambda kv: -kv[1])),
             }
     status["sql"] = sql_status()
+    status["regions_known"] = sorted(known_region_names())
+    # Settlements the `around` kinds cannot search from, because nothing has
+    # given them a centre yet. Named rather than merely absent, so the answer to
+    # "why is Х not offered" is on screen instead of in this file.
+    with_point = {e["name"] for store in STORES for e in load_seed("regions", store)
+                  if isinstance(e.get("lat"), (int, float))
+                  and isinstance(e.get("lng"), (int, float))}
+    status["regions_without_point"] = sorted(set(status["regions_known"]) - with_point)
     return status
 
 
@@ -523,14 +883,20 @@ def wipe_output() -> dict:
     return {"removed": removed, "seeds": seed_status()}
 
 
-def promote_to_backend(overwrite_coords: bool) -> dict:
+def promote_to_backend(overwrite: bool) -> dict:
     """Merge output/ into backend/seeds/ — the one step that writes outside the
     tool's own directory, hence its own button rather than a side effect."""
     pending = {target: load_seed(target, "output") for target in TARGETS}
     if not any(pending.values()):
         raise ToolError("output/ is empty — merge some extracted rows into it first.")
     return {"reports": [
-        merge_into_seed(target, entries, overwrite_coords, store="backend")
+        # output/ is the tool's complete set for every name it holds — a whole
+        # province sweep, not a hand-picked batch — so a backend row under one of
+        # those names that output/ does not carry is a superseded key, typically a
+        # district seeded before it had a parent. Names output/ has never seen (the
+        # industrial zones, the к.к. resorts, 0014's village renames) are not in the
+        # batch and are left exactly as they are.
+        merge_into_seed(target, entries, overwrite, store="backend", authoritative=True)
         for target, entries in pending.items()
     ]}
 
@@ -620,6 +986,358 @@ def apply_to_d1(remote: bool) -> dict:
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 
+# ── province sweep ────────────────────────────────────────────────────────────
+#
+# One input, the whole seed. The step-by-step flow above exists to let you look
+# at what Overpass returned and deselect by eye; this exists because doing that
+# 171 times for Варна province is not a workflow anyone will follow, and the
+# per-settlement extraction it replaces was the part of migration 0015 nobody
+# had finished.
+#
+# The three levels come out of it the way the app now models a location
+# (settlement → area → street, SPEC.md §1.7):
+#
+#   * settlements — `place=city|town|village|hamlet` in the province.
+#   * districts   — extracted from INSIDE each settlement's own boundary, which
+#                   is what ties them to it. Not inferred afterwards from
+#                   distance: the containment IS the query.
+#   * streets     — from the same boundary, filed under that settlement.
+#
+# What it deliberately does NOT do is tie a street to a district. 67 of Варна
+# province's 79 districts are mapped as a single node with no extent, and the 12
+# that do have one are all м-т/с.о. villa zones — every real district (Виница,
+# Аспарухово, Галата, Чайка) is a bare point. There is nothing in OSM to test a
+# street against, so a street is filed under its settlement, which is also the
+# only thing `streets.region_id` can hold (migration 0015).
+
+_sweep_lock = threading.Lock()
+_sweep: dict = {"state": "idle"}
+
+
+def sweep_status() -> dict:
+    with _sweep_lock:
+        return dict(_sweep)
+
+
+def _sweep_set(**fields) -> None:
+    with _sweep_lock:
+        _sweep.update(fields)
+
+
+def province_settlements(endpoint: str, province: str, timeout: int = 300) -> tuple[list[dict], set]:
+    """
+    Every settlement in a province, and the names among them OSM gives a
+    boundary relation.
+
+    The boundary set decides how each one is swept: a settlement that has one is
+    bounded exactly, and the rest fall back to a radius. Asked once for the whole
+    province rather than probed per settlement, which is 2 queries instead of
+    2 × 171.
+    """
+    escaped = province.strip().replace("\\", "\\\\").replace('"', '\\"')
+    if not escaped:
+        raise ToolError("Enter a province to sweep.")
+
+    area = (f'relation["name"="{escaped}"]["boundary"="administrative"]'
+            f'["admin_level"="{PROVINCE_ADMIN_LEVEL}"];\nmap_to_area->.p;')
+
+    found = overpass_post(endpoint, (
+        f"[out:json][timeout:{timeout}];\n{area}\n(\n"
+        + "\n".join(f'  {t}(area.p)["place"~"^({SETTLEMENT_PLACES})$"]["name"];'
+                    for t in ("node", "way", "relation"))
+        + "\n);\nout tags center;"
+    )).get("elements", [])
+    if not found:
+        raise ToolError(
+            f'No settlements found in a province named "{province}". Check the spelling, or '
+            f"that this endpoint's data covers it — the query needs an admin_level "
+            f"{PROVINCE_ADMIN_LEVEL} boundary with that exact name.")
+
+    bounded = overpass_post(endpoint, (
+        f"[out:json][timeout:{timeout}];\n{area}\n"
+        f'relation(area.p)["boundary"="administrative"]'
+        f'["admin_level"="{SETTLEMENT_ADMIN_LEVEL}"]["name"];\nout tags;'
+    )).get("elements", [])
+
+    settlements = {}
+    for element in found:
+        tags = element.get("tags") or {}
+        name = (tags.get("name") or "").strip()
+        centre = element.get("center") or element
+        lat, lng = centre.get("lat"), centre.get("lon")
+        if not name or name in settlements:
+            continue
+        settlements[name] = {
+            "name": name,
+            "place": tags.get("place", ""),
+            "lat": lat if isinstance(lat, (int, float)) else None,
+            "lng": lng if isinstance(lng, (int, float)) else None,
+        }
+    have_boundary = {(e.get("tags") or {}).get("name", "").strip() for e in bounded}
+    return sorted(settlements.values(), key=lambda s: s["name"]), have_boundary
+
+
+def sweep_settlement(endpoint: str, settlement: dict, bounded: bool,
+                     radius: int, timeout: int = 300) -> tuple[list[dict], list[dict]]:
+    """One settlement's streets and districts, as two grouped row lists."""
+    if bounded:
+        query = SETTLEMENT_SWEEP_TEMPLATE.format(
+            timeout=timeout, level=SETTLEMENT_ADMIN_LEVEL,
+            name=settlement["name"].replace("\\", "\\\\").replace('"', '\\"'),
+            streets=STREET_HIGHWAYS, districts=DISTRICT_PLACES)
+    else:
+        if settlement["lat"] is None or settlement["lng"] is None:
+            return [], []
+        query = SETTLEMENT_SWEEP_AROUND_TEMPLATE.format(
+            timeout=timeout, radius=int(radius),
+            lat=settlement["lat"], lng=settlement["lng"],
+            streets=STREET_HIGHWAYS, districts=DISTRICT_PLACES)
+
+    elements = overpass_post(endpoint, query).get("elements", [])
+    streets = [e for e in elements if "highway" in (e.get("tags") or {})]
+    districts = [e for e in elements if "place" in (e.get("tags") or {})]
+    return group_elements(streets), group_elements(districts)
+
+
+def haversine_km(lat1, lon1, lat2, lon2) -> float:
+    """Great-circle distance, for ranking which settlement a district is nearest."""
+    if None in (lat1, lon1, lat2, lon2):
+        return float("inf")
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def cluster_by_identity(hits: list[dict]) -> list[list[dict]]:
+    """
+    Split one name's claims into the distinct *places* behind them.
+
+    Two claims are the same place when the sweeps that produced them saw at
+    least one OSM element in common, and the transitive closure of that groups a
+    place mapped as several ways. Identity, not distance: settlement centres in
+    Варна province come as close as 0.37 km, so no radius separates "two places
+    sharing a name" from "one place two sweeps both reached".
+    """
+    clusters: list[list[dict]] = []
+    for hit in hits:
+        ids = set(hit.get("ids") or ())
+        touching = [c for c in clusters
+                    if any(ids & set(h.get("ids") or ()) for h in c)] if ids else []
+        if not touching:
+            clusters.append([hit])
+            continue
+        merged = [hit]
+        for c in touching:
+            merged.extend(c)
+            clusters.remove(c)
+        clusters.append(merged)
+    return clusters
+
+
+def resolve_district_rows(found: dict[str, list[dict]]) -> tuple[list[dict], list[str]]:
+    """
+    Decide which settlement each swept district belongs to.
+
+    A district name is only unique inside its settlement — the same mismatch
+    migration 0015 fixed for streets and 0017 fixed for regions — and Варна
+    province produces six names that more than one settlement claims. They are
+    not one problem but two, which is why this runs in two passes.
+
+    **Pass 1 — one name can be two places.** `Цветен квартал` is node
+    9664925200 at 43.2239,27.9138 in Варна *and* node 10702624492 at
+    43.1817,27.7038 in Белослав, 17.5 km apart. Nothing is wrong with the data
+    and neither claim should lose: since 0017 keys `regions` on (name, parent),
+    both are simply kept, under the one name they are both really called. The
+    four `с.о.`/`со` names and `ж.к. Север`, by contrast, are a *single* element
+    each that several sweeps reached — one place, one row.
+
+    **Pass 2 — one place can be claimed by several settlements**, in two ways
+    that need opposite answers:
+
+      * *A radius overreaching.* 11 of this province's 12 hamlets have no
+        boundary, so the 2,500 m fallback reaches into a neighbour. `ж.к. Север`
+        is Провадия's (boundary, 1.5 km) and three м-т hamlets grabbed a copy —
+        м. Шашкъните from 0.24 km, nearer than the town. Proximity alone would
+        hand it to the hamlet, so **a boundary match beats a radius match**: it
+        is authoritative containment where a radius is a guess.
+      * *A boundary that is not a settlement's.* `admin_level 8` in Bulgaria is
+        the **община**, so the relation named "Варна" spans the whole
+        municipality — Кичево and Осеново sit inside it. That is how the city
+        came to claim four villa zones 8–12 km out that are 2.1–2.7 km from a
+        village. Containment by an area that large says nothing about which
+        settlement a place is *in*, so among boundary matches the **nearest
+        settlement wins**, not the biggest.
+
+    Villages do legitimately own districts — every one is a `с.о.`/`со` villa
+    zone, a countryside formation inside a village boundary rather than a housing
+    estate. Towns own real ones: Белослав's three (`ж.к. Младост`, `кв.
+    Акациите`, `Цветен квартал`) are confirmed against Nominatim.
+
+    There is no name disambiguation left to do. Before 0017 the second of two
+    places had to be renamed — migration 0014 wrote "ж.к. Младост (Белослав)" by
+    hand and this function had to keep doing the same — and that suffix was a
+    poor key: no source writes it, so the row was reachable only by fuzzy
+    matching a string nobody produces. The parent carries that fact now.
+    """
+    rows, resolved = [], []
+    for name, hits in sorted(found.items()):
+        places = cluster_by_identity(hits)
+        for cluster in places:
+            # Authoritative containment first, then proximity.
+            bounded = [h for h in cluster if h["bounded"]] or cluster
+            best = min(bounded, key=lambda h: h["km"])
+            rows.append({"name": name, "settlement": best["settlement"],
+                         "lat": best["lat"], "lng": best["lng"]})
+            losers = ", ".join(f"{h['settlement']} ({h['place']}"
+                               f"{'' if h['bounded'] else ', radius only'})"
+                               for h in cluster if h is not best)
+            if losers:
+                resolved.append(
+                    f"{name} → {best['settlement']} ({best['place']}); also claimed by {losers}")
+        if len(places) > 1:
+            resolved.append(
+                f'"{name}" is {len(places)} different places — kept as one row each, in '
+                + ", ".join(sorted(
+                    min([h for h in c if h["bounded"]] or c, key=lambda h: h["km"])["settlement"]
+                    for c in places)))
+    return rows, resolved
+
+
+def run_sweep(endpoint: str, province: str, radius: int,
+              cyrillic_only: bool, overwrite: bool) -> None:
+    """
+    The whole province, into output/. Runs on a worker thread; progress is polled
+    from /api/sweep/status because 171 round trips is longer than a request
+    should block for, and a silent minute is indistinguishable from a hang.
+
+    Queried first, merged second. The district links can only be decided once
+    every settlement has been seen — a name found under two of them is not
+    something the settlement processed first should get to settle.
+    """
+    try:
+        _sweep_set(state="running", phase="Resolving the province…", done=0, total=0,
+                   settlements=0, districts=0, streets=0, current="",
+                   skipped=[], resolved=[], error=None)
+        settlements, have_boundary = province_settlements(endpoint, province)
+        _sweep_set(phase="Sweeping settlements…", total=len(settlements))
+
+        district_where: dict[str, list[dict]] = {}
+        street_rows: list[tuple[str, list[dict]]] = []
+        skipped: list[str] = []
+        streets_total = 0
+
+        for i, settlement in enumerate(settlements, 1):
+            name = settlement["name"]
+            _sweep_set(current=name, done=i - 1)
+            bounded = name in have_boundary
+            if not bounded and (settlement["lat"] is None or settlement["lng"] is None):
+                # No boundary to bound it and no point to search around: OSM
+                # knows the name and nothing else about where it is.
+                skipped.append(f"{name}: no boundary and no centre — nothing to search")
+                _sweep_set(skipped=list(skipped))
+                continue
+            try:
+                streets, districts = sweep_settlement(endpoint, settlement, bounded, radius)
+            except ToolError as e:
+                skipped.append(f"{name}: {e}")
+                _sweep_set(skipped=list(skipped))
+                continue
+
+            if cyrillic_only:
+                streets, _ = split_by_script(streets)
+                districts, _ = split_by_script(districts)
+            # A district that repeats the settlement's own name is the settlement
+            # tagged twice, not a place inside itself.
+            for d in districts:
+                if d["name"] == name:
+                    continue
+                # Everything the resolution needs, recorded where it is known:
+                # which OSM elements this sweep actually saw (the identity the
+                # name is not), how the settlement matched, what size it is, and
+                # how far the district sits from its centre. The geometry rides
+                # along per claim — a name cannot carry one, because two
+                # settlements' claims on one name can be two different places.
+                district_where.setdefault(d["name"], []).append({
+                    "settlement": name,
+                    "bounded": bounded,
+                    "place": settlement["place"],
+                    "ids": d["ids"],
+                    "lat": d["lat"],
+                    "lng": d["lng"],
+                    "km": haversine_km(d["lat"], d["lng"], settlement["lat"], settlement["lng"]),
+                })
+            if streets:
+                street_rows.append((name, streets))
+                streets_total += len(streets)
+            _sweep_set(done=i, districts=len(district_where), streets=streets_total)
+
+        _sweep_set(phase="Merging…", current="")
+
+        # Settlements first: a district's parent and a street's settlement are
+        # both resolved by NAME at apply time, so the row they point at has to
+        # exist before anything points at it.
+        rows = [{"name": s["name"], "lat": s["lat"], "lng": s["lng"]} for s in settlements]
+        if cyrillic_only:
+            rows, _ = split_by_script(rows)
+        merge_into_seed("regions", rows, overwrite, store="output")
+        _sweep_set(settlements=len(rows))
+
+        # Each row already carries the coordinate of the place it resolved to,
+        # not of whatever else shared its name — the two Цветен квартал rows are
+        # 17.5 km apart and must stay that way.
+        district_entries, resolved = resolve_district_rows(district_where)
+        if district_entries:
+            # The sweep saw every settlement in the province, so its districts
+            # are the complete set for the names in them.
+            merge_into_seed("regions", district_entries, overwrite, store="output",
+                            authoritative=True)
+
+        for settlement_name, streets in street_rows:
+            merge_into_seed("streets", streets, overwrite,
+                            store="output", settlement=settlement_name)
+
+        _sweep_set(state="done", phase="Finished.", current="", done=len(settlements),
+                   districts=len(district_entries), skipped=skipped, resolved=resolved,
+                   seeds=seed_status())
+    except (ToolError, OSError, ValueError, KeyError) as e:
+        _sweep_set(state="error", error=str(e), phase="Failed.")
+
+
+def start_sweep(body: dict) -> dict:
+    with _sweep_lock:
+        if _sweep.get("state") == "running":
+            raise ToolError("A sweep is already running.")
+        _sweep.clear()
+        _sweep.update({"state": "running", "phase": "Starting…", "done": 0, "total": 0})
+
+    args = (
+        body["endpoint"],
+        str(body.get("province", "")).strip(),
+        int(body.get("radius") or DEFAULT_RADIUS_M),
+        bool(body.get("cyrillic_only", True)),
+        bool(body.get("overwrite")),
+    )
+    threading.Thread(target=run_sweep, args=args, daemon=True).start()
+    return {"started": True}
+
+
+def query_for(body: dict) -> str:
+    """One request body → one Overpass query, whichever kind it names."""
+    kind = body["kind"]
+    point = None
+    if kind in KINDS and KINDS[kind].get("needs_point"):
+        point = settlement_point(body.get("settlement", ""))
+    return build_query(
+        kind,
+        int(body.get("area_id") or 0),
+        int(body.get("timeout", 180)),
+        point=point,
+        radius=int(body.get("radius") or DEFAULT_RADIUS_M),
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OSMSeedBuilder/1.0"
     token = ""
@@ -684,11 +1402,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "endpoints": presets["endpoints"],
                 "default_country": presets["default_country"],
-                "kinds": [{"id": k, "label": v["label"], "target": v["target"]}
+                "kinds": [{"id": k, "label": v["label"], "target": v["target"],
+                           "needs_point": bool(v.get("needs_point"))}
                           for k, v in KINDS.items()],
-                "targets": list(TARGETS),
+                "targets": [{"id": t, "by_settlement": TARGETS[t]["by_settlement"]}
+                            for t in TARGETS],
+                "settlement_level": SETTLEMENT_ADMIN_LEVEL,
+                "province_level": PROVINCE_ADMIN_LEVEL,
+                "default_province": presets.get("default_province", ""),
+                "default_radius": DEFAULT_RADIUS_M,
                 "seeds": seed_status(),
             })
+        elif path == "/api/sweep/status":
+            self._send_json(sweep_status())
         else:
             self._send(404, b"Not found", "text/plain; charset=utf-8")
 
@@ -704,25 +1430,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"candidates": resolve_areas(
                     body["endpoint"], body.get("name", ""), body.get("country", ""))})
             elif path == "/api/build-query":
-                self._send_json({"query": build_query(
-                    body["kind"], int(body["area_id"]), int(body.get("timeout", 180)))})
+                self._send_json({"query": query_for(body)})
             elif path == "/api/run-query":
-                query = body.get("raw") or build_query(
-                    body["kind"], int(body["area_id"]), int(body.get("timeout", 180)))
+                query = body.get("raw") or query_for(body)
                 result = overpass_post(body["endpoint"], query)
                 rows = group_elements(result.get("elements", []))
                 dropped = []
                 # Default on: absent means the caller predates the checkbox.
                 if body.get("cyrillic_only", True):
                     rows, dropped = split_by_script(rows)
-                self._send_json({"query": query, "rows": rows, "dropped": dropped})
+                # Which settlement these rows are in, read back from the
+                # boundary itself so the UI can propose it rather than have the
+                # user retype a name that has to match a regions row exactly.
+                area = area_info(body["endpoint"], int(body.get("area_id") or 0))
+                self._send_json({"query": query, "rows": rows, "dropped": dropped,
+                                 "area": area,
+                                 "settlement_level": SETTLEMENT_ADMIN_LEVEL})
             elif path == "/api/merge":
-                # Extractions only ever land in the tool's own output/.
+                # Extractions only ever land in the tool's own output/, and the
+                # settlement is stamped on here rather than carried per row —
+                # one extraction is one settlement.
                 self._send_json(merge_into_seed(
-                    body["target"], body.get("rows", []), bool(body.get("overwrite_coords")),
-                    store="output"))
+                    body["target"], body.get("rows", []), bool(body.get("overwrite")),
+                    store="output",
+                    settlement=body.get("settlement") if by_settlement(body["target"]) else None))
+            elif path == "/api/sweep":
+                self._send_json(start_sweep(body))
             elif path == "/api/promote":
-                self._send_json(promote_to_backend(bool(body.get("overwrite_coords"))))
+                self._send_json(promote_to_backend(bool(body.get("overwrite"))))
             elif path == "/api/generate-sql":
                 self._send_json(generate_sql())
             elif path == "/api/reveal-output":
@@ -748,6 +1483,17 @@ def free_port() -> int:
 
 
 def main():
+    # Windows consoles still default to a legacy code page (cp1252 here), and
+    # every message this tool prints — the banner's arrow, a Bulgarian place
+    # name in an error — is outside it. Printing one raised UnicodeEncodeError
+    # and killed the process before the server started. Reconfiguring is enough;
+    # `errors="replace"` keeps a name we cannot render from being fatal.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
     if not SEEDS_DIR.is_dir():
         sys.exit(f"Expected the seeds directory at {SEEDS_DIR} — run this from the CityShield repo.")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

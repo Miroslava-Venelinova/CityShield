@@ -30,6 +30,21 @@ export interface NamedRow {
   /** Seeded centroid (migration 0005); NULL for names seeded without one. */
   lat: number | null;
   lng: number | null;
+  /**
+   * The settlement a street belongs to (migration 0015) — always a
+   * settlement-class region, never a Varna district. Present on street rows
+   * only; `regions` rows carry no such column and leave it undefined.
+   */
+  region_id?: number;
+  /**
+   * For a REGION row: the settlement this region sits inside (migration 0016),
+   * or null when the row is a settlement itself. Present on region rows only.
+   *
+   * Deliberately a different field from `region_id` above, even though both name
+   * a settlement: this one says "I am a district OF that", the other says "I am
+   * a street IN that", and conflating them is what the flat table did.
+   */
+  settlement_id?: number | null;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -158,14 +173,22 @@ function loadRef(env: Env, slot: RefSlot, sql: string): Promise<NamedRow[]> {
  */
 export function getRegions(env: Env): Promise<NamedRow[]> {
   return loadRef(env, regionsRef,
-    `SELECT id, region_name AS name, lat, lng FROM regions
+    `SELECT id, region_name AS name, lat, lng, settlement_id FROM regions
      UNION ALL
-     SELECT r.id, a.alias AS name, r.lat, r.lng
+     SELECT r.id, a.alias AS name, r.lat, r.lng, r.settlement_id
        FROM region_aliases a JOIN regions r ON r.id = a.region_id`);
 }
 
+/**
+ * Street rows, each carrying the settlement it belongs to.
+ *
+ * `region_id` is what makes a street match scopeable (place-names.ts): the same
+ * name now exists in several settlements, so a row is only a candidate for a
+ * lookup happening in its own one.
+ */
 export function getStreets(env: Env): Promise<NamedRow[]> {
-  return loadRef(env, streetsRef, "SELECT id, street_name AS name, lat, lng FROM streets");
+  return loadRef(env, streetsRef,
+    "SELECT id, street_name AS name, lat, lng, region_id FROM streets");
 }
 
 /** Test hook: drop the module-scope reference caches. */
@@ -327,6 +350,23 @@ export async function getDisabledUserIds(env: Env, userIds: string[], category: 
      WHERE category = ? AND is_enabled = 0`,
   ).bind(category));
   return disabled.filter((id) => wanted.has(id));
+}
+
+/**
+ * Users in a region who have set no street — "somewhere in here, we cannot say
+ * where". They belong in a street-level audience whenever the region resolved,
+ * because nothing about them rules the named streets out.
+ *
+ * Split out of getUserIdsByStreets' region pairing, which can only carry them
+ * when the paired region is *also* the right one to narrow the street list to.
+ * It is not when the location names a settlement: users register under
+ * districts, so pairing on `region_id = Варна` drops the district-registered
+ * users the street list just matched. See getUserIdsInRange.
+ */
+export async function getUserIdsUnplacedInRegion(env: Env, regionId: number): Promise<string[]> {
+  return idColumn(env.DB.prepare(
+    "SELECT user_id FROM users WHERE region_id = ? AND street_id IS NULL",
+  ).bind(regionId));
 }
 
 /**

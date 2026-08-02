@@ -9,6 +9,7 @@ import {
 import { bestMatch, SIMILARITY_THRESHOLD } from "../core/fuzzy";
 import { reverseGeocode } from "../core/geocoding";
 import { signToken } from "../core/jwt";
+import { matchStreet } from "../core/place-names";
 import {
   issueRefreshToken, revokeAllRefreshTokens, revokeRefreshToken, rotateRefreshToken,
 } from "../core/refresh-tokens";
@@ -444,8 +445,32 @@ export const authRoutes = new Hono<AppEnv>()
     // happened to return (see ReverseAddress.regionNames).
     const regions = await q.getRegions(c.env);
     const region = firstMatch(address.regionNames, regions, (r) => r.name);
+
+    // The street lookup is scoped to the settlement this point is in, not to
+    // the region matched above: `regionNames` leads with suburb/quarter because
+    // that is the most specific *region* for targeting, while a street belongs
+    // to a settlement (migration 0015). Without the scope, a user in Аврен was
+    // assigned the Varna street of the same name — the streets table only held
+    // city streets, so that was the only answer it could give.
+    //
+    // matchStreet rather than firstMatch/bestMatch: it is the only matcher that
+    // takes a scope, and scoping bestMatch would mean handing it a freshly
+    // filtered array, which drops the trigram memo keyed on the cached array's
+    // identity and re-tokenizes every street on every location update. It is
+    // also the better matcher for this input — Nominatim returns written kinds
+    // ("улица Тича"), which is exactly the noise comparing cores removes.
+    //
+    // An unresolvable settlement scopes to nothing rather than to everything;
+    // the user still targets at region level, which a NULL street_id means.
     const streets = await q.getStreets(c.env);
-    const street = firstMatch(address.streetNames, streets, (s) => s.name);
+    const settlement = firstMatch(address.settlementNames, regions, (r) => r.name);
+    let street: q.NamedRow | null = null;
+    if (settlement !== null) {
+      for (const name of address.streetNames) {
+        street = matchStreet(name, streets, settlement.id);
+        if (street) break;
+      }
+    }
 
     // A lookup that never completed says nothing about where this point is, so
     // it must not be written as "matches no region and no street" — region and

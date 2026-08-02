@@ -50,7 +50,7 @@ List of abbreviations and their meaning:
 If something isn't from the things listed assume it's a building or something else and do not include it.
 If there are details regarding what happened and who caused it - ignore it.
 
-These are NEVER locations. Leave them out entirely - do not put them in "location_name" and do not put them in "sublocations":
+These are NEVER locations. Leave them out entirely - do not put them in "settlement", "area" or "streets":
 - a shop or a company: "м-н ..." /магазин/, "... ООД", "... ЕООД", "... АД", "фирма ..."
 - an electrical installation: "ТП 726" /трафопост/, "БКТП ...", a substation, a transformer
 - an abbreviation with NO name after it: a lone "м-т", "местност", "м.", "кв." or "ж.к." names no place
@@ -63,8 +63,9 @@ These are NEVER locations. Leave them out entirely - do not put them in "locatio
 {
     "locations": [
         {
-            "location_name": string,
-            "sublocations": array of strings,
+            "settlement": string or null,
+            "area": string or null,
+            "streets": array of strings,
             "is_polygon": bool
         }
     ],
@@ -87,21 +88,27 @@ These are NEVER locations. Leave them out entirely - do not put them in "locatio
 - If no time is stated at all, "windows" is an empty array. If only one side of a window is stated, use null for the other side.
 
 ## Locations
-The "location_name" field must contain the name of the city/village/locality/district/residential complex.
-The "sublocations" array includes streets/boulevards, each as a separate entry.
-- List EVERY place the message names. A message naming five villages must produce five locations - do not stop early and do not merge them.
-- Many messages are written as "гр. X - кв. Y", "гр. X - ж.к. Y" or "гр. X - м-т Y". The district, complex or locality AFTER the dash is its own "location_name". The city before the dash is only context: it must NOT become a location of its own, and it must NOT go into "sublocations".
-- Example: "Прекъсване на електрозахранването гр. Варна - кв. Владислав Варненчик" gives "locations": [{"location_name": "кв. Владислав Варненчик", "sublocations": [], "is_polygon": false}]
-- When streets are listed AFTER such a district, they are that district's own streets: the district is the "location_name" and the streets are ITS "sublocations". The city stays out of the JSON entirely.
-- Example: "гр. Варна - кв. Виница, ул. Свети Пророк Илия, ул. Константин Павлов" gives "locations": [{"location_name": "кв. Виница", "sublocations": ["ул. Свети Пророк Илия", "ул. Константин Павлов"], "is_polygon": false}]
-- But when a street comes BEFORE the districts, the message is a flat list of separate places: each district is its own location, and the street stays under the city.
-- Example: "гр. Варна - част от: ул. Арх. Стоян Доков, м-ст Ваялар и м-ст Свети Никола" gives "locations": [{"location_name": "гр. Варна", "sublocations": ["ул. Арх. Стоян Доков"], "is_polygon": false}, {"location_name": "м-т Ваялар", "sublocations": [], "is_polygon": false}, {"location_name": "м-т Свети Никола", "sublocations": [], "is_polygon": false}]
-- When the message names ONLY streets under the city and no district at all, the city IS the "location_name" and the streets are its "sublocations".
-- Example: "гр. Варна - ул. Неофит Бозвели 46; ул. Ангел Кънчев 3" gives "locations": [{"location_name": "гр. Варна", "sublocations": ["ул. Неофит Бозвели", "ул. Ангел Кънчев"], "is_polygon": false}]
+Every entry in "locations" describes ONE place, in three slots:
+- "settlement" is the city or the village: "гр. Варна", "с. Аврен". Use null when the message names none.
+- "area" is the district, residential complex, locality or resort complex INSIDE that settlement: "кв. Виница", "ж.к. Младост", "м-т Ваялар", "к.к. Чайка". Use null when the message names none.
+- "streets" holds the streets and boulevards, each as a separate entry.
+- List EVERY place the message names. A message naming five villages must produce five entries - do not stop early and do not merge them.
+- NEVER invent a settlement the message does not name. If the message says only "кв. Чайка", then "settlement" is null.
+- A district NEVER goes in "streets", and a street NEVER goes in "area".
+- Many messages are written as "гр. X - кв. Y", "гр. X - ж.к. Y" or "гр. X - м-т Y". That is ONE entry: X is the "settlement" and Y is the "area". Do not make two entries out of it.
+- Example: "Прекъсване на електрозахранването гр. Варна - кв. Владислав Варненчик" gives "locations": [{"settlement": "гр. Варна", "area": "кв. Владислав Варненчик", "streets": [], "is_polygon": false}]
+- When streets are listed AFTER such a district, they are that district's own streets: they go in "streets" of the SAME entry, beside the "area".
+- Example: "гр. Варна - кв. Виница, ул. Свети Пророк Илия, ул. Константин Павлов" gives "locations": [{"settlement": "гр. Варна", "area": "кв. Виница", "streets": ["ул. Свети Пророк Илия", "ул. Константин Павлов"], "is_polygon": false}]
+- But when a street comes BEFORE the districts, the message is a flat list of separate places: ONE entry per district, each repeating the settlement, and the street goes in an entry whose "area" is null.
+- Example: "гр. Варна - част от: ул. Арх. Стоян Доков, м-ст Ваялар и м-ст Свети Никола" gives "locations": [{"settlement": "гр. Варна", "area": null, "streets": ["ул. Арх. Стоян Доков"], "is_polygon": false}, {"settlement": "гр. Варна", "area": "м-т Ваялар", "streets": [], "is_polygon": false}, {"settlement": "гр. Варна", "area": "м-т Свети Никола", "streets": [], "is_polygon": false}]
+- When the message names ONLY streets under the city and no district at all, "area" is null.
+- Example: "гр. Варна - ул. Неофит Бозвели 46; ул. Ангел Кънчев 3" gives "locations": [{"settlement": "гр. Варна", "area": null, "streets": ["ул. Неофит Бозвели", "ул. Ангел Кънчев"], "is_polygon": false}]
+- A village with its own streets fills "settlement" and "streets" and leaves "area" null.
+- Example: "Без вода остава с. Аврен, ул. Тича" gives "locations": [{"settlement": "с. Аврен", "area": null, "streets": ["ул. Тича"], "is_polygon": false}]
 If you have multiple streets listed and stuff along the lines of: "затворени", "в карето", "между"; it means that the streets form a polygon and the "is_polygon" field must be set to true. In every other case leave it false.
 In case there is a polygon assume all the things listed are streets.
-- "карето" is the SIGNAL that "is_polygon" is true. It is never a "location_name".
-- Example: "Без вода ще бъдат: в карето между бул. Владислав Варненчик, ул. Беласица, ул. Хан Пресиян и бул. Левски" gives "locations": [{"location_name": null, "sublocations": ["бул. Владислав Варненчик", "ул. Беласица", "ул. Хан Пресиян", "бул. Левски"], "is_polygon": true}]
+- "карето" is the SIGNAL that "is_polygon" is true. It is never a "settlement" and never an "area".
+- Example: "Без вода ще бъдат: в карето между бул. Владислав Варненчик, ул. Беласица, ул. Хан Пресиян и бул. Левски" gives "locations": [{"settlement": null, "area": null, "streets": ["бул. Владислав Варненчик", "ул. Беласица", "ул. Хан Пресиян", "бул. Левски"], "is_polygon": true}]
 If the message affects all clients city-wide and lists no specific locations, leave the "locations" array empty and set "city_wide" to true. In every other case "city_wide" must be false.
 
 ## Constraints
@@ -109,6 +116,7 @@ If the message affects all clients city-wide and lists no specific locations, le
 - If data is unknown, use null.
 - Ensure the JSON is syntactically valid.
 - The abbreviations must be written EXACTLY like from the list (the variant in the leftmost position) AND CONSIDER THE DOTS.
+- "settlement" ALWAYS keeps its "гр." or "с." abbreviation: write "с. Тополи", never a bare "Тополи".
 - Leave spaces between each word (including abbreviations).
 - Remove all quotation marks from the locations.
 - A street name never carries a house number, a block, an entrance or a floor: "ул. Пловдив 25" is "ул. Пловдив", "бул. Чаталджа 20 вх. Б." is "бул. Чаталджа".

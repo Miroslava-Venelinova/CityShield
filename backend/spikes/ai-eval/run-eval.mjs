@@ -95,20 +95,24 @@ function gradeOutage(testCase, actual) {
 
   // A non-place emitted as a location fails the case regardless of the rest:
   // that is exactly what the deterministic guards then have to clean up, and
-  // what these prompt rules exist to prevent.
+  // what these prompt rules exist to prevent. Checked in all three slots — it
+  // only ever checked the name, so a shop landing in the street array scored
+  // clean, which is a hole the three-slot split was a good moment to close.
   const banned = forbidden.map(normText);
   for (const l of actLocs) {
-    if (banned.includes(normText(l.location_name))) {
-      diffs.push(`location_name: "${l.location_name}" is not a place`);
+    for (const name of [l.settlement, l.area, ...(l.streets ?? [])]) {
+      if (banned.includes(normText(name))) diffs.push(`"${name}" is not a place`);
     }
   }
 
   if (expLocs.length !== actLocs.length) {
     diffs.push(`locations count: expected ${expLocs.length}, got ${actLocs.length}`);
   } else {
-    const key = (l) => [normText(l.location_name), ...(l.sublocations ?? []).map(normText).sort()].join("|") + `|poly:${!!l.is_polygon}`;
-    const keyNoName = (l) => (l.sublocations ?? []).map(normText).sort().join("|") + `|poly:${!!l.is_polygon}`;
-    const useKey = lenient.location_name ? keyNoName : key;
+    const key = (l) => [normText(l.settlement), normText(l.area), ...(l.streets ?? []).map(normText).sort()].join("|") + `|poly:${!!l.is_polygon}`;
+    const keyNoName = (l) => (l.streets ?? []).map(normText).sort().join("|") + `|poly:${!!l.is_polygon}`;
+    // `lenient.name` waives both name slots — the polygon case, where the model
+    // may or may not carry the city through and the streets are the answer.
+    const useKey = lenient.name ? keyNoName : key;
     const exp = expLocs.map(useKey).sort();
     const act = actLocs.map(useKey).sort();
     if (JSON.stringify(exp) !== JSON.stringify(act)) diffs.push(`locations: expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`);
