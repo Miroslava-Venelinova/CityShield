@@ -8,9 +8,13 @@
 # Geofabrik publishes a Bulgaria-only extract (~170 MB), so there is no reason
 # to import Europe or the planet.
 #
+#   overpass.bat                  # wrapper: imports, or offers to re-import
+#
 #   docker compose up -d          # first run imports; see the README for timing
 #   docker compose logs -f        # watch the import
 #   docker compose down           # stop (the volume keeps the database)
+#   docker compose down -v        # ... and delete the database, forcing a
+#                                 #     fresh import of the latest extract
 #
 # Once it answers, pick "Self-hosted (localhost:12345)" in the tool's endpoint
 # dropdown.

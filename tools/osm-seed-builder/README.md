@@ -228,8 +228,20 @@ import Europe or the planet:
 
 ```sh
 cd tools/osm-seed-builder/overpass
-docker compose up -d      # first run downloads and indexes; takes a while
+overpass.bat              # first run downloads and indexes; takes a while
+```
+
+`overpass.bat` is a double-clickable wrapper around the compose commands below.
+With no arguments it imports on a first run, and on later runs shows what exists
+and offers to re-import; either way it then waits and tells you when the
+instance actually answers area queries. `start`, `refresh`, `status`, `stop` and
+`logs` do those things directly — see the header of the file. The plain compose
+commands work exactly as before:
+
+```sh
+docker compose up -d      # create/start
 docker compose logs -f    # watch progress
+docker compose down       # stop, keeping the database
 ```
 
 Then choose **Self-hosted (localhost:12345)** in the endpoint dropdown.
@@ -243,8 +255,13 @@ Notes:
   curl -s --data-urlencode 'data=[out:json];area["ISO3166-1"="BG"][admin_level=2];out ids;' \
     http://127.0.0.1:12345/api/interpreter
   ```
-- The named volume `overpass_overpass-db` holds the database, so restarts do not
-  re-import. `docker compose down -v` deletes it and forces a fresh import.
+- **The database is the volume, not the container.** The named volume
+  `overpass_overpass-db` holds it, and the image imports *only when `/db` is
+  empty* — so deleting and recreating the container picks up nothing new, and a
+  restart is fast for the same reason. Refreshing the data means deleting the
+  volume: `docker compose down -v && docker compose up -d`, or `overpass.bat
+  refresh`. The re-import downloads `bulgaria-latest.osm.pbf`, which Geofabrik
+  rebuilds daily, so it lands at most about a day behind live OSM.
 - **Five settings in the compose file are load-bearing.** Every one of them was
   found by hitting the failure, and three fail in ways that look like success:
   - `OVERPASS_USE_AREAS: "true"` — areas are generated *only* when this is exactly
