@@ -31,6 +31,10 @@
   .sub { color: var(--muted); margin: 0; }
   .wrap { max-width: 1500px; margin: 0 auto; }
   .grid { display: grid; grid-template-columns: 440px 1fr; gap: 16px; align-items: start; }
+  /* A grid item is min-width:auto by default, so anything inside it that cannot
+     shrink — a 4,000-character `content` on one line in the raw row — widens the
+     whole column instead of scrolling inside its own box. */
+  .grid > * { min-width: 0; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
   label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
@@ -57,6 +61,7 @@
   .star { color: var(--star); }
   .msg { padding: 9px 11px; border-radius: 6px; border: 1px solid var(--line); margin-bottom: 12px; font-size: 13px; white-space: pre-wrap; }
   pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; font-size: 12px; margin: 0; }
+  pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
   .hide { display: none !important; }
   code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
   kbd {
@@ -122,6 +127,8 @@
     position: relative; height: 340px; margin: 2px 0 10px; overflow: hidden;
     border: 1px solid var(--line); border-radius: 8px; background: #e9e5dc;
     cursor: grab; touch-action: none; resize: vertical;
+    /* A drag that starts on a tile must pan, not select the page around it. */
+    user-select: none; -webkit-user-select: none;
   }
   .map.drag { cursor: grabbing; }
   .map .layer { position: absolute; inset: 0; }
@@ -140,6 +147,20 @@
     background: rgba(255, 255, 255, .82); color: #333; border-radius: 4px 0 0 0;
   }
   .map .attr a { color: #1667d0; }
+
+  /* Who the alert reaches: one block per location explaining how it resolved,
+     then the users themselves. Same shape as .loc so the numbered markers line
+     up with the map above. */
+  .tgt { border-top: 1px solid var(--line); padding: 7px 0; display: flex; gap: 9px; align-items: flex-start; }
+  .tgt:first-child { border-top: none; }
+  .tgt .grow { flex: 1; min-width: 0; }
+  .tgt .n { font-weight: 600; }
+  .who { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 4px 0; border-top: 1px solid var(--line); }
+  .who:first-child { border-top: none; }
+  .who .em { font-weight: 600; font-size: 13px; }
+  .who .grow { flex: 1; min-width: 0; }
+  .headline { font-size: 15px; font-weight: 600; margin: 2px 0 8px; }
+  .headline .big { font-size: 21px; }
 
   .reasons { display: grid; gap: 6px; margin-top: 8px; }
   .reason { display: flex; gap: 9px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
@@ -356,9 +377,24 @@
             <div class="hint" id="mapNote" style="margin:0 0 10px"></div>
           </div>
           <div id="dLocations"></div>
-          <details style="margin-top:10px">
+
+          <div class="head" style="margin:16px 0 6px">
+            <h2 style="margin:0">Who gets notified</h2>
+            <span class="hint" id="audienceSource" style="margin:0"></span>
+          </div>
+          <div id="audience"></div>
+
+          <details style="margin-top:14px">
             <summary class="muted" style="cursor:pointer;font-size:13px">locations_json</summary>
             <pre id="dJson" style="max-height:260px;margin-top:8px"></pre>
+          </details>
+          <details style="margin-top:6px">
+            <summary class="muted" style="cursor:pointer;font-size:13px">raw alert row</summary>
+            <div class="hint" style="margin:8px 0 0">The row as stored, every column, before
+            anything here reformats it. <a href="#" id="copyRaw">copy</a></div>
+            <!-- Wrapped rather than scrolled sideways: `content` is one very long
+                 line, and reading it behind a horizontal scrollbar is no reading. -->
+            <pre id="dRaw" class="wrap" style="max-height:340px;margin-top:8px"></pre>
           </details>
         </div>
       </div>
@@ -551,6 +587,9 @@ async function setCutoff(value) {
 
 function applyDataset(data) {
   alerts = data.alerts;
+  // A load reads the user tables again, so whatever the pane last said about
+  // the current alert was said against a different snapshot.
+  audienceShown = null;
   // dataset.value is what a rejected edit falls back to.
   $("cutoff").value = $("cutoff").dataset.value = data.cutoff || "";
   $("cutoffState").textContent = !data.cutoff
@@ -561,6 +600,12 @@ function applyDataset(data) {
     ? `${alerts.length} alert(s) from <code>${esc(data.detail)}</code> · loaded ${esc(data.loaded_at)}`
       + (data.skipped ? ` · <span class="warn">${data.skipped} row(s) had no id and were skipped</span>` : "")
       + (data.truncated ? ` · <span class="warn">capped at ${config.row_limit} rows — older alerts are not shown</span>` : "")
+      // Whether the audience can be answered at all is a property of the load,
+      // so it belongs next to it rather than only inside one alert's pane.
+      + (data.audience.available
+        ? ` · ${data.audience.users} user(s), ${data.audience.regions} region(s) and `
+          + `${data.audience.streets} street(s) for targeting`
+        : ` · <span class="warn">${esc(data.audience.detail)}</span>`)
     : "Nothing loaded yet.";
 
   fillOptions("fCategory", [...new Set(alerts.map((a) => a.category))],
@@ -882,6 +927,22 @@ function renderDetail(alert) {
   $("dJson").textContent = alert.locations_error
     ? alert.locations_json
     : JSON.stringify(alert.locations, null, 2);
+  $("dRaw").textContent = rawRow(alert);
+
+  renderAudience(alert);
+}
+
+/**
+ * The stored row itself — the columns in table order, with the ones that are
+ * SQL NULL shown as null rather than as the empty string everything is
+ * normalized to for display. locations_json stays the string it is in the
+ * column; the parsed form is one <details> up.
+ */
+function rawRow(alert) {
+  const nulls = new Set(alert.null_columns || []);
+  const row = {};
+  for (const column of config.columns) row[column] = nulls.has(column) ? null : alert[column];
+  return JSON.stringify(row, null, 2);
 }
 
 /**
@@ -917,7 +978,7 @@ const PIN_COLOR = "#1667d0", POLY_COLOR = "#c9361c";
 let mapShapes = [];   // one entry per location of the current alert, in list order
 let mapView = null;   // { z, cx, cy } — centre in tile units at zoom z
 let mapFocus = -1;    // index of the focused location, or -1 for all of them
-let mapTimer = 0, mapResizeTimer = 0, mapDrag = null;
+let mapTimer = 0, mapResizeTimer = 0, mapDrag = null, mapFrame = 0;
 let showMap = localStorage.getItem("alertReviewMap") !== "0";
 
 const lngToX = (lng, z) => ((lng + 180) / 360) * 2 ** z;
@@ -1050,6 +1111,7 @@ function drawMap() {
         img = document.createElement("img");
         img.dataset.key = key;
         img.alt = "";
+        img.draggable = false;
         img.src = `https://tile.openstreetmap.org/${z}/${((tx % world) + world) % world}/${ty}.png`;
         layer.appendChild(img);
       }
@@ -1122,6 +1184,190 @@ function toggleMap(on) {
   $("mapToggle").innerHTML = `${showMap ? "Hide" : "Show"} map <kbd>g</kbd>`;
   const alert = alerts.find((a) => a.id === currentId);
   if (alert) renderDetail(alert);
+}
+
+// ── who gets notified ────────────────────────────────────────────────────────
+// A pin in the right place and an audience of nobody look identical in the
+// stored row, and the second is the more expensive mistake. The server replays
+// the Worker's targeting against the same four tables and answers with the
+// users plus how each one got in; this draws that, including the cases where
+// the answer is "nobody, because nothing resolved".
+
+const AUDIENCE_DELAY = 200;   // as with the map: holding j must not compute per alert
+// A city-wide alert's audience is the whole user base. Nothing good comes of
+// putting 40,000 rows in the DOM, and nothing good comes of silently showing
+// the first 120 either — so a page at a time, with a filter for finding one
+// user and a count that always states the whole.
+const AUDIENCE_PAGE = 50;
+const AUDIENCE_FILTER_FROM = 15;   // below this a filter box is just clutter
+let audienceTimer = 0;
+let audienceSeq = 0;          // drops the answer to a request the reviewer moved past
+let audienceShown = null;     // the alert the pane currently describes
+
+function renderAudience(alert) {
+  // The whole detail pane is re-rendered by things the audience does not depend
+  // on — toggling the map, stamping an issue — and recomputing it there would
+  // blank the pane for no new answer. Only a different alert, or a fresh load,
+  // asks again.
+  if (audienceShown === alert.id) return;
+  clearTimeout(audienceTimer);
+  const seq = ++audienceSeq;
+  $("audienceSource").textContent = "";
+  $("audience").innerHTML = '<div class="muted" style="font-size:13px">Working it out…</div>';
+  audienceTimer = setTimeout(async () => {
+    try {
+      const data = await api("/api/audience", { id: alert.id });
+      if (seq !== audienceSeq) return;
+      audienceShown = alert.id;
+      drawAudience(data);
+    } catch (e) {
+      if (seq === audienceSeq) {
+        $("audience").innerHTML = `<div class="err">Could not work out the audience: ${esc(e.message)}</div>`;
+      }
+    }
+  }, AUDIENCE_DELAY);
+}
+
+const METHOD_LABEL = {
+  polygon: "polygon", streets: "street match", region: "region-wide", none: "nothing matched",
+};
+
+function drawAudience(data) {
+  if (!data.ok) {
+    $("audience").innerHTML = `<div class="muted" style="font-size:13px">${esc(data.detail)}</div>`;
+    return;
+  }
+  $("audienceSource").textContent = `${data.scope} · ${data.loaded_at}`;
+
+  // The exact audience, not the length of the (capped) listing below it.
+  const count = data.recipient_count;
+  const parts = [`<div class="headline">${count
+    ? `<span class="big ok">${count}</span> of ${data.total_users} user(s) would receive a push`
+    : `<span class="big err">Nobody</span> would receive a push`
+  }${data.ambiguous ? ' <span class="badge warning">if it was city-wide</span>' : ""}</div>`];
+
+  // The finding the count alone hides: every location resolved to an empty
+  // audience and the only recipients are the debug accounts that get everything.
+  if (data.per_location.length && data.per_location.every((loc) => !loc.count)) {
+    parts.push('<div class="msg err">No location on this alert matched a single user. '
+      + (count ? "Anyone listed below is a receives_all_alerts account." : "") + "</div>");
+  }
+
+  for (const note of data.notes) parts.push(`<div class="msg warn">${esc(note)}</div>`);
+
+  if (data.per_location.length) {
+    parts.push('<div style="margin:10px 0 4px">' + data.per_location.map((loc) => {
+      const shape = mapShapes[loc.index] || { rings: [] };
+      const n = loc.count;
+      const streets = loc.streets.map((s) => s.matched
+        ? `${esc(s.named)} <span class="ok">→ ${esc(s.matched)}</span>`
+        : `${esc(s.named)} <span class="err">→ no such street</span>`).join(" · ");
+      return `<div class="tgt">
+        <span class="marker ${shape.rings.length ? "poly" : ""}">${loc.index + 1}</span>
+        <div class="grow">
+          <div class="n">${esc(loc.label)}
+            <span class="badge${loc.method === "none" ? " warning" : ""}">${esc(METHOD_LABEL[loc.method] || loc.method)}</span>
+            ${loc.region_wide ? '<span class="badge">region-wide</span>' : ""}
+            <span class="${n ? "muted" : "err"}">— ${n} user(s)</span></div>
+          <div class="hint" style="margin:2px 0 0">settlement scope
+            ${loc.settlement ? `<span class="ok">${esc(loc.settlement)}</span>`
+                             : '<span class="err">unresolved</span>'} ·
+            region ${loc.region ? `<span class="ok">${esc(loc.region)}</span>`
+                                : '<span class="err">unresolved</span>'}</div>
+          ${streets ? `<div class="hint" style="margin:2px 0 0">${streets}</div>` : ""}
+          <div class="hint" style="margin:2px 0 0">${esc(loc.note)}</div>
+        </div>
+      </div>`;
+    }).join("") + "</div>");
+  }
+
+  // Each list keeps its own paging and filter across redraws of the pane, and
+  // both are reset when a different alert is drawn.
+  lists = {
+    recipients: { users: data.recipients, total: data.recipient_count, shown: AUDIENCE_PAGE,
+                  filter: "", muted: false,
+                  heading: count ? "Recipients"
+                                 : "No recipients — the alert is stored and reaches nobody" },
+    muted: { users: data.muted, total: data.muted_count, shown: AUDIENCE_PAGE,
+             filter: "", muted: true,
+             heading: `Matched but opted out of ${esc(data.category)}` },
+  };
+  parts.push(listShell("recipients"));
+  if (data.muted_count) parts.push(listShell("muted"));
+
+  $("audience").innerHTML = parts.join("");
+  for (const key of Object.keys(lists)) fillList(key);
+}
+
+let lists = {};
+
+/**
+ * The static half of a user list: heading, filter box and the empty containers
+ * `fillList` writes into. Kept out of the redraw so typing in the filter never
+ * costs the input its focus.
+ */
+function listShell(key) {
+  const list = lists[key];
+  if (!list.users.length) return `<div class="hint" style="margin-top:10px">${list.heading}</div>`;
+  return `<div class="head" style="margin:14px 0 4px">
+      <span class="hint" style="margin:0">${list.heading} — ${list.total} user(s)</span>
+      ${list.users.length >= AUDIENCE_FILTER_FROM
+        ? `<input data-filter="${key}" placeholder="filter by email, region or street"
+             spellcheck="false" style="width:260px;padding:3px 8px;font-size:12px">` : ""}
+    </div>
+    <div style="${list.muted ? "opacity:.7;" : ""}border:1px solid var(--line);
+      border-radius:8px;padding:4px 10px;max-height:260px;overflow:auto" id="rows-${key}"></div>
+    <div id="more-${key}"></div>`;
+}
+
+function fillList(key) {
+  const list = lists[key];
+  if (!list.users.length || !$(`rows-${key}`)) return;
+
+  const needle = list.filter.trim().toLowerCase();
+  const matching = !needle ? list.users : list.users.filter((u) =>
+    `${u.email} ${u.region} ${u.street} ${u.via.join(" ")}`.toLowerCase().includes(needle));
+  const shown = matching.slice(0, list.shown);
+
+  $(`rows-${key}`).innerHTML = shown.length ? shown.map((u) => `<div class="who">
+      <span class="em">${esc(u.email) || esc(u.user_id)}</span>
+      <span class="grow muted">${esc(u.region) || "no region"}${u.street ? " · " + esc(u.street) : ""}</span>
+      ${u.receives_all ? '<span class="badge">receives all</span>' : ""}
+      <span class="muted" style="font-size:12px">${esc(u.via.join(" + "))}</span>
+    </div>`).join("")
+    : '<div class="who muted">Nothing matches that.</div>';
+
+  // Three separate facts, and conflating them would misreport the audience: how
+  // much of the filtered set is on screen, how much the filter left out, and
+  // whether the server capped the listing itself (the count above is still the
+  // whole audience — see targeting.py's LIST_LIMIT).
+  const hidden = list.total - list.users.length;
+  $(`more-${key}`).innerHTML = `<div class="hint" style="display:flex;gap:10px;align-items:center">
+    <span>Showing ${shown.length} of ${matching.length}${
+      needle ? ` matching (${list.users.length} listed)` : ""}.</span>
+    ${matching.length > shown.length ? `
+      <button class="ghost" data-more="${key}" style="width:auto;font-size:12px;padding:2px 9px">
+        Show ${Math.min(AUDIENCE_PAGE, matching.length - shown.length)} more</button>
+      <button class="ghost" data-all="${key}" style="width:auto;font-size:12px;padding:2px 9px">
+        Show all ${matching.length}</button>` : ""}
+    ${hidden > 0 ? `<span class="warn">${hidden} more user(s) are in this audience but were not
+      sent to the page — the count above is exact.</span>` : ""}
+  </div>`;
+
+  $(`more-${key}`).querySelectorAll("[data-more]").forEach((el) =>
+    el.addEventListener("click", () => { list.shown += AUDIENCE_PAGE; fillList(key); }));
+  $(`more-${key}`).querySelectorAll("[data-all]").forEach((el) =>
+    el.addEventListener("click", () => { list.shown = matching.length; fillList(key); }));
+  // Bound once per pane redraw, not per page: the input lives in the shell.
+  const box = document.querySelector(`[data-filter="${key}"]`);
+  if (box && !box.dataset.bound) {
+    box.dataset.bound = "1";
+    box.addEventListener("input", () => {
+      list.filter = box.value;
+      list.shown = AUDIENCE_PAGE;   // a new filter starts at the top again
+      fillList(key);
+    });
+  }
 }
 
 // ── judging ──────────────────────────────────────────────────────────────────
@@ -1302,6 +1548,18 @@ $("issueCancel").addEventListener("click", closeIssueForm);
 $("reportMd").addEventListener("click", () => report("md"));
 $("reportJson").addEventListener("click", () => report("json"));
 
+$("copyRaw").addEventListener("click", async (e) => {
+  e.preventDefault();
+  try {
+    await navigator.clipboard.writeText($("dRaw").textContent);
+    message("Raw row copied to the clipboard.", "ok");
+  } catch {
+    // Clipboard access can be refused; selecting it is the fallback that always works.
+    getSelection().selectAllChildren($("dRaw"));
+    message("Could not reach the clipboard — the row is selected, copy it with Ctrl+C.", "warn");
+  }
+});
+
 $("mapToggle").addEventListener("click", () => toggleMap());
 $("mapIn").addEventListener("click", () => zoomMap(1));
 $("mapOut").addEventListener("click", () => zoomMap(-1));
@@ -1312,33 +1570,56 @@ $("mapFit").addEventListener("click", () => {
   drawMap();
 });
 
-// Pan by translating the whole layer and only re-tiling on release: retiling on
-// every pointermove would refetch the map as it moves.
+// Pan.
+//
+// The view moves with the pointer rather than being translated and reconciled
+// on release: the old version only re-tiled on pointerup, so a drag showed the
+// loaded tiles sliding over empty background and dragging past the edge of what
+// was already fetched looked like nothing was happening at all. Moving mapView
+// itself and redrawing on an animation frame keeps the tiles under the cursor —
+// already-fetched ones are only repositioned (drawMap keys them absolutely), so
+// panning back and forth refetches nothing.
+//
+// preventDefault on pointerdown is what makes a press-and-hold work at all:
+// without it the browser starts its own drag of the tile image under the cursor
+// and fires pointercancel, which ends the pan on the first pixel of movement.
+
+// The bottom-right corner belongs to the browser's own resize handle (the map
+// is `resize: vertical`), and the preventDefault above would swallow its drag —
+// so the pan declines that corner rather than taking the height control away.
+const RESIZE_GRIP = 18;
+function onResizeGrip(e) {
+  const box = $("mapCanvas").getBoundingClientRect();
+  return e.clientX > box.right - RESIZE_GRIP && e.clientY > box.bottom - RESIZE_GRIP;
+}
+
 $("mapCanvas").addEventListener("pointerdown", (e) => {
-  if (!mapView || e.button !== 0 || e.target.closest("button, a")) return;
-  mapDrag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0 };
+  if (!mapView || e.button !== 0 || e.target.closest("button, a") || onResizeGrip(e)) return;
+  e.preventDefault();
+  mapDrag = { x: e.clientX, y: e.clientY, id: e.pointerId };
   $("mapCanvas").setPointerCapture(e.pointerId);
   $("mapCanvas").classList.add("drag");
 });
 $("mapCanvas").addEventListener("pointermove", (e) => {
-  if (!mapDrag) return;
-  mapDrag.dx = e.clientX - mapDrag.x;
-  mapDrag.dy = e.clientY - mapDrag.y;
-  $("mapLayer").style.transform = `translate(${mapDrag.dx}px, ${mapDrag.dy}px)`;
+  if (!mapDrag || e.pointerId !== mapDrag.id || !mapView) return;
+  mapView.cx -= (e.clientX - mapDrag.x) / TILE;
+  mapView.cy -= (e.clientY - mapDrag.y) / TILE;
+  mapDrag.x = e.clientX;
+  mapDrag.y = e.clientY;
+  // One redraw per frame however many moves the pointer delivers.
+  if (!mapFrame) mapFrame = requestAnimationFrame(() => { mapFrame = 0; drawMap(); });
 });
-for (const event of ["pointerup", "pointercancel"]) {
-  $("mapCanvas").addEventListener(event, () => {
-    if (!mapDrag) return;
-    $("mapLayer").style.transform = "";
-    $("mapCanvas").classList.remove("drag");
-    if (mapView) {
-      mapView.cx -= mapDrag.dx / TILE;
-      mapView.cy -= mapDrag.dy / TILE;
-    }
+for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  $("mapCanvas").addEventListener(event, (e) => {
+    if (!mapDrag || e.pointerId !== mapDrag.id) return;
     mapDrag = null;
+    $("mapCanvas").classList.remove("drag");
     drawMap();
   });
 }
+// A tile that got as far as the DOM is still a native draggable in browsers
+// that ignore -webkit-user-drag; the attribute is the portable half of it.
+$("mapCanvas").addEventListener("dragstart", (e) => e.preventDefault());
 
 // Covers both the window resizing and the canvas's own resize handle.
 new ResizeObserver(() => {

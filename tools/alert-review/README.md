@@ -25,9 +25,11 @@ only — no pip install. Nothing here writes to D1: the only statement is a cons
 2. **List and filters** — free text over title and content, plus category, severity, review
    status, issue, important-only, created-date range, and inaccuracy reason.
 3. **Detail** — content as scrollable text, the window in both `24.07.2026 09:00` and its raw
-   stored form, a map of everything the alert targets, and `locations_json` as a readable list of
-   `name → lat, lng` (each pin also links out to OpenStreetMap) with the pretty-printed JSON
-   folded underneath.
+   stored form, a map of everything the alert targets, `locations_json` as a readable list of
+   `name → lat, lng` (each pin also links out to OpenStreetMap), and **who the alert would
+   notify** (below). Two folded panes underneath hold the pretty-printed `locations_json` and
+   the **raw alert row** — every column as stored, with `null` shown where the column is NULL
+   rather than as the empty string the display normalizes it to, and a `copy` link.
 4. **Verdict** — one of three, below. Written to `judgments.json` on every judgment, not at the
    end, so closing the tab never costs you the tail of a session.
 5. **Report** — `reports/review-<timestamp>.md` or `.json`, opened in the file manager as soon
@@ -104,6 +106,58 @@ No mapping library: this tool runs from a checkout with nothing installed, and t
 holds to that rule — the tiles are positioned by hand and the geometry is drawn as SVG over them.
 It is the one thing here that talks to the network from your browser, and what it sends is the
 tile coordinates of the area you are looking at, the same as the `map ↗` links.
+
+## Who gets notified
+
+A pin in the right place and an audience of nobody look identical in a stored row, and the
+second is the more expensive mistake — the whole product is the push. So the detail pane
+answers it outright: **N of M users would receive a push**, the users themselves, and one block
+per location saying how it resolved.
+
+`targeting.py` is a port of the Worker's targeting — `sendUsersNotification` and its
+`getUserIdsInRange` / `getUserIdsInPolygonRange` / `getUserIdsCityWide`, plus the matcher stack
+under them (`core/place-names.ts`, `core/fuzzy.ts`, `core/geo.ts`) — run against the same four
+tables: `regions` (with its aliases), `streets`, `users` and the opt-out rows in
+`user_notification_preferences`. Those are read once per **Load**, from whichever database you
+picked; a CSV export holds alerts and nothing else, so with one loaded the pane says so instead
+of answering "nobody".
+
+It was checked against the real thing rather than eyeballed: 649 place names — every seeded
+region, a slice of the streets, and every name the stored alerts have actually produced — put
+through `matchRegion` and `matchStreet` in both implementations, scoped and unscoped, 3,245
+comparisons, zero differences. **When the Worker's matcher changes, this has to change with
+it**; the constants and function names are deliberately the same so a diff is findable.
+
+Each location block names the two resolutions the audience hangs on, because that is where it
+usually breaks:
+
+| | |
+|---|---|
+| **settlement scope** | What the street lookup is scoped to. `unresolved` means no street can match at all — an unscoped lookup would notify a like-named street 30 km away, so it deliberately matches nothing. |
+| **region** | The audience when no street matched. `unresolved`, with a `nothing matched` badge, means this location notifies nobody. |
+| **the street list** | Each named street with what it resolved to, or `no such street` — a street the table doesn't hold is a seeding gap, not a parse error. |
+
+Two things the row cannot tell you, and the pane says which:
+
+- **`city_wide` is not stored.** An alert with no locations is genuinely ambiguous, so both
+  branches are stated: the city-wide audience is shown, flagged *if it was city-wide*, next to
+  the note that the other branch notified nobody at all.
+- **`bus_lines` is not stored either.** A `vt` route alert is narrowed further to subscribers of
+  the affected lines, so for that category the answer is an upper bound.
+
+Users who matched but have the category turned off get their own list — matched and muted is a
+different fact from never matched, and only the first one says the targeting worked.
+
+The lists page rather than truncate. A city-wide alert's audience is the entire user base, so a
+list shows 50 at a time behind **show 50 more** / **show all**, with a filter over email, region,
+street and how the user got in for finding one person among thousands. The heading always states
+the whole count, never the part on screen. Above 2,000 users the server stops sending rows —
+40,000 of them is a megabyte per alert you arrow past — and the line under the list says how many
+were left out; the counts stay exact either way.
+
+When every location resolves to an empty audience the pane says so in as many words, because
+the count above it can still be non-zero: `receives_all_alerts` accounts get every alert
+regardless of location, and a "2 of 4" that is entirely debug accounts reads like success.
 
 ## Issues — the same defect in forty alerts
 
@@ -189,8 +243,9 @@ through. *Truncated or garbled content* is a scraper finding — look at the sou
 **`city_wide` is not stored.** It decides targeting at ingest time and is then gone, so an alert
 with no locations is ambiguous here: either the model correctly said city-wide, or it produced
 nothing and the alert was stored without notifying anyone (SPEC §1.5, decision 2). The tool
-shows the row, not the parse — if you need to tell them apart, check `wrangler tail` output
-around that alert's `created_on_utc`.
+shows the row, not the parse — the audience pane states both branches rather than picking one,
+and if you need to tell them apart, check `wrangler tail` output around that alert's
+`created_on_utc`.
 
 **A `locations_json` that won't parse is shown as an error rather than as no locations**, since
 that is a distinct failure: `getRecentAlerts` degrades such an alert to `[]` for the feed, so the
@@ -212,8 +267,10 @@ window on one day.
 
 Same trust model as `tools/push-tester` and `tools/osm-seed-builder`: the Host header is pinned
 to loopback and every call carries the printed token. The queries are read-only, but "read-only"
-still means this process can pull the production alerts table on request, so no other page in
-your browser gets to reach it.
+still means this process can pull the alerts table — and, since the audience pane, the users
+table with its email addresses — out of the deployed database on request. No other page in your
+browser gets to reach it, and the emails are shown in the pane but never written to
+`judgments.json` or to a report.
 
 The server itself makes no outbound request but `wrangler d1 execute`. The page fetches map
 tiles; nothing else leaves the machine, and no alert text ever does.

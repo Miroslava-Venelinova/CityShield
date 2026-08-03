@@ -44,6 +44,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import targeting
+
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
@@ -66,6 +68,33 @@ ALERTS_SQL = (
     "SELECT id, category, title, content, severity, start_time, end_time, "
     "windows_json, locations_json, created_on_utc FROM alerts "
     f"ORDER BY created_on_utc DESC LIMIT {D1_ROW_LIMIT}"
+)
+
+# The four tables the Worker's targeting reads, in one call. Same statements as
+# db/queries.ts, including the region_aliases union — an alias is a name a
+# location can match on, so leaving it out would under-report the audience.
+#
+# Only opt-OUTs are stored in user_notification_preferences (migration 0004), so
+# `is_enabled = 0` is the whole table's meaningful content.
+AUDIENCE_SQL = (
+    "SELECT id, region_name AS name, lat, lng, settlement_id FROM regions "
+    "UNION ALL "
+    "SELECT r.id, a.alias AS name, r.lat, r.lng, r.settlement_id "
+    "FROM region_aliases a JOIN regions r ON r.id = a.region_id;"
+    " SELECT id, street_name AS name, lat, lng, region_id FROM streets;"
+    " SELECT user_id, email, latitude, longitude, region_id, street_id,"
+    " receives_all_alerts, subscribed_bus_lines FROM users;"
+    " SELECT user_id, category FROM user_notification_preferences WHERE is_enabled = 0"
+)
+# Positional, because that is the order D1 answers a multi-statement command in
+# — but each document is checked against the columns it must have before it is
+# used, so a wrangler that ever reorders them fails loudly instead of silently
+# targeting streets against the users table.
+AUDIENCE_TABLES = (
+    ("regions", ("id", "name", "settlement_id")),
+    ("streets", ("id", "name", "region_id")),
+    ("users", ("user_id", "email", "region_id", "street_id")),
+    ("opt_outs", ("user_id", "category")),
 )
 
 # The CSV export's columns, which are the alerts table's columns minus the
@@ -145,6 +174,12 @@ _dataset: dict = {"source": "", "detail": "", "loaded_at": "", "truncated": Fals
 # The one setting: alerts created before this local date are out of scope
 # entirely. "" means everything loaded is in scope.
 _cutoff: str = ""
+# The regions/streets/users/preferences snapshot the audience is computed
+# against, or None when there is none — a CSV carries alerts and nothing else,
+# and a database whose users table could not be read has to say so rather than
+# answer "nobody".
+_audience: targeting.Tables | None = None
+_audience_error: str = ""
 
 
 # ── the JSON stores ───────────────────────────────────────────────────────────
@@ -526,6 +561,10 @@ def normalize(row: dict) -> dict | None:
         "locations_error": error,
         "created_on_utc": text("created_on_utc"),
         "created_day": local_day(text("created_on_utc")),
+        # Which columns are SQL NULL, so the raw view can show `null` where the
+        # row means it rather than the empty string every other field is
+        # normalized to. Always empty for a CSV, which cannot express NULL.
+        "null_columns": [c for c in CSV_COLUMNS if row.get(c) is None],
     }
 
 
@@ -549,6 +588,22 @@ def state_payload() -> dict:
     return {"judgments": _judgments, "issues": _issues, "counts": counts()}
 
 
+def audience_state() -> dict:
+    """Whether "who gets notified" can be answered at all, and why not when it
+    cannot — an empty audience and an unavailable one are different findings."""
+    if _audience is None:
+        return {"available": False, "detail": _audience_error
+                or "No user data loaded. Pick a D1 database to see who an alert notifies."}
+    return {
+        "available": True,
+        "users": len(_audience.users),
+        "regions": len(_audience.regions),
+        "streets": len(_audience.streets),
+        "detail": f"{len(_audience.users)} user(s) from {_audience.scope}, "
+                  f"loaded {_audience.loaded_at}",
+    }
+
+
 def dataset_payload() -> dict:
     return {
         "source": _dataset["source"],
@@ -557,6 +612,7 @@ def dataset_payload() -> dict:
         "truncated": _dataset["truncated"],
         "skipped": _dataset.get("skipped", 0),
         "cutoff": _cutoff,
+        "audience": audience_state(),
         # Only what the cutoff leaves in scope — the browser never sees the
         # excluded rows, so no filter or count can accidentally include them.
         "alerts": visible(),
@@ -595,17 +651,24 @@ def load_csv(path_text: str) -> dict:
     except csv.Error as e:
         raise ToolError(f"Could not read {path.name}: {e}") from e
 
+    # A CSV is alerts and nothing else: there is no users table in it, so the
+    # audience from whichever database was loaded before would be an answer
+    # about a different dataset. Drop it and say why.
+    global _audience, _audience_error
+    with _lock:
+        _audience = None
+        _audience_error = ("A CSV export holds alerts only. Load a D1 database to see "
+                           "who an alert notifies.")
     return set_dataset("csv", str(path.resolve()), rows, truncated=False)
 
 
-def load_d1(scope: str) -> dict:
-    if scope not in ("local", "remote"):
-        raise ToolError(f"Unknown database: {scope}")
-
+def d1_documents(scope: str, sql: str) -> list:
+    """One `wrangler d1 execute --json`, as the list of result documents — one
+    per statement, in statement order."""
     result = run_command([
         "npx", "wrangler", "d1", "execute", D1_DATABASE,
         "--remote" if scope == "remote" else "--local", "--json",
-        "--command", ALERTS_SQL,
+        "--command", sql,
     ])
     if result["exit_code"] != 0:
         raise ToolError(f"wrangler failed:\n{result['output']}")
@@ -618,13 +681,99 @@ def load_d1(scope: str) -> dict:
         documents = json.loads(result["output"][start:])
     except json.JSONDecodeError as e:
         raise ToolError(f"Could not parse wrangler's output:\n{result['output']}") from e
+    return documents if isinstance(documents, list) else [documents]
+
+
+def load_d1(scope: str) -> dict:
+    if scope not in ("local", "remote"):
+        raise ToolError(f"Unknown database: {scope}")
 
     rows: list = []
-    for document in documents if isinstance(documents, list) else [documents]:
+    for document in d1_documents(scope, ALERTS_SQL):
         rows.extend(document.get("results", []))
 
-    return set_dataset(f"d1-{scope}", f"{D1_DATABASE} ({scope})", rows,
-                       truncated=len(rows) >= D1_ROW_LIMIT)
+    set_dataset(f"d1-{scope}", f"{D1_DATABASE} ({scope})", rows,
+                truncated=len(rows) >= D1_ROW_LIMIT)
+
+    # A second call rather than four more statements on the first: reading the
+    # audience is the part that can fail on a database seeded differently, and
+    # failing it must not cost the alerts the reviewer came for.
+    global _audience, _audience_error
+    try:
+        tables = load_audience(scope)
+        with _lock:
+            _audience, _audience_error = tables, ""
+    except ToolError as e:
+        with _lock:
+            _audience, _audience_error = None, f"Could not read the user tables: {e}"
+    return dataset_payload()
+
+
+def load_audience(scope: str) -> targeting.Tables:
+    """
+    The regions, streets, users and opt-outs the Worker targets against.
+
+    Read at load time rather than per alert: wrangler costs seconds per call and
+    the four tables are a few thousand rows that every alert then matches
+    against in memory, which is also how the Worker sees them (its own ref cache
+    holds regions and streets for six hours).
+    """
+    documents = d1_documents(scope, AUDIENCE_SQL)
+    if len(documents) != len(AUDIENCE_TABLES):
+        raise ToolError(f"expected {len(AUDIENCE_TABLES)} result sets, got {len(documents)}.")
+
+    named: dict[str, list] = {}
+    for document, (table, required) in zip(documents, AUDIENCE_TABLES):
+        results = document.get("results", [])
+        if results and not all(column in results[0] for column in required):
+            raise ToolError(f"the result set for {table} has columns "
+                            f"{sorted(results[0])}, which is not that table.")
+        named[table] = results
+
+    def number(value):
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def integer(value):
+        return int(value) if isinstance(value, (int, float)) else None
+
+    regions = [targeting.Named(int(r["id"]), str(r["name"]), number(r["lat"]), number(r["lng"]),
+                               settlement_id=integer(r.get("settlement_id")))
+               for r in named["regions"]]
+    streets = [targeting.Named(int(r["id"]), str(r["name"]), number(r["lat"]), number(r["lng"]),
+                               region_id=integer(r.get("region_id")))
+               for r in named["streets"]]
+    users = [targeting.User(
+        user_id=str(r["user_id"]), email=str(r.get("email") or ""),
+        latitude=number(r.get("latitude")), longitude=number(r.get("longitude")),
+        region_id=integer(r.get("region_id")), street_id=integer(r.get("street_id")),
+        receives_all=bool(r.get("receives_all_alerts")),
+        bus_lines=str(r.get("subscribed_bus_lines") or "[]"),
+    ) for r in named["users"]]
+
+    opt_outs: dict[str, set] = {}
+    for row in named["opt_outs"]:
+        opt_outs.setdefault(str(row["user_id"]), set()).add(str(row["category"]))
+
+    if not users:
+        raise ToolError(f"the users table in the {scope} database is empty.")
+
+    return targeting.Tables(
+        regions=regions, streets=streets, users=users, disabled=opt_outs,
+        scope=f"{D1_DATABASE} ({scope})",
+        loaded_at=datetime.now().strftime("%d.%m.%Y %H:%M"))
+
+
+def alert_audience(alert_id: str) -> dict:
+    """Who one stored alert would notify, computed on demand — the reviewer
+    walks the list with j/k and only ever looks at one."""
+    with _lock:
+        tables, unavailable = _audience, audience_state()
+    if tables is None:
+        return {"ok": False, "detail": unavailable["detail"]}
+    alert = find_alert((alert_id or "").strip())
+    if alert is None:
+        raise ToolError(f"No such alert: {alert_id}")
+    return targeting.audience(alert, tables)
 
 
 def run_command(argv: list[str], timeout: int = 180) -> dict:
@@ -1053,6 +1202,9 @@ class Handler(BaseHTTPRequestHandler):
                 "row_limit": D1_ROW_LIMIT,
                 "max_note_length": MAX_NOTE_LENGTH,
                 "judgments_file": repo_path(JUDGMENTS_FILE),
+                # Column order for the raw-row view, so it reads as the table row
+                # it is rather than as whatever order a dict happens to hold.
+                "columns": list(CSV_COLUMNS),
             })
         elif path == "/api/alerts":
             self._send_json(dataset_payload())
@@ -1075,6 +1227,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(load_d1(source))
                 else:
                     raise ToolError(f"Unknown source: {source}")
+            elif path == "/api/audience":
+                self._send_json(alert_audience(body.get("id", "")))
             elif path == "/api/cutoff":
                 self._send_json(set_cutoff(body.get("cutoff", "")))
             elif path == "/api/judge":
@@ -1151,6 +1305,7 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"Alert review → {url}\n"
           f"Alerts: {loaded}\n"
+          f"Audience: {audience_state()['detail']}\n"
           f"Judgments: {len(_judgments)} in {JUDGMENTS_FILE.name}, "
           f"{len(_issues)} issue(s) in {ISSUES_FILE.name}\n"
           "Ctrl+C to stop.")
