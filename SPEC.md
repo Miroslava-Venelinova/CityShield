@@ -14,7 +14,7 @@ official sources ──► scheduled() every 15 min ──► D1 ──► fetch
 This document specifies the system **as built**. It is the reference for how each
 part behaves and, more importantly, *why* — most of the non-obvious rules here
 exist because the obvious version broke something. [TODO.md](TODO.md) tracks what
-is left before a Play Store release; [SETUP.md](SETUP.md) is the operator's
+is left before a Play Store release, and its §7 is the operator's
 account/credential checklist; [COMPLIANCE.md](COMPLIANCE.md) holds the GDPR
 paperwork record.
 
@@ -1108,7 +1108,7 @@ Both flows are built, tested and live in the app; **delivery is mocked** —
 `core/mailer.ts` composes each message in full and logs its link instead of
 sending it, so nobody can receive one in production. Making it real is a
 one-function change plus paperwork (§2.2); the decision it waits on is in
-[SETUP.md](SETUP.md).
+[TODO.md](TODO.md) §7.5.
 
 - `auth_tokens` (migration 0006) holds only the **SHA-256** of each link token,
   scoped by `purpose`, single-use, cascading with the user. Issuing deletes the

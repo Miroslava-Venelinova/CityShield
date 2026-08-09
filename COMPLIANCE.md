@@ -148,7 +148,7 @@ Per §2.2 — confirm each before the Play release:
       recorded for push and does not change. Also widen the Play Data Safety
       purpose for the email address to include Account management.
       If OneSignal's email channel turns out not to fit (free-tier volume,
-      unsubscribe-footer requirements, sending-domain verification — see SETUP §5),
+      unsubscribe-footer requirements, sending-domain verification — see TODO §7.5),
       the fallback is a separate transactional provider, and then this reverts to
       a full new-processor item: its own DPA, transfer mechanism, `/privacy` row
       and §1 table row.

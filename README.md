@@ -12,7 +12,8 @@ The entire server side runs as a **single TypeScript Cloudflare Worker** on
 Cloudflare's free plan. A React Native app is the client.
 
 - **[SPEC.md](SPEC.md)** — the system specification: how every part works, and why.
-- **[TODO.md](TODO.md)** — what is left before a Play Store release.
+- **[TODO.md](TODO.md)** — what is left before a Play Store release, and the operator
+  setup checklist (§7).
 
 ---
 
@@ -108,8 +109,7 @@ CityShield/
 │   └── push-tester/          Local UI that fires a test push at one user or everyone
 ├── setup.bat                 Windows: install deps for frontend and/or backend
 ├── SPEC.md                   System specification (architecture, contracts, GDPR, ops)
-├── TODO.md                   Remaining work before release
-├── SETUP.md                  Operator setup checklist (accounts & secrets)
+├── TODO.md                   Remaining work before release + operator setup checklist
 └── COMPLIANCE.md             GDPR record (Play Data Safety, DPIA, breach runbook)
 ```
 
@@ -124,7 +124,7 @@ CityShield/
 | [Android Studio](https://developer.android.com/studio) (or a device) | Mobile app |
 | A [OneSignal](https://onesignal.com) app (free plan) | Push notifications |
 
-See [SETUP.md](SETUP.md) for the exact accounts, secrets, and one-time provisioning
+See [TODO.md](TODO.md) §7 for the exact accounts, secrets, and one-time provisioning
 the operator needs to supply.
 
 On Windows, **`setup.bat`** in the repo root installs the npm packages for both
@@ -204,7 +204,7 @@ full contract, including status codes and DTO shapes, is [SPEC.md](SPEC.md) §1.
 ## Deployment
 
 The Worker deploys with Wrangler; TLS and scaling are handled by Cloudflare.
-Remote D1 and secrets must be provisioned first — see [SETUP.md](SETUP.md) and
+Remote D1 and secrets must be provisioned first — see [TODO.md](TODO.md) §7 and
 [SPEC.md](SPEC.md) §3.3.
 
 Currently live at `https://cityshield.cityshield-varna.workers.dev` (D1 in `weur`,
@@ -227,8 +227,7 @@ stack — merging it forward is a prerequisite for CI deploys ([TODO.md](TODO.md
 | Document | Contents |
 |---|---|
 | [SPEC.md](SPEC.md) | System specification — architecture, data model, API contract, ingestion, GDPR, operations |
-| [TODO.md](TODO.md) | Remaining work before release |
-| [SETUP.md](SETUP.md) | Operator setup — accounts, secrets, provisioning |
+| [TODO.md](TODO.md) | Remaining work before release; §7 is the operator setup — accounts, secrets, provisioning |
 | [COMPLIANCE.md](COMPLIANCE.md) | GDPR record — Play Data Safety answers, DPIA/DPO reasoning, breach runbook |
 | [frontend/SETUP.md](frontend/SETUP.md) | Mobile app development environment |
 | [tools/osm-seed-builder/README.md](tools/osm-seed-builder/README.md) | Building the regions/streets reference data from OSM |
