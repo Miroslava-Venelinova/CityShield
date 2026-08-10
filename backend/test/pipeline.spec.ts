@@ -40,14 +40,16 @@ describe("processOutageMessage (mocked AI)", () => {
       city_wide: false,
     });
 
-    const ok = await processOutageMessage(env, "VIK", "vik", "Авария", "Спиране на водата", "id=1");
+    const ok = await processOutageMessage(
+      env, "VIK", "vik", "Авария", "Спиране на водата в кв. Аспарухово", "id=1");
     expect(ok).toBe(true);
 
     const today = sofiaToday();
     const inputs = captured[0] as { messages: Array<{ role: string; content: string }>; max_tokens: number };
     expect(inputs.max_tokens).toBe(10_000); // qwen3 reasoning headroom (spike 2)
     // The pipeline prepends the current date so the model can default it.
-    expect(inputs.messages[1]!.content).toBe(`CURRENT_DATE: ${today}\nАвария\nСпиране на водата`);
+    expect(inputs.messages[1]!.content)
+      .toBe(`CURRENT_DATE: ${today}\nАвария\nСпиране на водата в кв. Аспарухово`);
 
     const row = await env.DB.prepare("SELECT * FROM alerts").first<Record<string, string>>();
     expect(row!.category).toBe("vik");

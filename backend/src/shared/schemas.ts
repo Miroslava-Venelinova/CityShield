@@ -120,6 +120,11 @@ export interface ProcessedData {
     /** Set by normalize.ts when the message hedges ("в района на …"): the street
      *  list says where the area is, not who is in it. See A6. */
     region_wide?: boolean;
+    /** Why `buildPolygonForStreets` returned nothing, when `is_polygon` was set
+     *  and no geometry came back. Carried into the stored DTO so a build failure
+     *  stops being indistinguishable from a message that never wanted a block —
+     *  see AlertLocationDTO.polygon_failed. */
+    polygon_failure?: string;
   }>;
   city_wide: boolean;
   /** Envelope derived from the schedule; what every legacy reader still uses. */

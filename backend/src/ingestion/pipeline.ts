@@ -4,7 +4,8 @@
 // store-first / notification-failure-never-fails rule.
 
 import {
-  type AlertPayload, incrementPushAttempts, markAlertNotified, sendUsersNotification, storeAlert,
+  type AlertPayload, incrementPushAttempts, markAlertNotified, sendUsersNotification,
+  settlementScope, storeAlert,
 } from "../core/alert-service";
 import { getRegions, getStreets } from "../db/queries";
 import type { Env } from "../env";
@@ -151,27 +152,35 @@ export async function processOutageMessage(
     start_time,
     end_time,
     windows,
-  }, message, { regions: await getRegions(env), streets: await getStreets(env) });
+  }, message, { regions: await getRegions(env), streets: await getStreets(env) }, category);
 
   // For every location marked is_polygon, build a GeoJSON polygon from its
-  // street list. Polygon failures leave polygon_geojson unset — never fail
-  // the message over a polygon (port of build_polygons).
+  // street list. Polygon failures leave polygon_geojson unset but record WHY —
+  // never fail the message over a polygon (port of build_polygons).
   for (const location of processed.locations) {
     if (!location.is_polygon) continue;
     // A polygon is an enhancement; out of budget just means no polygon, and
     // the store+notify below still has to happen for this message.
     if (expired(deadline, POLYGON_MIN_BUDGET_MS)) {
       console.warn(`[${tag}] Skipping polygon build for ${msgRef} — low on time budget.`);
+      location.polygon_failure = "out of time budget";
       continue;
     }
-    // `location.settlement` is available here now, and it is what the Overpass
-    // scope bug needs — polygon.ts hardcodes area["name"="Варна"], which matches
-    // the province. Threading it through is not enough on its own (the city and
-    // the province share the name, so it also needs admin_level pinning, and
-    // villages have no boundary relation to pin at all), so that fix lands
-    // separately. See SPEC.md §1.7.
-    const polygon = await buildPolygonForStreets(env, location.streets, deadline);
-    location.polygon_geojson = polygon ?? undefined;
+    // The settlement is what both halves of the polygon path were missing: the
+    // street resolution had no scope, so it picked rows from other towns, and the
+    // Overpass query was hardcoded to Варна, so it asked the wrong place about
+    // them. Resolved to a row here because polygon.ts needs its centroid, not
+    // just its name — see SETTLEMENT_STREET_REACH_KM.
+    const scope = settlementScope(location.settlement, location.area, await getRegions(env));
+    if (scope === null) {
+      const reason = `no seeded settlement for "${location.settlement ?? location.area ?? "?"}"`;
+      console.warn(`[${tag}] Skipping polygon build for ${msgRef} — ${reason}.`);
+      location.polygon_failure = reason;
+      continue;
+    }
+    const result = await buildPolygonForStreets(env, location.streets, scope, deadline);
+    location.polygon_geojson = result.polygon ?? undefined;
+    if (!result.polygon) location.polygon_failure = result.reason ?? "unknown";
   }
 
   return ingestAlert(env, tag, category, title, content, processed, msgRef, deadline);
