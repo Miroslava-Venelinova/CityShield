@@ -76,11 +76,16 @@ def similarity(a: str, b: str) -> float:
 
 KIND_CLASS = {
     "ул.": "street", "бул.": "street", "ал.": "street", "пл.": "street",
-    # кв. and ж.к. name the same city districts in these sources.
-    "ж.к.": "district", "кв.": "district",
+    # Every kind that names a place INSIDE a settlement shares one class: the
+    # sources use them interchangeably. кв. and ж.к. always did, and the
+    # 08.08.2026 review found м-т and с.о. doing the same — epro writes
+    # "м-ст Изгрев" for the row the seed carries as "кв. Изгрев", and "м-т Ален
+    # мак" for an с.о. villa zone. Held apart, those three matched nothing.
+    #
+    # к.к. stays out: it is the one the sources do NOT confuse, and alert
+    # 584f1445 pinned "ж.к. Чайка" on к.к. Чайка when the kind stopped deciding.
+    "ж.к.": "district", "кв.": "district", "м-т": "district", "с.о.": "district",
     "к.к.": "resort",
-    "м-т": "locality",
-    "с.о.": "so",
     "с.": "village",
     "гр.": "city",
 }
@@ -436,14 +441,19 @@ def settlement_scope(settlement, area, tables):
     for name in (settlement, area):
         if name is None:
             continue
+        # A written "гр."/"с." names a settlement in its own right, so it IS the
+        # scope and the parent-link branch must not get to it first. Варна
+        # province holds two places called Припек 10 km apart — the village and a
+        # suburb of Константиново — and landing on the suburb meant following its
+        # parent link and answering with Константиново's centroid, 1.7 km off.
+        written = settlement_of(name)
+        if written != DEFAULT_SETTLEMENT:
+            return match_region(written, tables, in_settlement=None)
         row = match_region(name, tables)
         if row is not None and row.settlement_id is not None:
             parent = tables.region_by_id.get(row.settlement_id)
             if parent is not None:
                 return parent
-        written = settlement_of(name)
-        if written != DEFAULT_SETTLEMENT:
-            return match_region(written, tables, in_settlement=None)
     return match_region(DEFAULT_SETTLEMENT, tables, in_settlement=None)
 
 
@@ -481,6 +491,53 @@ def read_location(location):
 
 def _users_by_region(tables, region_id):
     return [u.user_id for u in tables.users if u.region_id == region_id]
+
+
+# How far from a settlement's centroid a user with NO region of their own still
+# counts as inside it — alert-service.ts's SETTLEMENT_REACH_KM.
+SETTLEMENT_REACH_KM = 9
+
+
+def _users_by_region_wide(tables, region):
+    """
+    getUserIdsByRegionWide: a region that holds districts is a SETTLEMENT, and
+    its audience is everyone under any of them — except the city, which is not an
+    audience at all.
+
+    `region_id = ?` is right for a district and close to useless for a settlement
+    that holds any. A user inside it reverse-geocodes to their district and
+    carries that district's region_id, so a settlement-wide alert reached only
+    the residue whose reverse geocode hit no district we seed. Villages are
+    unaffected — no district level exists under them — which is also the test: a
+    region no seeded row claims as its parent is a leaf.
+
+    **§5.1, decided 10.08.2026: a failed extraction notifies nobody.** A genuine
+    whole-city outage is published in words and routed to `city_wide`, so a
+    location resolving to the city row with no area and no matched street is a
+    district that got lost. Widening that to ~90 districts would be a city-sized
+    push decided by an extraction we already know failed.
+    """
+    if parse_name(region.name)[1].strip().lower() == DEFAULT_SETTLEMENT.lower():
+        return [], -1
+
+    districts = [r for r in tables.regions
+                 if r.settlement_id == region.id and r.id != region.id]
+    if not districts:
+        return _users_by_region(tables, region.id), 0
+
+    ids = {region.id} | {d.id for d in districts}
+    placed = [u.user_id for u in tables.users if u.region_id in ids]
+
+    unplaced = []
+    if region.lat is not None and region.lng is not None:
+        for u in tables.users:
+            if u.region_id is not None or u.latitude is None or u.longitude is None:
+                continue
+            if distance_km(u.latitude, u.longitude,
+                           region.lat, region.lng) <= SETTLEMENT_REACH_KM:
+                unplaced.append(u.user_id)
+
+    return list(dict.fromkeys(placed + unplaced)), len(districts)
 
 
 def _users_unplaced_in_region(tables, region_id):
@@ -537,6 +594,31 @@ def _region_lng(tables, region_id):
     return row.lng if row else None
 
 
+# How far outside a ring a user still counts as inside it — alert-service.ts's
+# POLYGON_TOLERANCE_M. A ring edge sits a road half-width off an OSM centreline,
+# the centreline is sketched, and the point is a phone's GPS fix; a hard in/out
+# test against all three errors drops residents standing on their own doorstep.
+POLYGON_TOLERANCE_M = 30
+
+
+def _distance_to_ring_m(lat, lng, ring):
+    """Metres to the nearest edge of a ring, 0 inside it — geo.ts's distanceToRingM."""
+    if point_in_ring(lat, lng, ring):
+        return 0.0
+    m_per_lat = 111_320.0
+    m_per_lng = 111_320.0 * math.cos(math.radians(lat))
+    best = float("inf")
+    ax, ay = (ring[-1][0] - lng) * m_per_lng, (ring[-1][1] - lat) * m_per_lat
+    for elng, elat in ring:
+        bx, by = (elng - lng) * m_per_lng, (elat - lat) * m_per_lat
+        dx, dy = bx - ax, by - ay
+        len_sq = dx * dx + dy * dy
+        t = 0.0 if len_sq == 0 else max(0.0, min(1.0, (-ax * dx - ay * dy) / len_sq))
+        best = min(best, math.hypot(ax + t * dx, ay + t * dy))
+        ax, ay = bx, by
+    return best
+
+
 def _users_in_polygon(tables, polygon_json):
     ids = set()
     rings = 0
@@ -549,14 +631,20 @@ def _users_in_polygon(tables, polygon_json):
             continue
         rings += 1
         min_lat, max_lat, min_lng, max_lng = box
+        # The prefilter is widened by the same tolerance the exact test allows,
+        # or the band does nothing at the corners.
+        d_lat = POLYGON_TOLERANCE_M / 111_320.0
+        d_lng = POLYGON_TOLERANCE_M / (111_320.0 * math.cos(
+            math.radians((min_lat + max_lat) / 2)))
         for u in tables.users:
             # The Worker's SQL bbox prefilter; a NULL coordinate never matches
             # a BETWEEN, so an unplaced user is out of a polygon audience.
             if u.latitude is None or u.longitude is None:
                 continue
-            if not (min_lat <= u.latitude <= max_lat and min_lng <= u.longitude <= max_lng):
+            if not (min_lat - d_lat <= u.latitude <= max_lat + d_lat
+                    and min_lng - d_lng <= u.longitude <= max_lng + d_lng):
                 continue
-            if point_in_ring(u.latitude, u.longitude, ring):
+            if _distance_to_ring_m(u.latitude, u.longitude, ring) <= POLYGON_TOLERANCE_M:
                 ids.add(u.user_id)
     return list(ids), rings
 
@@ -590,11 +678,21 @@ def target_location(location, tables, index):
     polygon = location.get("polygon_geojson")
     if location.get("is_polygon") is True and isinstance(polygon, dict):
         ids, rings = _users_in_polygon(tables, polygon)
-        result["method"] = "polygon"
-        result["user_ids"] = ids
-        result["note"] = (f"everyone inside the ring ({rings} ring(s))" if rings
-                          else "the geometry holds no usable ring — nobody is inside it")
-        return result
+        if ids:
+            result["method"] = "polygon"
+            result["user_ids"] = ids
+            result["note"] = f"everyone inside the ring ±{POLYGON_TOLERANCE_M} m ({rings} ring(s))"
+            return result
+        # An empty ring is not evidence that nobody is affected — it is equally
+        # "the geometry is wrong" or "these residents have not set a location".
+        # The Worker falls through to the street/region audience rather than
+        # letting the exclusive polygon branch notify nobody.
+        #
+        # Its own field, not `note`: every branch below assigns `note`, and the
+        # ring's verdict is the thing a reviewer most wants beside the audience
+        # that replaced it.
+        result["polygon"] = (f"no user is inside the ring ({rings} ring(s)) — "
+                             f"fell back to street/region targeting")
 
     settlement_name, area, named, region_wide = read_location(location)
     settlement = settlement_scope(settlement_name, area, tables)
@@ -657,12 +755,20 @@ def target_location(location, tables, index):
                           "unscoped one would notify a like-named street elsewhere")
 
     if region is not None:
-        result["method"] = result["method"] or "region"
-        result["user_ids"] = _users_by_region(tables, region.id)
-        if not result["note"]:
-            result["note"] = f"every user registered under {region.name}"
+        ids, districts = _users_by_region_wide(tables, region)
+        result["user_ids"] = ids
+        if districts < 0:
+            result["method"] = "none"
+            under = (f"{region.name} alone is not an audience: a whole-city outage is "
+                     f"published as city-wide, so this is a lost district — nobody notified")
+        elif districts:
+            result["method"] = "settlement"
+            under = (f"every user under {region.name} or any of its {districts} district(s), "
+                     f"plus anyone unplaced within {SETTLEMENT_REACH_KM} km")
         else:
-            result["note"] += f" → every user registered under {region.name}"
+            result["method"] = result["method"] or "region"
+            under = f"every user registered under {region.name}"
+        result["note"] = f"{result['note']} → {under}" if result["note"] else under
     else:
         result["method"] = "none"
         result["user_ids"] = []

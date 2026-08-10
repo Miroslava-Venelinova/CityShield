@@ -950,6 +950,14 @@ function rawRow(alert) {
  * difference decides who gets notified: with a polygon the Worker notifies
  * everyone inside the ring, without one it falls back to matching the location
  * by name and radius. Say which of the two actually happened.
+ *
+ * `polygon_failed` is the third state, and it is the one that misled the
+ * 08.08.2026 review. The Worker MUST clear `is_polygon` when no geometry was
+ * built — targeting an empty ring notifies nobody — so a build failure used to
+ * be indistinguishable from a message that never mentioned a block, and the
+ * "polygon flagged, no geometry" badge below could not fire on a stored row at
+ * all. All four ★ alerts in that window read as an AI miss; the deterministic
+ * guard had fired correctly on every one of them and the BUILD was what failed.
  */
 function polygonBadge(loc, shape) {
   if (loc.is_polygon && shape.rings.length) {
@@ -957,6 +965,11 @@ function polygonBadge(loc, shape) {
     return `<span class="badge">polygon · ${points} pts</span>`;
   }
   if (loc.is_polygon) return '<span class="badge warning">polygon flagged, no geometry</span>';
+  if (loc.polygon_failed) {
+    const why = loc.polygon_failure ? ` — ${escapeHtml(loc.polygon_failure)}` : "";
+    return `<span class="badge warning" title="${escapeHtml(loc.polygon_failure || "")}">` +
+      `polygon requested, build failed${why}</span>`;
+  }
   return shape.rings.length ? '<span class="badge warning">geometry, not flagged</span>' : "";
 }
 

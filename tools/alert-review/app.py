@@ -907,6 +907,15 @@ def summarize() -> dict:
                     "lat": location.get("lat"),
                     "lng": location.get("lng"),
                     "is_polygon": bool(location.get("is_polygon")),
+                    # A polygon was asked for and the build produced none. The
+                    # Worker has to clear `is_polygon` in that case — targeting
+                    # an empty ring notifies nobody — so until it started writing
+                    # this field the two populations were byte-identical once
+                    # stored, and the badge below could never fire. Every ★ note
+                    # in the 08.08.2026 review blamed the AI for a failure the
+                    # deterministic guard had gotten right.
+                    "polygon_failed": bool(location.get("polygon_failed")),
+                    "polygon_failure": location.get("polygon_failure"),
                     "polygon_points": polygon_points(location.get("polygon_geojson")),
                     "region_wide": bool(location.get("region_wide")),
                     "sublocations": [str(s) for s in location.get("sublocations", [])
@@ -1070,6 +1079,9 @@ def render_markdown(summary: dict) -> str:
                 points = location["polygon_points"]
                 if location["is_polygon"]:
                     polygon = f" · polygon, {points} pts" if points else " · **polygon flagged, no geometry**"
+                elif location["polygon_failed"]:
+                    why = location["polygon_failure"]
+                    polygon = " · **polygon requested, build failed**" + (f" ({why})" if why else "")
                 else:
                     polygon = f" · **geometry not flagged**, {points} pts" if points else ""
                 # The streets below were listed but not targeted — say so, or the
