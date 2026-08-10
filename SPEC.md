@@ -338,9 +338,19 @@ district in the city — so those alerts pinned a village and, because a user's
 1. `parseName(raw)` → `{kind, core}`, recognising every spelling the sources
    actually write (`ЖК`, `ж.к`, `м.`, `м-ст`, `ж.к "Младост"`, `ул.7`), not just
    the canonical one the prompt asks for.
-2. Match on `core`, with the kind as a **filter**: a `к.к.` is never a `кв.`
-   (`кв.` and `ж.к.` deliberately share a class — the sources use them
-   interchangeably), and a kindless seeded row stays compatible with anything.
+2. Match on `core`, with the kind as a **filter**: a `к.к.` is never a `кв.`,
+   and a kindless seeded row stays compatible with anything. Every kind that
+   names a place *inside* a settlement — `кв.`, `ж.к.`, `м-т`, `с.о.` — shares
+   one class, because the sources use them interchangeably for the same place:
+   epro writes `м-ст Изгрев` for the row the seed carries as `кв. Изгрев`, and
+   `м-т Ален мак` / `м-т Добрева чешма` for two `с.о.` villa zones. Held apart,
+   those three matched nothing at all and `м-ст Изгрев` landed on the *village*
+   Изгрев 25 km out, whose seeded name is bare and therefore compatible with
+   everything. **`к.к.` deliberately stays out of that merge** — it is the one
+   the sources do not confuse, and it is measured: alert 584f1445 pinned
+   `ж.к. Чайка` on к.к. Чайка when the kind stopped deciding, and `к.к. Чайка` is
+   the closer *literal* spelling of the two, which is this module's last
+   tie-break.
 3. **Threshold 0.40**, not 0.30 — stripping the prefix raises every score, and
    over the 102 distinct location names the pipeline has produced every wanted
    match lands ≥ 0.417 and every false positive ≤ 0.357.
@@ -589,8 +599,16 @@ Enrichment never throws: an alert without coordinates is still worth storing.
 
 **Targeting** (`sendUsersNotification`) — the decision tree, in order:
 
-1. **Locations present** → per location: polygon → bbox + ray-cast (§1.3);
-   otherwise a kind-aware region match on `area ?? settlement` — the most
+1. **Locations present** → per location: polygon → bbox + ray-cast within a
+   **30 m tolerance band** (§1.3), and if that ring matches **nobody**, fall
+   through to the street/region audience the same location would otherwise have
+   had. The band exists because a ring edge sits a road half-width off a sketched
+   OSM centreline and the point tested is a phone's GPS fix; the fallback exists
+   because the polygon branch is exclusive, so a built ring that matched nobody
+   used to notify nobody where the same alert with no polygon would have reached
+   the whole district. Neither exposure had fired only because every polygon in
+   the 08.08.2026 window failed to build — luck, not design.
+   Otherwise a kind-aware region match on `area ?? settlement` — the most
    specific place named, which is exactly what the flat schema resolved — and
    street matches resolved
    **independently of the region** but **inside the location's settlement**.
@@ -620,6 +638,26 @@ Enrichment never throws: an alert without coordinates is still worth storing.
    the intent; widening to the whole settlement because the message said "в
    района на" is not, and before the split the bare city simply failed to resolve
    and the streets were kept.
+   **When no street survives and the region IS a settlement that holds seeded
+   districts, the audience is every user under any of them**, plus anyone with a
+   position and no region at all inside `SETTLEMENT_REACH_KM` (9 km) of its
+   centroid. `getUserIdsByRegion` is `WHERE region_id = ?`, which is right for a
+   district and close to useless for a settlement that holds any: a user inside
+   one reverse-geocodes most-specific-first (suburb, neighbourhood, locality,
+   quarter, city_district, city, …) and so carries their *district's* region_id —
+   the settlement row matched only the residue whose reverse geocode hit no
+   district we seed. Villages are unaffected because there is no district level
+   under them, which is also the test: a region no seeded row claims as its
+   parent is a leaf and keeps the plain query.
+   **The city is the exception, and it notifies nobody** (§5.1, decided
+   10.08.2026: *a failed extraction notifies nobody*). A genuine whole-city outage
+   is published in words and routed to `city_wide`, which has its own fan-out, so
+   a location resolving to the Варна row with no area and no matched street is by
+   construction a district that got lost — either the model dropped it or every
+   named street failed to match. Widening that to the city's ~90 districts would
+   be a city-sized push decided by an extraction already known to have failed.
+   Reaching nobody is the wrong outcome too, but it is the recoverable one, and
+   it is now loud rather than silent.
 2. **No locations and `city_wide === false`** → **store only, never broadcast.**
    The scraper explicitly said this is not city-wide yet produced no locations,
    which is almost certainly an LLM misparse of a street-level outage. This guard
@@ -819,6 +857,11 @@ in production output:
 | A6 | An area cue in the message (`в района на`, `района около`, `прилежащите улици`, `в близост до`, `околните/съседните улици`) plus ≥1 street sets `region_wide` on the location | The streets in a hedged message say *where* the outage is, not who is in it — targeting only those exact streets asserted a precision the source never gave, and missed the resident one street over |
 | A8 | A `city_wide: true` with no locations is demoted to `false` unless the message says city-wide in words — the same phrases A3 promotes on | A3 only ever promoted *into* city-wide, so a `city_wide` the model invented outright reached `sendUsersNotification` unchecked, and an empty location list there is answered with a broadcast. The widest action in the system had no deterministic guard at all |
 | A9 | When `settlement` and `area` both resolve to rows with coordinates and measure more than 20 km apart, the **settlement** is dropped | `с. Аврен` + `кв. Виница` is incoherent and silent: targeting follows the area, street scope follows the settlement, so the alert reaches one settlement while its streets are looked up in another. `regions` carries no parent link to check containment with, so the coordinates decide; dropping the settlement lands back on `settlementOf`'s Варна default, which is the pre-split behaviour rather than a new guess |
+| A10 | Every slot and street whose core does not appear in the source text is dropped. Lenient — one word of the core, matched at trigram ≥ 0.6 against one word of the message | Every guard above reasons about names the model *produced*; none asked whether the message says them. `40b78a66`'s entire source is one district (`ж.к Трошево`); the stored parse held six locations including a village 23 km away, and nothing deterministic could tell. Omission has no deterministic fix — **invention does**. Deliberately the weakest form of the test, because this guard DELETES data and a false positive is a silenced alert |
+| A11 | Locations with the same `(settlement, area, region_wide)` are merged, unioning their street lists. Polygons never merge | `52e21c59` produced `кв. Цветен` three times byte-identical; `c12154c9` four `гр. Варна` entries with one street each. Every duplicate costs a pin, a repeated enrichment (up to a Nominatim round trip on the ingest deadline) and a repeated targeting query. `region_wide` is part of the key so merging cannot widen the narrower entry |
+| A12 | A message opening a block **twice** (`каре … и карето …`) with streets between the two cues becomes **two** polygon locations, split by where each street is named. A street named in both halves stays in both | Both the prompt and A2 assumed one polygon per message. `d29913c5` came back as one entry with all seven streets of two disjoint blocks, which cannot close a single ring however well the names resolve |
+| A13 | An entry named inside an explicit `улиците:` list is never promoted by A4 | epro writes `гр. X – улиците: A, B, C`, and A4 lifted list entries into locations of their own: `5b048900` pinned `Георги Бенковски` on с. Бенковски 30 km from Суворово, and `0d59345b` made `Васил Левски` the *area* of a Вълчи дол alert, which then resolved to Varna's street of that name. The marker had already answered the question A4 was guessing at |
+| A14 | Streets named **only after** a remedy cue (`водоноска`, `кръстовището между`) are dropped; the location itself stays | `675df786`: "разположена водоноска на кръстовището между ул. Юпитер и ул. Сатурн" is a water truck parked at a junction — the streets locate the fix, not the outage. Positional, so a message naming the outage's own streets *before* the remedy keeps them. Runs **before A2**, because `POLYGON_CUE` contains `между` and a third street would otherwise turn the parking spot into a block |
 
 **A6 changes targeting only.** The street list stays on the location, so the feed,
 the pin and the review tool still show the most specific thing the message said;
@@ -952,14 +995,40 @@ any failure — the source then skips the message and retries next tick.
 For a location the model marked `is_polygon: true`, I/O and CPU are deliberately
 separated:
 
-1. **Resolve street names** against the `streets` table at threshold **0.4**.
-   Fewer than three resolved → log and return `null`.
-2. **Fetch geometries** with one Overpass QL query:
-   `area["name"="Варна"]["boundary"="administrative"]` → `way(area.a)["highway"]
-   ["name"~"^(…)$"]` → `out geom`. Names are escaped twice — regex metacharacters
-   (a real seeded name is `Боровец-юг 9-та (бул. Тих кът)`) and the double quote,
-   which would otherwise close the Overpass string literal. Responses are cached
-   in module memory (50 entries) keyed by the sorted street list. A **descriptive
+1. **Resolve street names** with `matchStreet(raw, streets, scope.id, 0.4)` —
+   kind-aware, core-based and **scoped to the location's settlement**, the same
+   call every other street lookup makes. Fewer than three resolved → return a
+   null polygon carrying the reason and the names that failed.
+   This was the last unscoped street lookup in the codebase, and it compared
+   whole *written* names against whole *stored* names, so a stored kind prefix
+   decided the winner: `ул. Никола Вапцаров` resolved to Горица's
+   `ул.Никола Вапцаров` (0.80 literal) over Варна's bare `Никола Вапцаров`
+   (0.58) — and the resolved *name* is what goes to Overpass, where the glued
+   form matches **zero** ways inside Варна and the bare one matches eleven.
+   Three of the 08.08.2026 review's four ★ polygon failures are exactly this.
+2. **Fetch geometries** with one Overpass QL query, scoped to the settlement:
+   `area["name"="<settlement>"]["boundary"="administrative"]["admin_level"="8"]`
+   → `way(area.a)["highway"]["name"~"^(…)$"]` → `out geom`, then **every returned
+   way further than 12 km from the settlement centroid is dropped**.
+   Level 8 is Bulgaria's населено място — measured, not assumed: `rel(13477567)`
+   ("Варна", level 8) contains exactly one `place` settlement, the city. (The repo
+   previously carried two contradictory records of this; the seed tool's "it is
+   the община" was the wrong one.) Pinning it removes the province from the union
+   but **not** a same-named settlement in another province — there are two level-8
+   `Бяла` — and most villages have no boundary relation at any level, so the
+   distance filter and an `around:12000` fallback both remain.
+   A small curated map folds OSM **spelling variants** of one street under the
+   name it resolved to before the geometry is grouped: `бул. Януш Хуняди` carries
+   a single 118 m way in Варна while the rest of the same boulevard continues as
+   `бул. Янош Хунияди`. Curated rather than computed because it is measured to be
+   unlearnable — the two spellings score 0.389 on their cores, below the 0.667 of
+   `Младост 1`/`Младост 2`, so no threshold separates a transliteration from two
+   different numbered places.
+   Names are escaped twice — regex metacharacters (a real seeded name is
+   `Боровец-юг 9-та (бул. Тих кът)`) and the double quote, which would otherwise
+   close the Overpass string literal. Responses are cached in module memory (50
+   entries) keyed by **settlement plus** the sorted street list — keying on the
+   names alone served one town's geometry for another's. A **descriptive
    User-Agent is mandatory**: `overpass-api.de` answers a browser UA with 406.
 3. **Project** to a local metric frame (equirectangular:
    `x = (lon−lon₀)·111320·cos(lat₀)`, `y = (lat−lat₀)·111320`).
@@ -1379,8 +1448,36 @@ DNS rebinding.
   known lossiness.
   **Sweeping a province is the one-input path**, and produces the three levels
   §1.7 targets by: every `place=city|town|village|hamlet` in the province, then
-  per settlement one query returning both the districts inside its own
-  `admin_level 8` boundary and its streets. A district's settlement is therefore
+  per settlement one query returning both the districts inside its own boundary
+  and its streets — bounded by that boundary relation's **OSM element id**, taken
+  from the province-scoped enumeration. It used to re-resolve the settlement *by
+  name* per request, with `admin_level` pinned but no province filter, and
+  settlement names repeat all over Bulgaria: two Бяла, two Левски, two Дебелец,
+  two Войводино, two Ботево, two Искър, **four** Горица. `map_to_area` unioned
+  every one of them, and 420 of the seed's 2,974 streets came back from another
+  province — Бяла's 177 from Бяла in Русе, 185 km away, while ViK published for
+  the real Бяла three times in one review window. A name resolving to more than
+  one relation *inside* the province is now reported and skipped, never unioned.
+  Two backstops sit behind it and never fired on the 10.08.2026 re-sweep, which
+  is the evidence the root cause is gone: any extraction further than **15 km**
+  from the settlement centre is dropped and reported, and a name that is only a
+  kind word (`Площад`, which reached the seed and can never match anything) is
+  dropped. `backend/seeds/verify.mjs` re-checks the distance rules over the
+  checked-in JSON and `test/seeds.spec.ts` fails the build if either breaks.
+  `locality` is in `DISTRICT_PLACES` because `м-т` (местност) is what OSM tags
+  that way; it added ~90 rows, and `core/geocoding.ts` had to learn the same level
+  or those rows could be matched by an alert and never carry a user.
+  **A district may not displace a settlement.** Since migration 0017 a settlement
+  row and a district row of one name are two different places by construction, so
+  the authoritative district pass no longer retires parentless rows — that is
+  what deleted `с. Припек`. Варна province holds two Припек 10 km apart, the
+  village and a suburb of Константиново, and with the village gone `с. Припек`
+  had only the suburb to match and followed its parent link onto Константиново.
+  A district is refused outright only when it carries a settlement's name *and*
+  stands within `SAME_PLACE_KM` (2 km) of it; the proximity half is required, or
+  the rule also refuses the resort suburb `Чайка` because a village of that name
+  exists 50 km away.
+  A district's settlement is therefore
   the query rather than an inference, which is where `regions.settlement_id`
   (0016) comes from. Варна province is 171 settlements, ~2,900 streets and 80
   districts in ~31 s against the self-hosted instance — one request per
@@ -1459,6 +1556,32 @@ DNS rebinding.
   it: `SELECT source, last_id, updated_at FROM crawl_state`, then fetch
   `last_id + 1` from the source by hand. If the page is there and parses, the
   fault is ours and downstream of the fetch.
+  **The tick now says so itself**: `runIngestion` ends by warning
+  `Source '<name>' has not advanced its cursor in N h` past 6 hours. It is the
+  cheap half of the cursor-pin problem — the real fix is a pre-store attempt
+  counter, which means deliberately skipping a public-safety alert after N
+  strikes and is a product decision. 6 hours is set against the *quietest*
+  source (vt and heating publish a handful of items a week) and is well inside
+  the 20-hour outage of 30.07.2026.
+- **An alert that reached nobody now says so.** `sendUsersNotification` warns
+  `Alert '…' notified NOBODY` with a per-location trace — the resolved
+  settlement, region and every street's match or miss — and warns per location
+  for any that resolves to nothing even when the alert as a whole reached
+  someone. Reach failures are the dangerous class precisely because they leave no
+  other trace: the alert is stored, `notified_at` is stamped, the cursor
+  advances, and "correctly reached nobody" was byte-identical to "the matcher
+  lost the district and the whole city was not told the water is off". Grep the
+  tail for `[targeting]`. The trace shape deliberately mirrors
+  `tools/alert-review/targeting.py`, so the live logs and the offline simulator
+  stay comparable.
+- **A polygon that was asked for and not built** is recorded as
+  `polygon_failed` inside `locations_json` (with the build's reason). `is_polygon`
+  still has to be cleared — targeting an empty ring notifies nobody — and
+  clearing it *alone* made a build failure indistinguishable from a message that
+  never mentioned a block: 252 of 252 stored locations in the 08.08.2026 window
+  read as "the AI missed the cue" when the deterministic guard had fired
+  correctly every time. `SELECT` on that key answers "is the polygon path working
+  yet" without reading a single map.
 - **A source that returns 200 and nothing useful is the failure mode to watch.**
   Both source-side ingestion outages so far (epro's contract change, ViK's
   region-scoped listing) looked healthy in the logs. Periodically compare what the
