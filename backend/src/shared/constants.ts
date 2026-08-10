@@ -105,10 +105,17 @@ Every entry in "locations" describes ONE place, in three slots:
 - Example: "гр. Варна - ул. Неофит Бозвели 46; ул. Ангел Кънчев 3" gives "locations": [{"settlement": "гр. Варна", "area": null, "streets": ["ул. Неофит Бозвели", "ул. Ангел Кънчев"], "is_polygon": false}]
 - A village with its own streets fills "settlement" and "streets" and leaves "area" null.
 - Example: "Без вода остава с. Аврен, ул. Тича" gives "locations": [{"settlement": "с. Аврен", "area": null, "streets": ["ул. Тича"], "is_polygon": false}]
+- When the message says "улиците:" (or "ул.:") before a list, EVERY name in that list is a street. Put them all in "streets", even when one of them is also the name of a district or a village.
+- Example: "гр. Суворово – улиците: Хан Аспарух, Георги Бенковски, Искър" gives "locations": [{"settlement": "гр. Суворово", "area": null, "streets": ["ул. Хан Аспарух", "ул. Георги Бенковски", "ул. Искър"], "is_polygon": false}]
+- NEVER output a place the message does not name. Every "settlement", "area" and street you write must appear in the text you were given. If you are unsure, leave it out.
+- Streets that say where a WATER TRUCK or a repair crew is are not affected streets: "разположена водоноска на кръстовището между ул. Юпитер и ул. Сатурн" names a junction where help is parked, so those streets do NOT go in "streets".
+- "от центъра в посока гр. Варна" is a direction of travel, not a location. Do not extract a place out of "в посока …".
 If you have multiple streets listed and stuff along the lines of: "затворени", "в карето", "между"; it means that the streets form a polygon and the "is_polygon" field must be set to true. In every other case leave it false.
 In case there is a polygon assume all the things listed are streets.
 - "карето" is the SIGNAL that "is_polygon" is true. It is never a "settlement" and never an "area".
 - Example: "Без вода ще бъдат: в карето между бул. Владислав Варненчик, ул. Беласица, ул. Хан Пресиян и бул. Левски" gives "locations": [{"settlement": null, "area": null, "streets": ["бул. Владислав Варненчик", "ул. Беласица", "ул. Хан Пресиян", "бул. Левски"], "is_polygon": true}]
+- If the message says "карето" TWICE it describes TWO blocks. Make TWO entries, each with "is_polygon": true and only its own streets. A street named in both blocks goes in BOTH entries - it is the side they share.
+- Example: "карето, заключено между бул. Левски, ул. Девня и ул. Райко Даскалов и карето, заключено между ул. Девня, ул. Тодор Влайков и ул. Панайот Хитов" gives "locations": [{"settlement": null, "area": null, "streets": ["бул. Левски", "ул. Девня", "ул. Райко Даскалов"], "is_polygon": true}, {"settlement": null, "area": null, "streets": ["ул. Девня", "ул. Тодор Влайков", "ул. Панайот Хитов"], "is_polygon": true}]
 If the message affects all clients city-wide and lists no specific locations, leave the "locations" array empty and set "city_wide" to true. In every other case "city_wide" must be false.
 
 ## Constraints

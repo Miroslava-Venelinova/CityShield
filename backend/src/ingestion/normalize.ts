@@ -42,8 +42,33 @@
 //       check containment with, but every row has carried coordinates since
 //       migration 0005 — so measure them instead and drop the settlement when
 //       it is nowhere near.
+//   A10 a name the source text does not contain is not a location. Every guard
+//       above reasons about what the model produced; none of them asked whether
+//       the message says it. A heating alert whose only place was "ж.к Трошево"
+//       came back with six locations including a village 23 km away, and nothing
+//       deterministic could tell. Omission has no deterministic fix; invention
+//       does, and this is it.
+//   A11 the same place listed twice is one place. Duplicates cost a pin, a
+//       repeated enrichment (up to a Nominatim round trip each, on the ingest
+//       deadline) and a repeated targeting query — "кв. Цветен" arrived three
+//       times, byte-identical, in one parse.
+//   A12 "карето … и карето …" is TWO blocks. Both the prompt and A2 assumed one
+//       polygon per message, so seven streets forming two disjoint blocks were
+//       marked as one and could never close a ring.
+//   A13 "гр. X – улиците: A, B, C" says in words that A, B and C are streets.
+//       A4's promotion rule lifted them into locations of their own anyway and
+//       pinned them on like-named villages, because it never looked at the
+//       marker that had already settled the question.
+//   A14 streets can name where the REMEDY is: "разположена водоноска на
+//       кръстовището между ул. Юпитер и ул. Сатурн" is a water truck parked at a
+//       junction, not an outage on those two streets.
+//
+// A10 and A12–A14 all read the *position* of a name inside the source text
+// rather than merely its presence, which is what keeps them off the shapes they
+// are not about — see sourceSpans.
 
 import { cleanName, matchRegion, matchStreet, parseName, placeClass } from "../core/place-names";
+import { gramKeys, gramSimilarity } from "../core/fuzzy";
 import { distanceKm } from "../core/geo";
 import type { NamedRow } from "../db/queries";
 import type { ProcessedData } from "../shared/schemas";
@@ -133,6 +158,97 @@ export function stripAddressDetail(raw: string): string {
   return `${kind} ${stripped}`;
 }
 
+// ── Source-text positions (A10, A12, A13, A14) ───────────────────────────────
+
+const WORD_SPLIT = /[^\p{L}\p{N}]+/u;
+
+/** A name's core, lowercased and split into words. */
+function coreWords(raw: string): string[] {
+  return parseName(raw).core.toLowerCase().split(WORD_SPLIT).filter(Boolean);
+}
+
+/**
+ * Everything the positional guards need about one message, computed once.
+ *
+ * Four rules ask where a name sits in the source text, and each of them would
+ * otherwise lowercase and re-tokenize the whole message per location per name.
+ * The messages are short but the CPU budget is 10 ms, and this is on the ingest
+ * path with the AI parse and the polygon build.
+ */
+interface SourceText {
+  /** The whole message, lowercased — what `indexOf` is run against. */
+  lower: string;
+  /** Its distinct words, with trigrams, for A10's lenient containment test. */
+  words: Array<{ word: string; grams: Set<number> }>;
+}
+
+function readSource(message: string): SourceText {
+  const lower = message.toLowerCase();
+  const seen = new Set<string>();
+  const words: SourceText["words"] = [];
+  for (const word of lower.split(WORD_SPLIT)) {
+    if (!word || seen.has(word)) continue;
+    seen.add(word);
+    words.push({ word, grams: gramKeys(word) });
+  }
+  return { lower, words };
+}
+
+/**
+ * How close a source word has to be to a name's word to count as the same one.
+ *
+ * The comparison has to be lenient because the model canonicalises what it
+ * reads: "бул. Вл. Варненчик" comes back as "бул. Владислав Варненчик", and a
+ * literal test would call the expansion an invention and delete a correct
+ * location. 0.6 on trigrams absorbs an inflected ending or an expanded
+ * abbreviation while still separating two different names.
+ */
+const SOURCE_WORD_SIMILARITY = 0.6;
+
+/**
+ * Whether the source text mentions this name at all.
+ *
+ * ONE word of the core is enough, deliberately — this is the weakest form of the
+ * containment test, and the weakest form is what a guard that DELETES data
+ * should ship as. A false positive here is a silenced alert, which is the one
+ * direction the guard doctrine says to be paranoid about, and the acceptance
+ * corpus (§2.6's `40b78a66`) needs no more than this: none of the six invented
+ * locations shares a single word with the message they were attached to.
+ *
+ * Tightening it to "most of the words" would also catch a model that invents a
+ * plausible neighbour of a real name — but it would delete "бул. Владислав
+ * Варненчик" from a message that wrote "бул. Вл. Варненчик", and that trade is
+ * the wrong way round.
+ */
+function mentions(name: string, src: SourceText): boolean {
+  const words = coreWords(name);
+  if (words.length === 0) return true; // nothing to test — leave it to A1
+  for (const word of words) {
+    if (src.lower.includes(word)) return true;
+    const grams = gramKeys(word);
+    for (const w of src.words) {
+      if (gramSimilarity(grams, w.grams) >= SOURCE_WORD_SIMILARITY) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Where a name first appears in the source text, or -1.
+ *
+ * Literal, unlike `mentions`: the positional rules only ever act when they find
+ * a name, so a miss costs nothing but a rule that does not fire, while a loose
+ * match would move a street into the wrong half of a two-block message.
+ */
+function firstIndex(name: string, src: SourceText, from = 0): number {
+  let best = -1;
+  for (const word of coreWords(name)) {
+    const at = src.lower.indexOf(word, from);
+    if (at >= 0 && (best < 0 || at < best)) best = at;
+  }
+  return best;
+}
+
 // ── A2/A3 · cues read off the source message ─────────────────────────────────
 
 /** "в карето между ул. X, ул. Y и ул. Z" — the streets bound a block. */
@@ -160,6 +276,77 @@ const CITY_WIDE_PHRASES = [
  */
 const AREA_CUE =
   /район[аъ]?\s+(?:на|около)|прилежащ|в\s+близост\s+до|(?:околн|съседн)ите\s+улици/iu;
+
+// ── A12 · a second block in the same message ─────────────────────────────────
+
+/**
+ * The word that opens a block, wherever it appears. `POLYGON_CUE` answers "does
+ * this message describe a block at all"; this one answers "how many", so it is
+ * global and matches only the noun — "затворен" and "между" describe the same
+ * block a second time and would double-count it.
+ */
+const BLOCK_CUE = /кар[еe]\w*/giu;
+
+/** Every offset in the message where a block is opened. */
+function blockCueOffsets(message: string): number[] {
+  const offsets: number[] = [];
+  for (const m of message.matchAll(BLOCK_CUE)) offsets.push(m.index);
+  return offsets;
+}
+
+// ── A13 · an explicit "улиците:" list ────────────────────────────────────────
+
+/**
+ * epro's own statement that what follows is a list of streets: "гр. Суворово –
+ * улиците: Хан Аспарух, Георги Бенковски, Искър(Петлешев)".
+ *
+ * The colon is required. Without it "улиците" is just a noun and A1 already
+ * treats a bare one as placeless; with it, the source has answered the exact
+ * question A4's promotion rule was about to guess at.
+ */
+const STREET_LIST_MARKER = /улиц(?:ите|и|а)\s*:|ул\s*\.\s*:/giu;
+
+// ── A14 · streets that locate the remedy ─────────────────────────────────────
+
+/**
+ * Phrases after which a street name is where the FIX is, not where the outage
+ * is. `675df786`: "разположена водоноска на кръстовището между ул. Юпитер и
+ * ул. Сатурн" — a water truck is parked at that junction, and both streets were
+ * stored as affected.
+ *
+ * Two phrases, not the three the fix plan listed. "разположена … на" is dropped
+ * because it is ordinary Bulgarian that any sentence about a location can carry,
+ * and a phrase list this small over-fits on one message as it is. "водоноска" is
+ * a water truck and names nothing else; "кръстовището между" is a junction,
+ * which is a point rather than an affected area.
+ *
+ * Note the near miss this has to be kept clear of: POLYGON_CUE contains "между",
+ * so had that sentence named a third street, A2 would have marked it a polygon.
+ * A14 therefore runs BEFORE A2 and suppresses it for the streets it removes.
+ */
+const REMEDY_CUE = /водоноска|кръстовището\s+между/giu;
+
+/**
+ * Streets that appear only AFTER a remedy cue, and never before one.
+ *
+ * Positional rather than per message, and that is the whole safety of it: a
+ * message reading "без вода: ул. А, ул. Б. Водоноска на ул. В" loses only ул. В.
+ * Dropping every street whenever the cue appears anywhere would lose the outage
+ * with the remedy.
+ */
+function remedyOnlyStreets(streets: string[], src: SourceText): Set<string> {
+  const cues = [...src.lower.matchAll(REMEDY_CUE)].map((m) => m.index);
+  if (cues.length === 0) return new Set();
+  const firstCue = cues[0]!;
+  const dropped = new Set<string>();
+  for (const street of streets) {
+    const at = firstIndex(street, src);
+    // Named before any cue (or not found at all) — it is the outage's own.
+    if (at < 0 || at < firstCue) continue;
+    dropped.add(street);
+  }
+  return dropped;
+}
 
 export const hasPolygonCue = (message: string): boolean => POLYGON_CUE.test(message);
 
@@ -251,9 +438,20 @@ function isBareCity(name: string | null): boolean {
  * meant. Once an `area` HAS been stated, that reading is gone — the message
  * already named its district, so a bare "Младост" beside it is the street.
  */
-function isPromotable(sub: string, parentIsCity: boolean, refs: ReferenceRows): boolean {
+function isPromotable(
+  sub: string, parentIsCity: boolean, refs: ReferenceRows, declaredStreets: Set<string>,
+): boolean {
   const { kind, core } = parseName(sub);
   if (!core) return false;
+
+  // A13. The source said, in words, that this entry is a street. A4's rule was
+  // written for "гр. Варна - кв. Младост, ул. X", where nothing states which is
+  // which and the ordering is all there is to go on; where there IS a statement,
+  // promoting over it overrides the message. `5b048900` lifted three Суворово
+  // streets into locations of their own and pinned Георги Бенковски on с.
+  // Бенковски 30 km away; `0d59345b` made Васил Левски the AREA of a Вълчи дол
+  // alert, which then resolved to Varna's street of that name (§2.4).
+  if (declaredStreets.has(sub)) return false;
 
   const cls = placeClass(kind);
   if (cls === "street") return false;
@@ -262,6 +460,153 @@ function isPromotable(sub: string, parentIsCity: boolean, refs: ReferenceRows): 
   if (ZONE_SUFFIX.test(core)) return matchStreet(sub, refs.streets) === null;
   return parentIsCity && matchRegion(sub, refs.regions) !== null;
 }
+
+/**
+ * The street-list entries an explicit "улиците:" marker covers.
+ *
+ * Positional, because the marker is: "гр. Варна - кв. Виница, улиците: ул. A" is
+ * one clause about one district, and a message can carry a marked list beside an
+ * unmarked mention. The span runs from the marker to the end of its sentence,
+ * and an entry is covered when it is named inside one.
+ */
+function declaredStreetEntries(streets: string[], src: SourceText): Set<string> {
+  const spans: Array<[number, number]> = [];
+  for (const m of src.lower.matchAll(STREET_LIST_MARKER)) {
+    const start = m.index + m[0].length;
+    // To the end of the sentence — a full stop followed by a space or the end,
+    // a semicolon, or a line break. Commas do not end it: the list is commas.
+    const end = src.lower.slice(start).search(/[;\n]|\.\s|\.$/u);
+    spans.push([start, end < 0 ? src.lower.length : start + end]);
+  }
+  if (spans.length === 0) return new Set();
+
+  const declared = new Set<string>();
+  for (const street of streets) {
+    for (const [start, end] of spans) {
+      const at = firstIndex(street, src, start);
+      if (at >= 0 && at < end) { declared.add(street); break; }
+    }
+  }
+  return declared;
+}
+
+// ── A12 · two blocks in one message ──────────────────────────────────────────
+
+/**
+ * Split one polygon entry's street list into the blocks the message describes.
+ *
+ * `d29913c5` reads "карето, заключено между бул. Левски, ул. Девня, ул. Райко
+ * Даскалов, ул. Звзда и ул. Доктор Иван Селемински **и карето**, заключено между
+ * ул. Девня, ул. Тодор Влайков и ул. Панайот Хитов" — two blocks sharing
+ * ул. Девня. The model emitted a single location with all seven streets and
+ * marked it `is_polygon`; seven streets forming two disjoint blocks cannot
+ * produce one ring, so it could never have built whatever else was fixed.
+ *
+ * Each street goes to the block whose cue it follows, by position in the source.
+ * A street named in both halves belongs to both — that is the shared side, and
+ * dropping it from either would open that block at a corner.
+ *
+ * Returns a single list unchanged unless there really are two blocks WITH streets
+ * between the cues, which is what keeps it off a message that merely says the
+ * word twice.
+ */
+function splitBlocks(streets: string[], message: string, src: SourceText): string[][] {
+  const cues = blockCueOffsets(message);
+  if (cues.length < 2) return [streets];
+
+  // Where each street is first named. A street the message does not spell (the
+  // model canonicalised it) has no position and cannot be assigned, so the split
+  // is abandoned rather than guessed at.
+  const at = streets.map((s) => firstIndex(s, src));
+  if (at.some((i) => i < 0)) return [streets];
+
+  // Only cues with at least one street between them open a new block; "карето"
+  // repeated inside one description is still one block.
+  const starts = [cues[0]!];
+  for (const cue of cues.slice(1)) {
+    if (at.some((i) => i > starts[starts.length - 1]! && i < cue)) starts.push(cue);
+  }
+  if (starts.length < 2) return [streets];
+
+  const blocks: string[][] = starts.map(() => []);
+  for (let s = 0; s < streets.length; s++) {
+    // The last cue this street follows. A street named BEFORE the first cue
+    // ("Без вода на ул. X. Карето между …") belongs to the first block rather
+    // than to none — falling out of the loop would drop it silently, which is
+    // the one thing a split must never do.
+    let owner = 0;
+    for (let b = starts.length - 1; b >= 0; b--) {
+      if (at[s]! >= starts[b]!) { owner = b; break; }
+    }
+    blocks[owner]!.push(streets[s]!);
+    // A shared side is named again inside the later block; find it there too.
+    for (let b = 1; b < starts.length; b++) {
+      const again = firstIndex(streets[s]!, src, starts[b]!);
+      const end = b + 1 < starts.length ? starts[b + 1]! : src.lower.length;
+      if (again >= 0 && again < end && !blocks[b]!.includes(streets[s]!)) {
+        blocks[b]!.push(streets[s]!);
+      }
+    }
+  }
+  // A block needs three sides. Anything short of that is not a second block, so
+  // fold everything back into one rather than shipping a stub that cannot close.
+  return blocks.every((b) => b.length >= 3) ? blocks : [streets];
+}
+
+// ── A11 · duplicate locations ────────────────────────────────────────────────
+
+/**
+ * Merge locations naming the same place, unioning their street lists.
+ *
+ * `52e21c59` produced "кв. Цветен" three times, byte-identical. `afb764bf`
+ * produced "с. Припек" and "гр. Игнатиево" twice each, the second Игнатиево
+ * carrying a 16-street list with its own typos. `c12154c9` produced four
+ * separate "гр. Варна" entries with one street each. Nothing downstream breaks,
+ * but every duplicate costs a pin on the map, a repeated enrichment — up to a
+ * Nominatim round trip each, on the ingest deadline — and a repeated targeting
+ * query.
+ *
+ * Keyed on the two name slots plus `is_polygon`, and conservatively: entries
+ * that differ in `region_wide` or in `is_polygon` are NOT merged, because
+ * unioning them would widen the narrower one's audience to the vaguer one's
+ * claim. Two polygons in one settlement stay apart for the same reason — after
+ * A12 they are two different blocks.
+ */
+function mergeDuplicates(locations: Location[]): Location[] {
+  const merged: Location[] = [];
+  const byKey = new Map<string, Location>();
+  for (const location of locations) {
+    if (location.is_polygon) { merged.push(location); continue; }
+    const key = `${cleanName(location.settlement ?? "").toLowerCase()} `
+      + `${cleanName(location.area ?? "").toLowerCase()} `
+      + `${location.region_wide === true}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, location);
+      merged.push(location);
+      continue;
+    }
+    for (const street of location.streets) {
+      if (!existing.streets.includes(street)) existing.streets.push(street);
+    }
+  }
+  return merged;
+}
+
+// ── Heating is Варна by construction ─────────────────────────────────────────
+
+/**
+ * Веолия operates one district-heating network in this province and it is the
+ * city's — there is no district heating in the villages, so a `heating` message
+ * naming a district and no settlement is naming a district OF Варна.
+ *
+ * The cheapest correctness win in the 08.08.2026 review: `40b78a66`'s only real
+ * place was "ж.к Трошево" with no settlement, which leaves `settlementScope`
+ * guessing and every street lookup unscoped. Stated as a fact about the source
+ * rather than inferred from the text, so it cannot misfire on wording.
+ */
+const HEATING_CATEGORY = "heating";
+const HEATING_SETTLEMENT = "гр. Варна";
 
 // ── A9 · settlement/area coherence ───────────────────────────────────────────
 
@@ -329,13 +674,14 @@ function coherentSettlement(location: Location, refs: ReferenceRows): string | n
  * is not mutated.
  */
 export function normalizeParse(
-  output: ProcessedData, message: string, refs: ReferenceRows,
+  output: ProcessedData, message: string, refs: ReferenceRows, category: string,
 ): ProcessedData {
   const polygonCue = hasPolygonCue(message);
   // Both cues are read once per message, so a message that hedges marks every
   // location it produced — the same coarseness A2 and A3 already accept. The
   // sources publish one outage per message, so a hedge in it is about all of it.
   const areaCue = hasAreaCue(message);
+  const src = readSource(message);
   const locations: Location[] = [];
 
   for (const original of output.locations) {
@@ -345,6 +691,16 @@ export function normalizeParse(
     location.streets = location.streets
       .map(stripAddressDetail)
       .filter((s) => !isPlaceless(s));
+
+    // A14, before A2: the remedy cue contains "между", which is also a polygon
+    // cue, so a junction with a third street named nearby would otherwise be
+    // promoted to a block built out of the water truck's parking spot.
+    const remedy = remedyOnlyStreets(location.streets, src);
+    if (remedy.size > 0) {
+      location.streets = location.streets.filter((s) => !remedy.has(s));
+      console.warn(`[normalize] A14 dropped ${[...remedy].join(", ")} — named as the `
+        + `location of a water truck / junction, not of the outage.`);
+    }
 
     // Same over each name slot, independently. A placeless name above a real
     // street list is still a usable location — the streets are the location —
@@ -356,8 +712,34 @@ export function normalizeParse(
       location[slot] = isPlaceless(stripped) ? null : stripped;
     }
 
+    // A10, after A5 (which strips the house numbers the message DOES contain)
+    // and A1 (which has already removed the names that are not places at all),
+    // and before A4 — a promoted district must be checked as the street it
+    // arrived as, not lifted first and tested afterwards.
+    location.streets = location.streets.filter((s) => {
+      if (mentions(s, src)) return true;
+      console.warn(`[normalize] A10 dropped street "${s}" — the source text does not name it.`);
+      return false;
+    });
+    for (const slot of ["settlement", "area"] as const) {
+      const raw = location[slot];
+      if (raw === null || mentions(raw, src)) continue;
+      console.warn(`[normalize] A10 dropped ${slot} "${raw}" — the source text does not name it.`);
+      location[slot] = null;
+    }
+
     // A9, before anything reads the two slots together.
     location.settlement = coherentSettlement(location, refs);
+
+    // Веолия runs exactly one district-heating network and it is the city's, so
+    // a heating message is about Варна by construction. A category constant, not
+    // a heuristic — and it lands after A10, so it restores the settlement on a
+    // message whose only stated place was a district ("ж.к Трошево") rather than
+    // preserving one the model invented.
+    if (category === HEATING_CATEGORY && location.settlement === null
+      && (location.area !== null || location.streets.length > 0)) {
+      location.settlement = HEATING_SETTLEMENT;
+    }
 
     // A2. A polygon's streets are streets by definition, so there is nothing
     // here for A4 to lift out.
@@ -371,7 +753,11 @@ export function normalizeParse(
     // becomes a region-wide push to the whole city.
     location.is_polygon = location.is_polygon || (polygonCue && location.streets.length >= 3);
     if (location.is_polygon) {
-      if (location.streets.length > 0) locations.push(location);
+      if (location.streets.length === 0) continue;
+      // A12. One entry per block the message describes — normally one.
+      for (const block of splitBlocks(location.streets, message, src)) {
+        locations.push({ ...location, streets: block });
+      }
       continue;
     }
 
@@ -383,12 +769,14 @@ export function normalizeParse(
     // list is already where it belongs, and a nested lift would move it
     // somewhere worse.
     const parentIsCity = isBareCity(location.settlement) && location.area === null;
+    // A13: the entries the source itself declared to be streets.
+    const declaredStreets = declaredStreetEntries(location.streets, src);
     const promoted: string[] = [];
     const streets: string[] = [];
     let firstPromotedAt = -1;
     let firstStreetAt = -1;
     location.streets.forEach((sub, i) => {
-      if (isPromotable(sub, parentIsCity, refs)) {
+      if (isPromotable(sub, parentIsCity, refs, declaredStreets)) {
         if (firstPromotedAt < 0) firstPromotedAt = i;
         promoted.push(sub);
       } else {
@@ -441,5 +829,8 @@ export function normalizeParse(
     locations.push(...siblings);
   }
 
-  return applyCityWideGuard({ ...output, locations }, message);
+  // A11 last: every rule above can create a duplicate that was not in the parse
+  // — A4 splits one entry into siblings that repeat the settlement, A10 can null
+  // an `area` and leave two entries identical, A12 splits one polygon into two.
+  return applyCityWideGuard({ ...output, locations: mergeDuplicates(locations) }, message);
 }

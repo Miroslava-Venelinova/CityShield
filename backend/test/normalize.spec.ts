@@ -1,7 +1,13 @@
-// Deterministic guards over the AI parse (guards A1-A9, SPEC.md §1.7).
+// Deterministic guards over the AI parse (guards A1-A14, SPEC.md §1.7).
 //
-// Each block replays a parse the pipeline really stored, from the review of
-// 28.07.2026, against the source text it came from. Pure functions, no D1.
+// Each block replays a parse the pipeline really stored, from the reviews of
+// 28.07.2026 and 08.08.2026, against the source text it came from. Pure
+// functions, no D1.
+//
+// Every `message` here must actually name what its parse claims. That used to be
+// a courtesy and A10 made it a requirement: a name the source does not contain is
+// now dropped, so a stub message turns an assertion about A4 into an assertion
+// about A10. Where a case below carries an oddly complete message, that is why.
 
 import { describe, expect, it } from "vitest";
 import type { NamedRow } from "../src/db/queries";
@@ -49,8 +55,9 @@ const inArea = (area: string | null, streets: string[] = [], poly = false) =>
 const parse = (locations: ProcessedData["locations"], cityWide = false): ProcessedData =>
   ({ locations, start_time: null, end_time: null, windows: null, city_wide: cityWide });
 
-const run = (locations: ProcessedData["locations"], message: string, cityWide = false) =>
-  normalizeParse(parse(locations, cityWide), message, refs);
+const run = (
+  locations: ProcessedData["locations"], message: string, cityWide = false, category = "vik",
+) => normalizeParse(parse(locations, cityWide), message, refs, category);
 
 /** All three slots, the shape the assertions care about. */
 const shape = (out: ProcessedData) =>
@@ -91,14 +98,15 @@ describe("A1 · placeless names", () => {
   });
 
   it("drops only the name when a placeless one carries real streets", () => {
-    const out = run([inArea("карето", ["ул. Пловдив"])], "Ремонт в карето");
+    const out = run([inArea("карето", ["ул. Пловдив"])], "Ремонт в карето на ул. Пловдив");
     expect(shape(out)).toEqual([[null, null, ["ул. Пловдив"], false]]);
   });
 
   // The slots are cleaned independently: a placeless area under a real
   // settlement must not take the settlement down with it.
   it("clears a placeless area and keeps the settlement", () => {
-    const out = run([location("гр. Варна", "карето", ["ул. Пловдив"])], "Ремонт в карето");
+    const out = run([location("гр. Варна", "карето", ["ул. Пловдив"])],
+      "Ремонт в гр. Варна, в карето на ул. Пловдив");
     expect(shape(out)).toEqual([["гр. Варна", null, ["ул. Пловдив"], false]]);
   });
 });
@@ -304,9 +312,11 @@ describe("A4 · region-like entries in the street list", () => {
   });
 
   it("lifts a … зона name but not the street called one", () => {
-    expect(shape(run([location("Варна", null, ["Западна промишлена зона"])], "Прекъсване гр. Варна")))
+    expect(shape(run([location("Варна", null, ["Западна промишлена зона"])],
+      "Прекъсване гр. Варна - Западна промишлена зона")))
       .toEqual([["Варна", "Западна промишлена зона", [], false]]);
-    expect(shape(run([location("Варна", null, ["за вододайната зона"])], "Прекъсване гр. Варна")))
+    expect(shape(run([location("Варна", null, ["за вододайната зона"])],
+      "Прекъсване гр. Варна - за вододайната зона")))
       .toEqual([["Варна", null, ["за вододайната зона"], false]]);
   });
 
@@ -413,7 +423,7 @@ describe("A5 · trailing address detail", () => {
   it("strips through the whole street list of an alert", () => {
     const out = run(
       [inArea("кв. Владиславово", ["ул. Пловдив 25", "бул. Чаталджа 20 вх. Б.", "ал. 1"])],
-      "Прекъсване в кв. Владиславово, ул. Пловдив 25, бул. Чаталджа 20 вх. Б.");
+      "Прекъсване в кв. Владиславово, ул. Пловдив 25, бул. Чаталджа 20 вх. Б., ал. 1");
     expect(out.locations[0]!.streets).toEqual(["ул. Пловдив", "бул. Чаталджа", "ал. 1"]);
   });
 });
@@ -523,7 +533,7 @@ describe("A9 · settlement/area coherence", () => {
       streets: [],
     };
     const runLinked = (locs: ProcessedData["locations"], message: string) =>
-      normalizeParse(parse(locs), message, linked);
+      normalizeParse(parse(locs), message, linked, "vik");
 
     it("drops a settlement the link says does not contain the area", () => {
       const out = runLinked([location("гр. Варна", "кв. Виница")], "Без вода: гр. Варна, кв. Виница");
@@ -557,7 +567,7 @@ describe("A9 · settlement/area coherence", () => {
       streets: [],
     };
     const runShared = (locs: ProcessedData["locations"], message: string) =>
-      normalizeParse(parse(locs), message, shared);
+      normalizeParse(parse(locs), message, shared, "vik");
 
     it("keeps Белослав for the Белослав one", () => {
       const out = runShared(
@@ -578,5 +588,203 @@ describe("A9 · settlement/area coherence", () => {
         [location("с. Аврен", "Цветен квартал")], "Без вода: с. Аврен, Цветен квартал");
       expect(shape(out)).toEqual([[null, "Цветен квартал", [], false]]);
     });
+  });
+});
+
+// ── A10 ──────────────────────────────────────────────────────────────────────
+
+describe("A10 · names the source text does not contain", () => {
+  // 40b78a66 — the worst parse in the 08.08.2026 window. The entire message is
+  // one district; the stored parse held six locations, one of them a village
+  // 23 km away. Every guard before this reasoned about what the model produced
+  // and none of them asked whether the message said it.
+  const TROSHEVO = "Прекъсване на топлоподаването\nНа 06.08.2026 г. ще бъде спряно "
+    + "топлоподаването за живущите в ж.к Трошево, блокове 74,79,80,81,82 и 83.";
+
+  it("drops every invented location and keeps the one real one", () => {
+    const out = run([
+      location(null, "ж.к Трошево"),
+      location("гр. Варна", null, ["ул. Неофит Бозвели", "ул. Ангел Кънчев"]),
+      location(null, "м-т Ваялар"),
+      location(null, "м-т Свети Никола"),
+      location("с. Аврен", null, ["ул. Тича"]),
+    ], TROSHEVO);
+
+    expect(out.locations.map((l) => l.area)).toEqual(["ж.к Трошево"]);
+    expect(out.locations.flatMap((l) => l.streets)).toEqual([]);
+  });
+
+  // The false-positive direction, which is the dangerous one: this guard DELETES
+  // data, so a name the model merely canonicalised has to survive. The model
+  // routinely expands "бул. Вл. Варненчик" into "бул. Владислав Варненчик".
+  it("keeps a name the model expanded from an abbreviation in the message", () => {
+    const out = run([location("гр. Варна", null, ["бул. Владислав Варненчик"])],
+      "Авария по бул. Вл. Варненчик, гр. Варна");
+    expect(out.locations[0]!.streets).toEqual(["бул. Владислав Варненчик"]);
+  });
+
+  it("keeps a name written with a different kind prefix", () => {
+    const out = run([inArea("кв. Аспарухово")], "Без вода в ж.к. Аспарухово");
+    expect(out.locations[0]!.area).toBe("кв. Аспарухово");
+  });
+
+  // A5 strips the house number the message DOES contain, so A10 has to compare
+  // cores and has to run after it.
+  it("does not fight A5 over a stripped house number", () => {
+    const out = run([location("гр. Варна", null, ["ул. Пловдив 25"])],
+      "Авария на ул. Пловдив 25, гр. Варна");
+    expect(out.locations[0]!.streets).toEqual(["ул. Пловдив"]);
+  });
+});
+
+// ── A11 ──────────────────────────────────────────────────────────────────────
+
+describe("A11 · duplicate locations", () => {
+  // 52e21c59 — "кв. Цветен" three times, byte-identical, each one a pin on the
+  // map, an enrichment (up to a Nominatim round trip) and a targeting query.
+  it("merges byte-identical entries into one", () => {
+    const out = run(
+      [inArea("кв. Виница"), inArea("кв. Виница"), inArea("кв. Виница")],
+      "Без вода: кв. Виница");
+    expect(shape(out)).toEqual([[null, "кв. Виница", [], false]]);
+  });
+
+  // c12154c9 — four separate "гр. Варна" entries carrying one street each.
+  it("unions the street lists of entries naming the same place", () => {
+    const out = run([
+      location("гр. Варна", null, ["ул. Пловдив"]),
+      location("гр. Варна", null, ["ул. Драва"]),
+      location("гр. Варна", null, ["ул. Дубровник"]),
+    ], "Без вода в гр. Варна: ул. Пловдив, ул. Драва, ул. Дубровник");
+    expect(shape(out)).toEqual([["гр. Варна", null,
+      ["ул. Пловдив", "ул. Драва", "ул. Дубровник"], false]]);
+  });
+});
+
+// ── A12 ──────────────────────────────────────────────────────────────────────
+
+describe("A12 · two blocks in one message", () => {
+  // d29913c5 ★ — two blocks sharing ул. Девня. The model emitted one location
+  // with all seven streets and marked it a polygon; seven streets forming two
+  // disjoint blocks cannot produce one ring, whatever else is fixed downstream.
+  const TWO_BLOCKS = "Без вода ще бъдат абонатите в карето, заключено между бул. Левски, "
+    + "ул. Девня, ул. Райко Даскалов, ул. Звзда и ул. Доктор Иван Селемински и карето, "
+    + "заключено между ул. Девня, ул. Тодор Влайков и ул. Панайот Хитов";
+
+  it("splits the street list at the second каре", () => {
+    const out = run([inArea(null, [
+      "бул. Левски", "ул. Девня", "ул. Райко Даскалов", "ул. Звзда",
+      "ул. Доктор Иван Селемински", "ул. Тодор Влайков", "ул. Панайот Хитов",
+    ], true)], TWO_BLOCKS);
+
+    expect(out.locations.length).toBe(2);
+    expect(out.locations.every((l) => l.is_polygon)).toBe(true);
+    expect(out.locations[0]!.streets).toEqual([
+      "бул. Левски", "ул. Девня", "ул. Райко Даскалов", "ул. Звзда",
+      "ул. Доктор Иван Селемински",
+    ]);
+    // ул. Девня is in both — it is the side the two blocks share, and dropping
+    // it from either would leave that block open at a corner.
+    expect(out.locations[1]!.streets).toEqual([
+      "ул. Девня", "ул. Тодор Влайков", "ул. Панайот Хитов",
+    ]);
+  });
+
+  it("leaves a single block alone", () => {
+    const streets = ["ул. Беласица", "ул. Девня", "ул. Дубровник"];
+    const out = run([inArea(null, streets, true)],
+      "в карето между ул. Беласица, ул. Девня и ул. Дубровник");
+    expect(out.locations.length).toBe(1);
+    expect(out.locations[0]!.streets).toEqual(streets);
+  });
+
+  // A split must never lose a street. One named BEFORE the first cue has no
+  // block to follow, and belongs to the first rather than to none.
+  it("keeps a street named before the first cue", () => {
+    const streets = [
+      "ул. Пловдив", "бул. Левски", "ул. Девня", "ул. Райко Даскалов",
+      "ул. Беласица", "ул. Дубровник", "ул. Драва",
+    ];
+    const out = run([inArea(null, streets, true)],
+      "Без вода на ул. Пловдив. В карето между бул. Левски, ул. Девня и ул. Райко Даскалов "
+      + "и карето между ул. Беласица, ул. Дубровник и ул. Драва.");
+    expect(out.locations.length).toBe(2);
+    expect(out.locations.flatMap((l) => l.streets)).toContain("ул. Пловдив");
+  });
+
+  // The over-split risk: a message that says the word twice about ONE block.
+  it("does not split when the word repeats with no streets between", () => {
+    const streets = ["ул. Беласица", "ул. Девня", "ул. Дубровник"];
+    const out = run([inArea(null, streets, true)],
+      "Карето е засегнато. В карето между ул. Беласица, ул. Девня и ул. Дубровник няма вода.");
+    expect(out.locations.length).toBe(1);
+  });
+});
+
+// ── A13 ──────────────────────────────────────────────────────────────────────
+
+describe("A13 · the улиците: marker", () => {
+  // 5b048900 — "гр. Суворово – улиците: …" and A4 lifted three of them into
+  // locations of their own, pinning Георги Бенковски on с. Бенковски 30 km out.
+  it("keeps a marked list as streets even when a name matches a region", () => {
+    const out = run([location("гр. Варна", null, ["Младост", "Пловдив", "Драва"])],
+      "Прекъсване гр. Варна – улиците: Младост, Пловдив, Драва");
+    expect(shape(out)).toEqual([["гр. Варна", null, ["Младост", "Пловдив", "Драва"], false]]);
+  });
+
+  // A4's own shape must still work: no marker, so the ordering decides.
+  it("still promotes a district when the source states no marker", () => {
+    const out = run([location("гр. Варна", null, ["Младост", "Пловдив"])],
+      "Прекъсване гр. Варна - Младост, ул. Пловдив");
+    expect(shape(out)).toEqual([["гр. Варна", "Младост", ["Пловдив"], false]]);
+  });
+});
+
+// ── A14 ──────────────────────────────────────────────────────────────────────
+
+describe("A14 · streets that locate the remedy", () => {
+  // 675df786 — a water truck is PARKED at that junction; the streets are the
+  // remedy's location, not the outage's, and both were stored as affected.
+  it("drops streets named only after a водоноска cue", () => {
+    const out = run([inArea("м-т Фичоза", ["ул. Пловдив", "ул. Драва"])],
+      "Без вода в м-т Фичоза. Ще бъде разположена водоноска на кръстовището между "
+      + "ул. Пловдив и ул. Драва.");
+    expect(shape(out)).toEqual([[null, "м-т Фичоза", [], false]]);
+  });
+
+  // The safety of doing this positionally rather than per message: a message
+  // that names the outage's own streets BEFORE the remedy keeps them.
+  it("keeps streets named before the cue", () => {
+    const out = run([inArea("м-т Фичоза", ["ул. Пловдив", "ул. Драва"])],
+      "Без вода на ул. Пловдив в м-т Фичоза. Водоноска ще има на ул. Драва.");
+    expect(out.locations[0]!.streets).toEqual(["ул. Пловдив"]);
+  });
+
+  // The near miss A14 has to run before: POLYGON_CUE contains "между", so a
+  // junction with a third street named would otherwise become a block built out
+  // of the water truck's parking spot.
+  it("does not let a junction become a polygon", () => {
+    const out = run([inArea("м-т Фичоза", ["ул. Пловдив", "ул. Драва", "ул. Дубровник"])],
+      "Водоноска на кръстовището между ул. Пловдив, ул. Драва и ул. Дубровник в м-т Фичоза.");
+    expect(out.locations[0]!.is_polygon).toBe(false);
+  });
+});
+
+// ── Heating is Варна ─────────────────────────────────────────────────────────
+
+describe("heating messages carry the city", () => {
+  // 40b78a66 again: Веолия runs one district-heating network and it is the
+  // city's, so a heating message naming only a district is naming a district OF
+  // Варна. Without it the settlement is null, settlementScope guesses, and every
+  // street lookup under it is unscoped.
+  it("fills a null settlement for the heating category", () => {
+    const out = run([inArea("ж.к Трошево")],
+      "Спряно топлоподаване в ж.к Трошево", false, "heating");
+    expect(out.locations[0]!.settlement).toBe("гр. Варна");
+  });
+
+  it("leaves other categories alone", () => {
+    const out = run([inArea("ж.к Трошево")], "Без вода в ж.к Трошево", false, "vik");
+    expect(out.locations[0]!.settlement).toBeNull();
   });
 });

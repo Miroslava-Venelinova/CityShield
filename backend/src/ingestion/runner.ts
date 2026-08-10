@@ -9,6 +9,7 @@
 import type { Env } from "../env";
 import { withTimeout } from "../shared/deadline";
 import { TICK_MINUTES, isDue } from "./schedule";
+import { getLastIdUpdatedAt } from "./state";
 import * as epro from "./sources/epro";
 import * as heating from "./sources/heating";
 import * as vik from "./sources/vik";
@@ -62,6 +63,57 @@ export async function runIngestion(env: Env): Promise<void> {
     } catch (e) {
       console.error(`[runner] Source '${source.name}' failed after ${Date.now() - startedAt} ms: ${e}`);
     }
+  }
+
+  await warnOnStalledCursors(env);
+}
+
+/**
+ * How long a source's cursor may sit still before the tick says so.
+ *
+ * The cheap half of the cursor-pin problem (§4.1). The crawler is oldest-first
+ * and advances only past successes, and while MAX_PUSH_ATTEMPTS caps a dead
+ * *push*, nothing caps a message that fails before the store: on 30.07.2026 a
+ * single over-budget message turned into a 20-hour ingestion outage and six
+ * unsent ViK outages, and the only reason anyone found out was that someone went
+ * looking. A pinned cursor produces no errors — every tick reads the same
+ * message, fails the same way, and writes nothing.
+ *
+ * The real fix is a pre-store attempt counter, which means deliberately skipping
+ * a public-safety alert after N strikes and is a product decision rather than a
+ * refactor. This is not that. It just makes the silence audible.
+ *
+ * 6 hours is chosen against the quietest source rather than the busiest: vt and
+ * heating publish a handful of items a week, so anything tighter would cry wolf
+ * on an ordinary quiet night. It is well inside the 20-hour outage it exists to
+ * catch.
+ */
+const CURSOR_STALL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Warn for every source whose cursor has not moved in CURSOR_STALL_MS.
+ *
+ * Deliberately at the end of the tick and deliberately swallowing its own
+ * failures: this is a monitor, and a monitor that can break ingestion is worse
+ * than no monitor. One read per source, on a 15-minute cadence.
+ */
+async function warnOnStalledCursors(env: Env): Promise<void> {
+  try {
+    const now = Date.now();
+    for (const source of SOURCES) {
+      const updatedAt = await getLastIdUpdatedAt(env, source.name);
+      if (updatedAt === null) continue; // no row yet — the source has never run
+      const age = now - Date.parse(updatedAt);
+      if (Number.isFinite(age) && age > CURSOR_STALL_MS) {
+        console.error(
+          `[runner] Source '${source.name}' has not advanced its cursor in `
+          + `${(age / 3_600_000).toFixed(1)} h (since ${updatedAt}). Either it has published `
+          + `nothing, or one message is failing before the store and pinning the cursor — `
+          + `check the tick logs for that source.`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[runner] Stall check failed: ${e}`);
   }
 }
 
