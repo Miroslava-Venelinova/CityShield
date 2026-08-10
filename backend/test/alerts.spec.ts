@@ -1299,3 +1299,284 @@ describe("account erasure reaches the push provider", () => {
     }
   });
 });
+
+// ── F17 / §3.1 · the settlement-wide audience ────────────────────────────────
+//
+// `getUserIdsByRegion` is `WHERE region_id = ?`, which is right for a district
+// and close to useless for a city. A user inside Варна reverse-geocodes to their
+// DISTRICT (suburb, neighbourhood, quarter, city_district, … — core/geocoding.ts)
+// and carries that district's region_id, never the city's, so every
+// settlement-wide alert for Варна reached only the residue whose reverse geocode
+// hit no district we seed. Silently: an alert that reached nobody is stored,
+// stamped notified, and looks exactly like one that reached everyone.
+describe("settlement-wide targeting (§3.1)", () => {
+  beforeEach(async () => {
+    clearRefCaches();
+    // Two districts linked to Варна (migration 0016) and one unrelated village,
+    // which is what makes this a containment test rather than a radius test.
+    await env.DB.prepare(
+      `INSERT INTO regions (region_name, lat, lng, settlement_id)
+       SELECT 'кв. Виница', 43.2419122, 27.9603219, id FROM regions WHERE region_name = 'Варна'`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO regions (region_name, lat, lng, settlement_id)
+       SELECT 'кв. Чайка', 43.2159044, 27.9397023, id FROM regions WHERE region_name = 'Варна'`,
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO regions (region_name, lat, lng) VALUES ('Долни чифлик', 42.9930, 27.7180)",
+    ).run();
+    clearRefCaches();
+  });
+
+  const targeted = async (locations: unknown[]) => {
+    const res = await submit(basePayload({ processed_data: { locations, city_wide: false } }));
+    return new Set(((await res.json()) as SubmitResponse).user_ids);
+  };
+
+  // §5.1, decided 10.08.2026: a failed extraction notifies nobody. A genuine
+  // whole-city outage is published in words and routed to `city_wide`, so a
+  // location that resolves to the city row and nothing more specific is a
+  // district that got lost — and a city-sized push decided by an extraction we
+  // already know failed is the wrong trade.
+  it("notifies nobody for a bare city with no area and no matched street", async () => {
+    await createUser({ region: "кв. Виница" });
+    await createUser({ region: "кв. Чайка" });
+    await createUser({ region: "Варна" });
+    await createUser({ lat: 43.2100, lng: 27.9200 });
+
+    const ids = await targeted([
+      { settlement: "гр. Варна", area: null, streets: [], is_polygon: false },
+    ]);
+    expect(ids.size).toBe(0);
+  });
+
+  it("notifies nobody for a city whose every named street failed to match", async () => {
+    await createUser({ region: "кв. Виница" });
+    const ids = await targeted([
+      { settlement: "гр. Варна", area: null, streets: ["ул. Няма такава"], is_polygon: false },
+    ]);
+    expect(ids.size).toBe(0);
+  });
+
+  // The exclusion is the city alone. A town where we hold a few districts is a
+  // place the sources really do publish for as a whole, and there the union of
+  // the settlement row and its districts is both correct and complete.
+  it("still reaches a small town's districts and its own row", async () => {
+    await env.DB.prepare(
+      "INSERT INTO regions (region_name, lat, lng) VALUES ('Белослав', 43.1958, 27.7042)",
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO regions (region_name, lat, lng, settlement_id)
+       SELECT 'кв. Акациите', 43.1970, 27.7060, id FROM regions WHERE region_name = 'Белослав'`,
+    ).run();
+    clearRefCaches();
+
+    const inDistrict = await createUser({ region: "кв. Акациите" });
+    const onTownRow = await createUser({ region: "Белослав" });
+    const inVarna = await createUser({ region: "кв. Виница" });
+
+    const ids = await targeted([
+      { settlement: "гр. Белослав", area: null, streets: [], is_polygon: false },
+    ]);
+    expect(ids.has(inDistrict)).toBe(true);
+    expect(ids.has(onTownRow)).toBe(true);
+    expect(ids.has(inVarna)).toBe(false);
+  });
+
+  // A village has no district level under it, so the settlement row IS what its
+  // residents register under and the plain region query is the whole answer.
+  it("leaves a leaf settlement on the plain region query", async () => {
+    const villager = await createUser({ region: "Долни чифлик" });
+    const cityDweller = await createUser({ region: "кв. Виница" });
+
+    const ids = await targeted([
+      { settlement: "гр. Долни чифлик", area: null, streets: [], is_polygon: false },
+    ]);
+    expect(ids.has(villager)).toBe(true);
+    expect(ids.has(cityDweller)).toBe(false);
+  });
+
+  // A district is still a district: naming one must NOT widen to its city.
+  it("does not widen a named district to its whole settlement", async () => {
+    const inViniza = await createUser({ region: "кв. Виница" });
+    const inChayka = await createUser({ region: "кв. Чайка" });
+
+    const ids = await targeted([
+      { settlement: "гр. Варна", area: "кв. Виница", streets: [], is_polygon: false },
+    ]);
+    expect(ids.has(inViniza)).toBe(true);
+    expect(ids.has(inChayka)).toBe(false);
+  });
+});
+
+// ── F18 / §3.5 · polygons get a floor and a tolerance ────────────────────────
+
+describe("polygon targeting (§3.5)", () => {
+  // A ~600 m square over central Варна.
+  const ring = [
+    [27.9100, 43.2050], [27.9175, 43.2050], [27.9175, 43.2105],
+    [27.9100, 43.2105], [27.9100, 43.2050],
+  ];
+  const polygonLocation = {
+    settlement: "гр. Варна", area: null, streets: ["ул. Дубровник"], is_polygon: true,
+    polygon_geojson: { type: "Polygon", coordinates: [ring] },
+  };
+
+  const targeted = async (locations: unknown[]) => {
+    const res = await submit(basePayload({ processed_data: { locations, city_wide: false } }));
+    return new Set(((await res.json()) as SubmitResponse).user_ids);
+  };
+
+  it("notifies users inside the ring", async () => {
+    const inside = await createUser({ lat: 43.2080, lng: 27.9140 });
+    const faraway = await createUser({ lat: 43.1800, lng: 27.8900 });
+    const ids = await targeted([polygonLocation]);
+    expect(ids.has(inside)).toBe(true);
+    expect(ids.has(faraway)).toBe(false);
+  });
+
+  // A ring edge sits a road half-width off an OSM centreline and the point being
+  // tested is a phone's GPS fix. A resident on their own doorstep was outside.
+  it("keeps a user a few metres outside the ring", async () => {
+    // ~22 m north of the top edge (1 degree of latitude ≈ 111.3 km).
+    const justOutside = await createUser({ lat: 43.2105 + 0.0002, lng: 27.9140 });
+    const ids = await targeted([polygonLocation]);
+    expect(ids.has(justOutside)).toBe(true);
+  });
+
+  it("still excludes a user well outside the tolerance band", async () => {
+    // ~110 m north — past the 30 m band.
+    const wellOutside = await createUser({ lat: 43.2105 + 0.001, lng: 27.9140 });
+    const ids = await targeted([polygonLocation]);
+    expect(ids.has(wellOutside)).toBe(false);
+  });
+
+  // The exposure that never fired only because every polygon in the window
+  // failed to build: the polygon branch is exclusive, so a ring matching nobody
+  // notified nobody — where the same alert with no polygon would have reached
+  // the whole street list.
+  it("falls back to the street/region audience when the ring matches nobody", async () => {
+    const onStreet = await createUser({ street: "Дубровник" });
+    const ids = await targeted([polygonLocation]);
+    expect(ids.has(onStreet)).toBe(true);
+  });
+});
+
+// ── F2 / §2.1 · a failed polygon build stops being invisible ─────────────────
+//
+// `is_polygon` has to be cleared when no geometry was produced — targeting an
+// empty ring notifies nobody and every reader takes the flag as a promise that
+// geometry is present. Clearing it ALONE erased the fact that a block was ever
+// asked for: 252 of 252 stored locations in the 08.08.2026 window carried
+// `is_polygon: false`, so a build failure and a message that never mentioned a
+// block were byte-identical once stored. All four ★ notes in that review blamed
+// the AI for missing the "каре" cue; the deterministic A2 guard had fired
+// correctly every time.
+describe("polygon build failures are recorded (§2.1)", () => {
+  it("stores polygon_failed instead of a row that looks like plain streets", async () => {
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{
+          settlement: "гр. Варна", area: null, streets: ["ул. Дубровник"],
+          is_polygon: true, polygon_failure: "only 1/4 street names resolved in Варна",
+        }],
+        city_wide: false,
+      },
+    }));
+    const { alert_id } = await res.json() as SubmitResponse;
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+
+    // Still false, so nothing downstream targets an empty ring…
+    expect(loc.is_polygon).toBe(false);
+    // …and still discoverable, which is what the review tool's dedicated
+    // "polygon flagged, no geometry" badge needs in order to fire at all.
+    expect(loc.polygon_failed).toBe(true);
+    expect(loc.polygon_failure).toContain("street names resolved");
+  });
+
+  it("leaves the flag off a location that never asked for one", async () => {
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{ settlement: "гр. Варна", area: null, streets: ["ул. Дубровник"], is_polygon: false }],
+        city_wide: false,
+      },
+    }));
+    const { alert_id } = await res.json() as SubmitResponse;
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.polygon_failed).toBeUndefined();
+  });
+});
+
+// ── F9 / §2.5 · a geocoded point has to be in the settlement it was asked about ─
+//
+// 803a51e4 (ViK, гр. Долни чифлик, six flower-named streets) pinned 6.4 km east
+// of the town: none of the six was seeded, so resolveCoordinates fell through to
+// Nominatim, which answered "Синчец, Долни чифлик" with a point outside it. The
+// answer was accepted, cached, and nothing compared it against the town.
+//
+// The threshold cannot be a constant — Варна's own streets reach 10.7 km from
+// its centroid at the 95th percentile, while Долни чифлик's 42 seeded streets
+// all lie within 1.2 km — so it is the settlement's own extent.
+describe("geocode plausibility (§2.5)", () => {
+  beforeEach(async () => {
+    await env.DB.prepare(
+      "INSERT INTO regions (region_name, lat, lng) VALUES ('Долни чифлик', 42.9930, 27.7180)",
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO streets (street_name, region_id, lat, lng)
+       SELECT 'Камчия', id, 42.9940, 27.7190 FROM regions WHERE region_name = 'Долни чифлик'`,
+    ).run();
+    clearRefCaches();
+  });
+
+  it("rejects an answer far outside the settlement the message named", async () => {
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(200, JSON.stringify([{ lat: "43.0500", lon: "27.7900", class: "highway", type: "residential" }]),
+        { headers: { "Content-Type": "application/json" } });
+
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{
+          settlement: "гр. Долни чифлик", area: null, streets: ["ул. Синчец"], is_polygon: false,
+        }],
+        city_wide: false,
+      },
+    }));
+    const { alert_id } = await res.json() as SubmitResponse;
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+
+    // Falls through to the settlement centroid — a coarse pin, not a wrong one.
+    expect(loc.lat).toBeCloseTo(42.9930, 3);
+    expect(loc.lng).toBeCloseTo(27.7180, 3);
+  });
+
+  // The other direction, and the reason the check is measured against a STATED
+  // settlement only: settlementScope answers "Варна" for anything it cannot
+  // place, and judging an answer against a city we merely assumed would reject
+  // correct points 40 km away (8360abda's "Вилна зона", in Провадия).
+  it("accepts an answer when the message named no settlement to judge it by", async () => {
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(200, JSON.stringify([{ lat: "43.1786369", lon: "27.4438702", class: "place", type: "locality" }]),
+        { headers: { "Content-Type": "application/json" } });
+
+    const res = await submit(basePayload({
+      processed_data: {
+        locations: [{ settlement: null, area: "Вилна зона", streets: [], is_polygon: false }],
+        city_wide: false,
+      },
+    }));
+    const { alert_id } = await res.json() as SubmitResponse;
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.1786369, 4);
+  });
+});

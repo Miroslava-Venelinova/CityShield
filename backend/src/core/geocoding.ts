@@ -268,8 +268,16 @@ export async function reverseGeocode(
       ok: true,
       // Same preference order as NominatimGeocodingService.cs, but every
       // level is kept so the caller can fall back down the list.
+      // `locality` sits with the other sub-settlement levels because the seed now
+      // carries them: the province sweep's DISTRICT_PLACES gained `locality` so
+      // that м-т (местност) names get a `regions` row at all, and ~90 of them do.
+      // Seeding one is only half the job — a region can be matched by an alert's
+      // name and still notify nobody, because a user's `region_id` comes from
+      // THIS list. Without the level here, every locality row would be a place
+      // alerts can resolve to and no user can ever be registered under.
       regionNames: pickAll(body.address,
-        ["suburb", "neighbourhood", "quarter", "city_district", "city", "town", "village"]),
+        ["suburb", "neighbourhood", "locality", "quarter", "city_district",
+          "city", "town", "village"]),
       streetNames: pickAll(body.address, ["road", "pedestrian", "path"]),
       settlementNames: pickAll(body.address, ["city", "town", "village"]),
     };

@@ -33,17 +33,28 @@ export type PlaceKind =
  * agree or one of them is unstated — "к.к. Чайка" and "кв. Чайка" are two
  * different places that happen to share a core.
  */
-export type PlaceClass = "street" | "district" | "resort" | "locality" | "village" | "city" | "so";
+export type PlaceClass = "street" | "district" | "resort" | "village" | "city";
 
 const KIND_CLASS: Record<PlaceKind, PlaceClass> = {
   "ул.": "street", "бул.": "street", "ал.": "street", "пл.": "street",
-  // кв. (квартал) and ж.к. (жилищен комплекс) are used interchangeably by the
-  // sources for the same city districts — "ж.к. Чайка" and "кв. Чайка" are one
-  // place — so they deliberately share a class.
-  "ж.к.": "district", "кв.": "district",
+  // Every kind that names a place INSIDE a settlement shares one class, because
+  // the sources use them interchangeably for the same place. кв. (квартал) and
+  // ж.к. (жилищен комплекс) always did — "ж.к. Чайка" and "кв. Чайка" are one
+  // district — and the 08.08.2026 review found м-т (местност) and с.о. doing the
+  // same: epro writes "м-ст Изгрев" for the row the seed carries as "кв. Изгрев",
+  // and "м-т Ален мак" / "м-т Добрева чешма" for two с.о. villa zones. Held
+  // apart, those three were rejected by kindsCompatible and targeted nobody at
+  // all; "м-ст Изгрев" then matched the *village* Изгрев, 25 km out, because a
+  // bare seeded name is compatible with everything.
+  "ж.к.": "district", "кв.": "district", "м-т": "district", "с.о.": "district",
+  // к.к. deliberately stays out of that merge. It is the one sub-settlement kind
+  // the sources do NOT use interchangeably, and the separation is measured:
+  // alert 584f1445 pinned "ж.к. Чайка" on к.к. Чайка, a resort 6 km from the
+  // district of that name, and the kind is the only thing that tells them apart.
+  // Merging it back would hand every "ж.к. Чайка" to the resort again, since
+  // "к.к. Чайка" is the closer *literal* spelling of the two and literal
+  // spelling is this module's last tie-break.
   "к.к.": "resort",
-  "м-т": "locality",
-  "с.о.": "so",
   "с.": "village",
   "гр.": "city",
 };

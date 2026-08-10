@@ -5,7 +5,7 @@
 import * as q from "../db/queries";
 import { cityCenter, matchRegion, matchStreet, parseName, placeClass } from "./place-names";
 import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
-import { distanceKm, pointInRing, type Ring, ringBBox, ringCentroid } from "./geo";
+import { distanceKm, distanceToRingM, type Ring, ringBBox, ringCentroid } from "./geo";
 import { normalizeBusLine } from "./bus-lines";
 import { type PushNotification, sendPushToUsers } from "./onesignal";
 import { type AlertWindows, formatWindow, parseWindows } from "../shared/datetime";
@@ -54,6 +54,25 @@ export interface AlertLocationDTO {
    *  used to locate the area rather than to bound it (normalize.ts A6). Display
    *  is unchanged; this records why targeting was region-wide. */
   region_wide?: boolean;
+  /**
+   * A polygon was asked for and the build produced none.
+   *
+   * `is_polygon` has to be cleared in that case — every reader downstream treats
+   * it as "there is geometry here", and targeting an empty ring notifies nobody
+   * — but clearing it alone erased the fact that a block was ever requested. The
+   * stored row then read exactly like a message that never mentioned one, which
+   * is how the 08.08.2026 review came to blame the AI for four failures the
+   * deterministic A2 guard had gotten right: 252 of 252 stored locations carried
+   * `is_polygon: false`, and nothing distinguished the two populations.
+   *
+   * Rides inside `locations_json`, so it needs no migration, and it is what
+   * makes the review tool's `polygon flagged, no geometry` badge reachable.
+   */
+  polygon_failed?: boolean;
+  /** Why the build failed, from BlockPolygonResult.reason — "only 2/4 street
+   *  names resolved", "the streets enclose no block". Paired with the flag
+   *  above so a reviewer gets the cause, not just the fact. */
+  polygon_failure?: string;
   polygon_geojson?: unknown; // bare GeoJSON Polygon geometry
   lat?: number;
   lng?: number;
@@ -163,7 +182,39 @@ function readLocation(location: Json): LocationSlots {
   };
 }
 
-async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
+/**
+ * Why one location's audience came out the way it did.
+ *
+ * Deliberately the same shape tools/alert-review/targeting.py records, because
+ * the two are meant to stay comparable: that simulator recomputed the 08.08.2026
+ * review's reach numbers offline, weeks after the fact, against a 5-row users
+ * table — and it could, only because the Worker itself had never said a word
+ * about any of it. Every failure in ACCURACY.md terminates in an empty audience
+ * and a pipeline that reports success.
+ *
+ * Built unconditionally (it is four fields and a string), logged only when the
+ * audience is empty or the resolution escaped its settlement.
+ */
+interface TargetTrace {
+  label: string;
+  method: "polygon" | "streets" | "region" | "settlement" | "none";
+  settlement: string | null;
+  region: string | null;
+  streets: Array<{ named: string; matched: string | null }>;
+  note: string;
+}
+
+/** One line per location, compact enough to read in `wrangler tail`. */
+function formatTrace(t: TargetTrace): string {
+  const streets = t.streets.length === 0 ? "" : "; streets " + t.streets
+    .map((s) => `${s.named}→${s.matched ?? "✗"}`).join(", ");
+  return `[${t.method}] "${t.label}" settlement=${t.settlement ?? "∅"} `
+    + `region=${t.region ?? "∅"}${streets} — ${t.note}`;
+}
+
+async function getUserIdsInRange(
+  env: Env, location: Json, trace: TargetTrace,
+): Promise<string[]> {
   const { settlement: settlementName, area, streets: named, region_wide } = readLocation(location);
   const regions = await q.getRegions(env);
 
@@ -171,12 +222,39 @@ async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
   // it: since migration 0017 two settlements can hold a district of the same
   // name, and the slot is the only thing that says which one is meant.
   const settlement = settlementScope(settlementName, area, regions);
+  trace.settlement = settlement?.name ?? null;
 
   // The audience is the most specific place named. That is what the flat schema
   // put in location_name, so splitting the slots left this resolution identical
   // apart from the scope.
   const region = matchRegion(
     area ?? settlementName ?? "", regions, undefined, settlement?.id);
+  trace.region = region?.name ?? null;
+
+  // `matchRegion` treats its scope as a preference and retries unscoped when the
+  // scope matches nothing — it has to, because 171 of 260 seeded regions carry no
+  // settlement link and a hard filter would make them unreachable. The cost is
+  // §2.4: "гр. Вълчи дол – улиците: Васил Левски" filed the street as the area,
+  // matched nothing in Вълчи дол, and the retry found VARNA's Васил Левски, 50 km
+  // away. That is a mis-target, not an under-target, which is the worse
+  // direction, and nothing said it had happened.
+  //
+  // Detected here rather than inside the matcher deliberately: the retry itself
+  // is routine and on a hot path, while a retry whose answer landed in ANOTHER
+  // settlement is both rare and always worth reading. The three shapes below are
+  // all legitimately "inside this settlement" — the settlement's own row, a
+  // district linked to it, and a row with no link at all (pre-0016 data, which
+  // cannot be judged either way).
+  if (settlement !== null && region !== null
+    && region.id !== settlement.id
+    && region.settlement_id !== null && region.settlement_id !== undefined
+    && region.settlement_id !== settlement.id) {
+    const parent = regions.find((r) => r.id === region.settlement_id);
+    console.warn(
+      `[targeting] "${area ?? settlementName}" resolved to "${region.name}" in `
+      + `${parent?.name ?? `settlement ${region.settlement_id}`}, outside the stated `
+      + `settlement ${settlement.name} — scoped match found nothing and the unscoped retry won.`);
+  }
 
   // "в района на ул. X, ул. Y" (A6) names streets to say where the outage is,
   // not who is in it: a resident one street over is affected just as much, and
@@ -209,10 +287,13 @@ async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
     const streetIds = new Set<number>();
     for (const streetName of named) {
       const street = matchStreet(streetName, streets, settlement.id);
+      trace.streets.push({ named: streetName, matched: street?.name ?? null });
       if (street) streetIds.add(street.id);
     }
     // All matched streets resolve in one query rather than one query each.
     if (streetIds.size > 0) {
+      trace.method = "streets";
+      trace.note = `${streetIds.size} of ${named.length} named street(s) matched`;
       const ids = [...streetIds];
       // Pairing the street list with the region narrows a boulevard that runs
       // through several districts to the one named, and carries that region's
@@ -236,10 +317,131 @@ async function getUserIdsInRange(env: Env, location: Json): Promise<string[]> {
     }
     // None of the named streets exist in our table — the street detail is
     // unusable, so fall through to region-wide rather than notifying nobody.
+    trace.note = "none of the named streets exist in the streets table";
+  } else if (named.length > 0 && areaOnly) {
+    trace.streets = named.map((s) => ({ named: s, matched: null }));
+    trace.note = "the message hedged (в района на …), so the streets locate the area "
+      + "rather than bound it";
+  } else if (named.length > 0 && settlement === null) {
+    trace.streets = named.map((s) => ({ named: s, matched: null }));
+    trace.note = "no settlement resolved, so no street lookup is possible";
   }
 
   // No usable street: region-wide, or nothing if the region is unknown too.
-  return region ? q.getUserIdsByRegion(env, region.id) : [];
+  if (region === null) {
+    trace.method = "none";
+    trace.note = (trace.note ? trace.note + " → " : "") + "no region matched either";
+    return [];
+  }
+  return getUserIdsByRegionWide(env, region, regions, trace);
+}
+
+/**
+ * How far from a settlement's centroid a user with NO region of their own still
+ * counts as inside it.
+ *
+ * Only ever applied to users we cannot place any other way — see
+ * getUnplacedUsersInBBox — so the risk it carries is a village resident with no
+ * region hearing about a city outage, not a wrong audience for anyone we can
+ * already place.
+ *
+ * 9 km is the same number place-names.ts's in-city tie-break uses, and it is
+ * measured the same way: Варна's own seeded streets sit at a median of 3.5 km
+ * from the centroid, and their 95th percentile is 10.7. Deliberately tighter
+ * than CITY_WIDE_RADIUS_KM (15 km), which answers a different question — that
+ * one decides how far a stated city-wide broadcast reaches, this one decides who
+ * counts as being in the city at all.
+ */
+const SETTLEMENT_REACH_KM = 9;
+
+/**
+ * The audience for a region, widened to the whole settlement when the region IS
+ * one that holds districts — except for the city, which is not an audience at
+ * all (see below).
+ *
+ * `getUserIdsByRegion` is `WHERE region_id = ?`, which is exactly right for a
+ * district and close to useless for a settlement that holds any. A user's
+ * region_id comes from reverse geocoding most-specific-first — suburb,
+ * neighbourhood, quarter, city_district, city, … (core/geocoding.ts) — so
+ * anyone inside a settlement we seed districts for resolves to their DISTRICT
+ * and never to the settlement. The settlement row matched only the residue whose
+ * reverse geocode hit no district we seed, so a settlement-wide alert reached
+ * almost nobody, silently (§3.1).
+ *
+ * Villages were never affected: there is no district level under them, so the
+ * settlement row is what their residents register under and `region_id = ?` is
+ * the whole answer. That is also the test — a region that no seeded row claims
+ * as its parent is a leaf, and the plain query stands. For a small town like
+ * Белослав, where we hold three districts and most of the town is not in one,
+ * the union of the settlement row and its districts is both correct and
+ * complete.
+ *
+ * The two halves are unioned rather than swapped because they catch different
+ * people: the region set reaches everyone we placed, and the radius reaches the
+ * residue we could not place but can still measure.
+ */
+async function getUserIdsByRegionWide(
+  env: Env, region: q.NamedRow, regions: readonly q.NamedRow[], trace: TargetTrace,
+): Promise<string[]> {
+  // §5.1, decided 10.08.2026: **a failed extraction notifies nobody.**
+  //
+  // The city is the one settlement where "the settlement, and nothing more
+  // specific" is never a statement the sources make. A genuine whole-city outage
+  // is published in words ("всички абонати", "цялата Варна") and A3/A8 route it
+  // to `city_wide`, which has its own fan-out. So a location that resolves to
+  // the city row with no area and no matched street is, by construction, a
+  // district that got lost — either the model dropped it (§2.7) or every named
+  // street failed to match — and A3's own docblock has said so since 28.07:
+  // "region-wide Варна reaches far fewer people than it should, but never people
+  // the message was not about."
+  //
+  // Widening it to the city's ~90 districts would have inverted exactly that
+  // trade: a city-sized push decided by an extraction we already know failed.
+  // Reaching nobody is the wrong outcome too — but it is the recoverable one,
+  // and it is now loud (F1) instead of silent, which is the difference that
+  // matters. Villages and towns are unaffected; only the settlement that owns
+  // the city-wide path is excluded from being an audience by name alone.
+  if (parseName(region.name).core.toLowerCase() === DEFAULT_SETTLEMENT.toLowerCase()) {
+    trace.method = "none";
+    trace.note = (trace.note ? trace.note + " → " : "")
+      + `${region.name} alone is not an audience: a whole-city outage is published as `
+      + `city-wide, so this is a lost district. Notifying nobody.`;
+    return [];
+  }
+
+  const districts = regions.filter((r) => r.settlement_id === region.id && r.id !== region.id);
+  if (districts.length === 0) {
+    trace.method = "region";
+    trace.note = (trace.note ? trace.note + " → " : "") + `every user under ${region.name}`;
+    return q.getUserIdsByRegion(env, region.id);
+  }
+
+  // Aliases make one region id appear under several names (migration 0013), so
+  // the id list is deduped before it is chunked into IN clauses.
+  const ids = [...new Set([region.id, ...districts.map((d) => d.id)])];
+  const placed = await q.getUserIdsByRegions(env, ids);
+
+  const unplaced: string[] = [];
+  if (region.lat !== null && region.lng !== null) {
+    // A degree of latitude is ~111.32 km everywhere; a degree of longitude
+    // shrinks with the cosine. Both are widened into the bbox SQL can filter on,
+    // and the exact radius is applied to what comes back.
+    const dLat = SETTLEMENT_REACH_KM / 111.32;
+    const dLng = SETTLEMENT_REACH_KM / (111.32 * Math.cos(region.lat * Math.PI / 180));
+    for (const u of await q.getUnplacedUsersInBBox(
+      env, region.lat - dLat, region.lat + dLat, region.lng - dLng, region.lng + dLng)) {
+      if (distanceKm(u.latitude, u.longitude, region.lat, region.lng) <= SETTLEMENT_REACH_KM) {
+        unplaced.push(u.user_id);
+      }
+    }
+  }
+
+  trace.method = "settlement";
+  trace.note = (trace.note ? trace.note + " → " : "")
+    + `${region.name} is a settlement with ${districts.length} seeded district(s): `
+    + `users under any of them, plus ${unplaced.length} with no region inside `
+    + `${SETTLEMENT_REACH_KM} km`;
+  return [...new Set([...placed, ...unplaced])];
 }
 
 /**
@@ -295,6 +497,24 @@ async function getUserIdsCityWide(env: Env): Promise<string[]> {
   return ids;
 }
 
+/**
+ * How far outside a block's ring a user still counts as inside it.
+ *
+ * A ring is not a survey line. Its edges sit `ROAD_HALF_WIDTH_M` (12 m) off the
+ * OSM centrelines they were cut from, those centrelines are themselves sketched,
+ * and the point being tested is a phone's GPS fix — a consumer receiver is good
+ * to perhaps 10 m in the open and much worse between buildings. A hard in/out
+ * test against all three of those errors at once drops residents of the block
+ * standing on their own doorstep.
+ *
+ * 30 m is roughly one building depth: wide enough to absorb the three errors
+ * above, narrow enough that it cannot reach across the street into the next
+ * block, whose own alert would be a different message. It only ever widens an
+ * audience, and the failure it prevents — a water outage nobody was told about —
+ * costs more than one neighbour hearing about the block next door.
+ */
+const POLYGON_TOLERANCE_M = 30;
+
 async function getUserIdsInPolygonRange(env: Env, polygonJson: Json): Promise<string[]> {
   const ids = new Set<string>();
   for (const geometry of allGeometries(polygonJson)) {
@@ -302,10 +522,19 @@ async function getUserIdsInPolygonRange(env: Env, polygonJson: Json): Promise<st
     if (!ring) continue;
     const bbox = ringBBox(ring);
     if (!bbox) continue;
+    // The bbox prefilter has to be widened by the same tolerance the exact test
+    // allows, or a user inside the band but outside the box is never a candidate
+    // and the band does nothing at the corners.
+    const dLat = POLYGON_TOLERANCE_M / 111_320;
+    const dLng = POLYGON_TOLERANCE_M
+      / (111_320 * Math.cos((bbox.minLat + bbox.maxLat) / 2 * Math.PI / 180));
     // SQL bbox prefilter, exact ray-cast on the survivors (§1.3).
-    const candidates = await q.getUsersInBBox(env, bbox.minLat, bbox.maxLat, bbox.minLng, bbox.maxLng);
+    const candidates = await q.getUsersInBBox(
+      env, bbox.minLat - dLat, bbox.maxLat + dLat, bbox.minLng - dLng, bbox.maxLng + dLng);
     for (const u of candidates) {
-      if (pointInRing(u.latitude, u.longitude, ring)) ids.add(u.user_id);
+      if (distanceToRingM(u.latitude, u.longitude, ring) <= POLYGON_TOLERANCE_M) {
+        ids.add(u.user_id);
+      }
     }
   }
   return [...ids];
@@ -355,16 +584,46 @@ export async function sendUsersNotification(env: Env, alert: AlertPayload): Prom
   // ── 1. Gather target users ─────────────────────────────────────────────
   let userIds: string[] = [];
   const locationArray = Array.isArray(locations) ? locations : [];
+  const traces: TargetTrace[] = [];
 
   if (locationArray.length > 0) {
     for (const raw of locationArray) {
       const location = asObject(raw);
       if (!location) continue;
+      const slots = readLocation(location);
+      const trace: TargetTrace = {
+        label: slots.area ?? slots.settlement ?? "(unnamed)",
+        method: "none", settlement: null, region: null, streets: [], note: "",
+      };
+      traces.push(trace);
+
       const polygonJson = asObject(location.polygon_geojson);
       if (location.is_polygon === true && polygonJson) {
-        userIds.push(...await getUserIdsInPolygonRange(env, polygonJson));
+        const inRing = await getUserIdsInPolygonRange(env, polygonJson);
+        trace.method = "polygon";
+        trace.note = `${inRing.length} user(s) inside the ring (±${POLYGON_TOLERANCE_M} m)`;
+        if (inRing.length > 0) {
+          userIds.push(...inRing);
+          continue;
+        }
+        // An empty ring is not evidence that nobody is affected — it is equally
+        // "the geometry is wrong" or "these residents have not set a location".
+        // The polygon branch is exclusive, so before this there was no floor
+        // under it at all: a built polygon that matched nobody notified nobody,
+        // where the same alert with NO polygon would have reached the whole
+        // district. Every polygon in the 08.08.2026 window failed to build, so
+        // that exposure never fired — luck, not design.
+        trace.note += " → falling back to the street/region audience";
+        // Its own trace: getUserIdsInRange overwrites method and note with the
+        // path it actually took, and the ring's own verdict is worth keeping.
+        const fallback: TargetTrace = {
+          label: `${trace.label} (polygon fallback)`,
+          method: "none", settlement: null, region: null, streets: [], note: "",
+        };
+        traces.push(fallback);
+        userIds.push(...await getUserIdsInRange(env, location, fallback));
       } else {
-        userIds.push(...await getUserIdsInRange(env, location));
+        userIds.push(...await getUserIdsInRange(env, location, trace));
       }
     }
   } else if (cityWide === false) {
@@ -388,6 +647,17 @@ export async function sendUsersNotification(env: Env, alert: AlertPayload): Prom
     console.warn(
       `Alert '${clamp(title, 80)}' (${category}) is city-wide — broadcasting to `
       + `${userIds.length} user(s) within ${CITY_WIDE_RADIUS_KM} km.`);
+  }
+
+  // A location that resolves to nothing at all is invisible in the totals: the
+  // 08.08.2026 review found 20 of 248 locations targeting nobody *by
+  // construction*, and every one of them sat inside an alert that reached
+  // someone through a different location. So they are reported per location,
+  // not only when the whole alert comes back empty.
+  for (const t of traces) {
+    if (t.method === "none") {
+      console.warn(`[targeting] ${category}: location targets nobody — ${formatTrace(t)}`);
+    }
   }
 
   // Alerts naming specific bus lines (vt route changes) go only to users
@@ -417,8 +687,26 @@ export async function sendUsersNotification(env: Env, alert: AlertPayload): Prom
   const allIds = [...new Set(userIds)];
   const disabled = new Set(await q.getDisabledUserIds(env, allIds, category));
   const filteredIds = allIds.filter((id) => !disabled.has(id));
-  // Nobody to notify is a delivered outcome, not a failure to retry.
-  if (filteredIds.length === 0) return { recipients: filteredIds, delivered: true };
+  // Nobody to notify is a delivered outcome, not a failure to retry — but it is
+  // the outcome EVERY failure in this pipeline produces, and until now it was
+  // silent. The alert is stored, notified_at is stamped, the cursor advances,
+  // and "correctly reached nobody" was byte-identical to "the matcher lost the
+  // district and the whole city was not told the water is off". Reach failures
+  // are the dangerous class precisely because they leave no trace anywhere else:
+  // a wrong pin shows on a map, an unsent push looks exactly like a sent one.
+  //
+  // Warn, not error: a genuinely empty audience is a normal outcome for a
+  // village we hold no users in. The per-location traces are what separate the
+  // two, so they are printed rather than summarised.
+  if (filteredIds.length === 0) {
+    const before = allIds.length;
+    console.warn(
+      `[targeting] Alert '${clamp(title, 80)}' (${category}) notified NOBODY`
+      + (before > 0 ? ` — ${before} user(s) matched but all have ${category} disabled` : "")
+      + (traces.length === 0 ? " — no locations resolved at all" : "")
+      + traces.map((t) => `\n  ${formatTrace(t)}`).join(""));
+    return { recipients: filteredIds, delivered: true };
+  }
 
   // ── 3. Push data payload — all values must be strings ──────────────────
   const pushData = {
@@ -565,7 +853,19 @@ async function enrichLocations(
         dto.lng = centroid.lng;
       }
     } else {
-      dto.is_polygon = false; // polygon was requested but not built
+      // `is_polygon` still has to go: getUserIdsInPolygonRange would target an
+      // empty ring, and every downstream reader takes the flag as a promise that
+      // geometry is present. What must NOT go with it is the fact that a block
+      // was asked for — see AlertLocationDTO.polygon_failed.
+      if (dto.is_polygon) {
+        dto.polygon_failed = true;
+        const why = typeof location.polygon_failure === "string" ? location.polygon_failure : null;
+        if (why) dto.polygon_failure = why;
+        console.warn(
+          `[polygon] requested but not built for "${dto.location_name}" `
+          + `[${dto.sublocations.join(", ")}]${why ? `: ${why}` : ""}`);
+      }
+      dto.is_polygon = false;
       const point = await resolveCoordinates(env, dto, deadline);
       if (point) {
         dto.lat = point.lat;
@@ -637,26 +937,145 @@ function settlementOf(locationName: string): string {
  * Null means we could not place the location in any settlement we know, and
  * every caller treats that as "no street lookup is possible here" rather than
  * as "search everywhere".
+ *
+ * Exported for ingestion/pipeline.ts, which needs the same answer to scope a
+ * polygon build. Two spellings of "which settlement is this in" would drift, and
+ * the polygon path's whole problem was that it had no answer at all.
  */
-function settlementScope(
+export function settlementScope(
   settlement: string | null, area: string | null, regions: readonly q.NamedRow[],
 ): q.NamedRow | null {
   for (const name of [settlement, area]) {
     if (name === null) continue;
+
+    // A written "гр."/"с." names a settlement in its own right, so it IS the
+    // scope and the parent-link branch below must not get to it first. That
+    // ordering is what §1.2 actually turned on: Варна province holds two places
+    // called Припек 10 km apart — the village, and a suburb of Константиново —
+    // and an unscoped `matchRegion("с. Припек")` can land on either. Landing on
+    // the suburb used to mean following its parent link and answering with
+    // Константиново's centroid, which is how two alerts came to pin a village
+    // 1.7 km off. A name that states its own settlement kind is never a district
+    // of something else, so resolve it as a settlement first.
+    //
+    // Settlement-class rows only, for the reason below: since migration 0017 a
+    // district may carry the same name, and resolving to it would hand
+    // `matchStreet` a district id as its scope — `streets.region_id` never
+    // points at a district (0015), so every street lookup under it would
+    // silently find nothing.
+    const written = settlementOf(name);
+    if (written !== DEFAULT_SETTLEMENT) {
+      const scope = matchRegion(written, regions, undefined, null);
+      // §3.4: a settlement the seed does not hold. The street path is gated on a
+      // non-null scope — rightly, since an unscoped street match is what used to
+      // notify Varna about a Долни чифлик outage — so unless the area itself
+      // matches a region, this location's audience is exactly zero. ViK publishes
+      // for the whole province, and nothing said a word about it.
+      if (scope === null) {
+        console.warn(
+          `[targeting] No seeded settlement for "${name}" — no street lookup is `
+          + `possible, so this location can only be reached by its area.`);
+      }
+      return scope;
+    }
+
+    // No settlement kind was written, so this is a district (or a bare name we
+    // cannot classify). Migration 0016's link is what says which settlement it
+    // sits in — the written kind cannot, and answering Варна for "ж.к. Младост
+    // (Белослав)" is a district of the wrong town.
     const row = matchRegion(name, regions);
     if (row && row.settlement_id !== null && row.settlement_id !== undefined) {
       const parent = regions.find((r) => r.id === row.settlement_id);
       if (parent) return parent;
     }
-    // Settlement-class rows only. `written` is a settlement name by
-    // construction, and since migration 0017 a district may carry the same one —
-    // resolving to it would hand `matchStreet` a district id as its scope, and
-    // `streets.region_id` never points at a district (0015), so every street
-    // lookup under it would silently find nothing.
-    const written = settlementOf(name);
-    if (written !== DEFAULT_SETTLEMENT) return matchRegion(written, regions, undefined, null);
   }
   return matchRegion(DEFAULT_SETTLEMENT, regions, undefined, null);
+}
+
+// ── Geocode plausibility (§2.5) ──────────────────────────────────────────────
+
+/**
+ * The radius a settlement's own places must fall inside, derived from the
+ * settlement's own seeded streets.
+ *
+ * A single global number cannot do this job, and the seed data says why. Varna's
+ * 1,333 streets sit at a median of 3.5 km from its centroid with a 95th
+ * percentile of 10.7 km — the city really is that big. Долни чифлик's 42 streets
+ * all lie within 1.2 km. Nominatim answered "ул. Синчец, Долни чифлик" with a
+ * point 6.4 km east of the town (alert 803a51e4, still in geocode_cache), and
+ * there is no constant that rejects 6.4 km while keeping Varna's legitimate
+ * 10.7 — so the threshold has to be the settlement's own extent.
+ *
+ * The 95th percentile rather than the maximum, because a maximum is one bad row
+ * away from useless: Varna's farthest "own" street is currently 58 km out (§1.1),
+ * and a max-based radius would wave the whole province through. A quarter's
+ * margin on top, so a legitimate street just past the ones we happen to have
+ * seeded is not rejected.
+ *
+ * The floor is what makes it safe on thin data — с. Аврен has exactly one seeded
+ * street, and its extent is not 0.9 km. Fails open by design: a settlement with
+ * no seeded streets at all gets the floor, and the check can only ever reject an
+ * answer that is further out than the town plausibly reaches.
+ */
+const SETTLEMENT_EXTENT_PERCENTILE = 0.95;
+const SETTLEMENT_EXTENT_MARGIN = 1.25;
+const SETTLEMENT_EXTENT_MIN_KM = 2;
+
+/**
+ * Memoized per (streets array, settlement id). The streets array is the 6-hour
+ * module-scope ref cache, so the WeakMap drops every extent when the rows behind
+ * them turn over — the same keying `prepare` and `candidateGrams` use, and for
+ * the same 10 ms budget.
+ */
+const extents = new WeakMap<object, Map<number, number>>();
+
+function settlementExtentKm(scope: q.NamedRow, streets: readonly q.NamedRow[]): number {
+  if (scope.lat === null || scope.lng === null) return SETTLEMENT_EXTENT_MIN_KM;
+  let memo = extents.get(streets as object);
+  if (!memo) {
+    memo = new Map();
+    extents.set(streets as object, memo);
+  }
+  const cached = memo.get(scope.id);
+  if (cached !== undefined) return cached;
+
+  const distances: number[] = [];
+  for (const s of streets) {
+    if (s.region_id !== scope.id || s.lat === null || s.lng === null) continue;
+    distances.push(distanceKm(scope.lat, scope.lng, s.lat, s.lng));
+  }
+  distances.sort((a, b) => a - b);
+  const p = distances.length === 0
+    ? 0
+    : distances[Math.min(distances.length - 1,
+      Math.floor(distances.length * SETTLEMENT_EXTENT_PERCENTILE))]!;
+  const km = Math.max(SETTLEMENT_EXTENT_MIN_KM, p * SETTLEMENT_EXTENT_MARGIN);
+  memo.set(scope.id, km);
+  return km;
+}
+
+/**
+ * A geocoded point, or null when it cannot plausibly be in the settlement it was
+ * looked up inside.
+ *
+ * Nothing used to compare a Nominatim answer against the place it was anchored
+ * to, so a confident wrong answer was accepted and — because misses are cached
+ * too — kept. Rejecting it lets `resolveCoordinates` try the next candidate and
+ * ultimately the settlement centroid, which is a coarse pin rather than a wrong
+ * one. The rejection is logged: an anchor that keeps failing is a `region_aliases`
+ * row waiting to be written, and it can only be noticed if it is said out loud.
+ */
+function plausible(
+  point: GeoPoint | null, scope: q.NamedRow | null, streets: readonly q.NamedRow[], what: string,
+): GeoPoint | null {
+  if (point === null || scope === null || scope.lat === null || scope.lng === null) return point;
+  const limit = settlementExtentKm(scope, streets);
+  const km = distanceKm(point.lat, point.lng, scope.lat, scope.lng);
+  if (km <= limit) return point;
+  console.warn(
+    `[geocode] rejected '${what}' — Nominatim answered ${km.toFixed(1)} km from `
+    + `${scope.name}, past its ${limit.toFixed(1)} km extent.`);
+  return null;
 }
 
 /**
@@ -703,6 +1122,19 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
   // The same thing as a string, for the Nominatim anchor. The resolved row's
   // name is the canonical spelling; settlementOf only sees what was written.
   const settlement = scope?.name ?? settlementOf(dto.settlement ?? dto.area ?? dto.location_name);
+  // Hoisted above step 1: the plausibility check needs the settlement's extent,
+  // which is derived from its own streets. Served by the same 6-hour ref cache
+  // every other read here uses, so asking for it early costs nothing.
+  const streets = await q.getStreets(env);
+
+  // The plausibility check measures against the settlement the MESSAGE stated,
+  // never against DEFAULT_SETTLEMENT. `settlementScope` answers "Варна" for
+  // anything it cannot place, which is the right scope to search in and the
+  // wrong thing to judge an answer by: alert 8360abda names only "Вилна зона",
+  // and the correct point for it is 40 km away in Провадия. Judging that against
+  // a Варна we merely assumed would reject a right answer, which is the failure
+  // this guard exists to prevent, pointed the other way.
+  const anchor = dto.settlement?.trim() ? scope : null;
 
   // 1. District / locality level: a named area pins the whole of it — the one
   // inside this location's settlement, which is the whole point of scoping here:
@@ -712,8 +1144,9 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
     const seeded = seededPoint(match);
     if (seeded) return seeded;
 
-    const point = await geocode(
-      env, buildGeocodeQuery(match?.name ?? geocodableName(dto.area), settlement), deadline);
+    const name = match?.name ?? geocodableName(dto.area);
+    const point = plausible(
+      await geocode(env, buildGeocodeQuery(name, settlement), deadline), anchor, streets, name);
     if (point) return point;
     // Area named but unresolvable — fall through to the streets rather than
     // leaving the alert with no pin at all.
@@ -722,7 +1155,6 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
   // 2. Street-level fallback: first sublocation that resolves wins.
   const candidates = dto.sublocations.slice(0, 3);
   if (candidates.length > 0) {
-    const streets = await q.getStreets(env); // hoisted: constant across the loop
     for (const raw of candidates) {
       // Scoped to this location's settlement, so a matched row IS this
       // location's street — which is what lets its seeded coordinate be used
@@ -734,8 +1166,9 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
       const seeded = seededPoint(match);
       if (seeded) return seeded;
 
-      const point = await geocode(
-        env, buildGeocodeQuery(match?.name ?? geocodableName(raw), settlement), deadline);
+      const name = match?.name ?? geocodableName(raw);
+      const point = plausible(
+        await geocode(env, buildGeocodeQuery(name, settlement), deadline), anchor, streets, name);
       if (point) return point;
     }
   }

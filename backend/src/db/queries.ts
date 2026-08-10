@@ -268,6 +268,54 @@ export function getAllUserIds(env: Env) {
   return idColumn(env.DB.prepare("SELECT user_id FROM users"));
 }
 
+/**
+ * Users registered under ANY of the given regions.
+ *
+ * The settlement-wide audience for a city (core/alert-service.ts): a user
+ * inside Варна reverse-geocodes to their district and carries that district's
+ * region_id, never the city's, so `region_id = <Варна>` matches essentially
+ * nobody. The set of regions whose `settlement_id` points at the city is what
+ * "everyone in the city" actually means in this schema.
+ *
+ * Chunked like getUserIdsByStreets — Варна alone has ~90 districts, comfortably
+ * past D1's 100-parameter ceiling once the settlement row is added to them.
+ */
+export async function getUserIdsByRegions(env: Env, regionIds: number[]): Promise<string[]> {
+  if (regionIds.length === 0) return [];
+  const ids = new Set<string>();
+  for (const chunk of chunkKeys(regionIds)) {
+    const stmt = env.DB.prepare(
+      `SELECT user_id FROM users WHERE region_id IN (${inList(chunk.length)})`,
+    ).bind(...chunk);
+    for (const id of await idColumn(stmt)) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * Users who have coordinates but no region at all, inside a bbox.
+ *
+ * The residue of the settlement-wide audience above: someone whose reverse
+ * geocode hit no district we seed has a position and no region_id, so no
+ * region-keyed query can reach them however many regions it lists. Their point
+ * is the only thing that places them, and the caller filters it down from the
+ * bbox to an exact radius.
+ *
+ * `region_id IS NULL` is what keeps this from widening past the settlement: a
+ * user registered in a neighbouring village 4 km out HAS a region, so they are
+ * this query's business to exclude rather than the radius's.
+ */
+export async function getUnplacedUsersInBBox(
+  env: Env, minLat: number, maxLat: number, minLng: number, maxLng: number,
+): Promise<Array<{ user_id: string; latitude: number; longitude: number }>> {
+  const { results } = await env.DB.prepare(
+    `SELECT user_id, latitude, longitude FROM users
+     WHERE region_id IS NULL AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?`,
+  ).bind(minLat, maxLat, minLng, maxLng)
+    .all<{ user_id: string; latitude: number; longitude: number }>();
+  return results;
+}
+
 export function getReceivesAllUserIds(env: Env) {
   return idColumn(env.DB.prepare("SELECT user_id FROM users WHERE receives_all_alerts = 1"));
 }

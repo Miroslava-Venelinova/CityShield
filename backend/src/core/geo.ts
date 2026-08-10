@@ -54,6 +54,47 @@ const EARTH_RADIUS_KM = 6371;
 const RAD = Math.PI / 180;
 
 /**
+ * Metres from a point to the nearest edge of a ring — 0 when the point is on or
+ * inside it.
+ *
+ * `pointInRing` is a hard in/out test, and a block polygon's edge is an estimate:
+ * it sits a road half-width off an OSM centreline, and the user's own position
+ * came from a phone GPS fix. A resident standing on the far kerb of the street
+ * that bounds their own block is outside the ring by a few metres and hears
+ * nothing. This is what lets the caller give that person a tolerance band
+ * instead (alert-service.ts).
+ *
+ * Distances are computed in a local flat projection anchored at the query point,
+ * the same shortcut and for the same reason as `distanceKm` — over the tens of
+ * metres a tolerance band spans, the error is millimetres.
+ */
+export function distanceToRingM(lat: number, lng: number, ring: Ring): number {
+  if (ring.length === 0) return Infinity;
+  if (pointInRing(lat, lng, ring)) return 0;
+
+  // Degrees → metres at this latitude, so the segment maths is plain Euclidean.
+  const mPerLat = 111_320;
+  const mPerLng = 111_320 * Math.cos(lat * RAD);
+  const px = 0, py = 0; // the query point is the origin
+  const toLocal = ([elng, elat]: [number, number]): [number, number] =>
+    [(elng - lng) * mPerLng, (elat - lat) * mPerLat];
+
+  let best = Infinity;
+  let [ax, ay] = toLocal(ring[ring.length - 1]!);
+  for (const vertex of ring) {
+    const [bx, by] = toLocal(vertex);
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    // Project the point onto the segment, clamped to its ends.
+    const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+    const d = Math.hypot(ax + t * dx - px, ay + t * dy - py);
+    if (d < best) best = d;
+    [ax, ay] = [bx, by];
+  }
+  return best;
+}
+
+/**
  * Equirectangular great-circle approximation, in kilometres.
  *
  * Used only to ask "is this seeded place inside Varna or out in the district"

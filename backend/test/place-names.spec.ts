@@ -38,6 +38,14 @@ const regions: NamedRow[] = [
   row("к.к. Св. св. Константин и Елена", 43.2330874, 28.0110003),
   row("Баново", 43.2641622, 27.6770879),
   row("м-т Фичоза", 43.1549663, 27.9393622),
+  // §2.3's three: the sources write "м-т" for places the seed carries as "кв."
+  // or "с.о.", and the kind filter used to make those matches impossible. The
+  // village Изгрев is the trap — its row is bare, so it was compatible with
+  // everything and won a query that meant the district 25 km away.
+  row("кв. Изгрев", 43.2340000, 27.9210000),
+  row("Изгрев", 43.2970000, 27.6950000), // с. Изгрев, община Суворово
+  row("с.о. Ален Мак", 43.2340000, 27.8930000),
+  row("с.о. Добрева чешма", 43.2260000, 27.9700000),
 ];
 
 const streets: NamedRow[] = [
@@ -107,6 +115,21 @@ describe("kind compatibility", () => {
     expect(kindsCompatible(placeClass("к.к."), placeClass("кв."))).toBe(false);
   });
 
+  // F8 / §2.3. epro writes "м-ст Изгрев" for a кв., and "м-т Ален мак" for an
+  // с.о. — the sub-settlement kinds are used interchangeably, and treating them
+  // as a hard filter made three real places unreachable.
+  it("treats м-т, с.о., кв. and ж.к. as one kind of place", () => {
+    for (const kind of ["с.о.", "кв.", "ж.к."] as const) {
+      expect(kindsCompatible(placeClass("м-т"), placeClass(kind)), kind).toBe(true);
+    }
+  });
+
+  // …but NOT к.к., which is the one the sources do keep apart. See KIND_CLASS.
+  it("still keeps к.к. out of that merge", () => {
+    expect(kindsCompatible(placeClass("м-т"), placeClass("к.к."))).toBe(false);
+    expect(kindsCompatible(placeClass("с.о."), placeClass("к.к."))).toBe(false);
+  });
+
   it("lets an unstated kind match anything", () => {
     expect(kindsCompatible(null, placeClass("с."))).toBe(true);
     expect(kindsCompatible(placeClass("ул."), null)).toBe(true);
@@ -173,6 +196,27 @@ describe("matchRegion", () => {
 
   it("returns null rather than the nearest thing when nothing is close", () => {
     expect(name("Несъществуващо място")).toBeNull();
+  });
+
+  // §2.3, the three locations that targeted nobody because their kind was
+  // treated as a hard constraint. 0220dec1 is the visible one: "гр. Варна -
+  // м-ст Изгрев" pinned a village 25 km north-west, and the reviewer's note —
+  // "its talking about the district in the city, not a village" — was right.
+  it("resolves the м-т spellings the sources use for кв. and с.о. rows", () => {
+    expect(name("м-т Ален мак")).toBe("с.о. Ален Мак");
+    expect(name("м-т Добрева чешма")).toBe("с.о. Добрева чешма");
+  });
+
+  // The risk the merge carries, asserted rather than assumed: "м-т Изгрев" now
+  // has the district AND the village as candidates, both scoring 1.000 on the
+  // core. The in-city preference is the only thing separating them, and it is
+  // the whole point of the fix.
+  it("prefers the Varna district over the like-named village for м-т Изгрев", () => {
+    expect(name("м-т Изгрев")).toBe("кв. Изгрев");
+    expect(name("м-ст Изгрев")).toBe("кв. Изгрев");
+    expect(name("кв. Изгрев")).toBe("кв. Изгрев");
+    // The village is still reachable when the kind says village.
+    expect(name("с. Изгрев")).toBe("Изгрев");
   });
 });
 
