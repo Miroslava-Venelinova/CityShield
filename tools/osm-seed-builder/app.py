@@ -173,20 +173,65 @@ PROVINCE_ADMIN_LEVEL = "4"
 # `place` values that name a settlement, and those that name a district inside
 # one. Deliberately disjoint: a sweep files every result as exactly one of the
 # two, and a value in both would make that ambiguous.
+#
+# `locality` is in the district set because "м-т" (местност) is exactly what OSM
+# tags that way, and its absence is why every м-т the sources publish against had
+# no seeded row at all: eleven distinct names appeared in the 08.08.2026 review
+# window — Ваялар, Траката, Ракитника, Голяма могила, Коджа тепе, Руските окопи,
+# Фатрико дере, Емешенлията, Малко Ю, Глико, Пътека тала — and each of them
+# targeted nobody by construction. epro and ViK address the whole northern
+# coastal strip by locality. It belongs in neither set today, so adding it here
+# keeps the two disjoint.
 SETTLEMENT_PLACES = "city|town|village|hamlet"
-DISTRICT_PLACES = "suburb|neighbourhood|quarter|borough"
+DISTRICT_PLACES = "suburb|neighbourhood|quarter|borough|locality"
+
+# How close a district claim has to sit to a same-named settlement before the two
+# are read as ONE place tagged twice rather than two places sharing a name.
+#
+# The distinction is the whole difficulty of §1.2. `с. Припек` is a village of
+# община Аврен that OSM also tags as a place inside Константиново's boundary —
+# the SAME place, 0 km apart, and filing it as a district makes `settlementScope`
+# answer "с. Припек" with Константиново's centroid 1.7 km away. `Чайка` is the
+# opposite: a village at 43.08, 27.43 and the resort suburb at 43.25, 28.03, 50 km
+# apart, two genuinely different places that migration 0017 exists to let the
+# table hold. A name test alone cannot separate them; a name test plus proximity
+# can, and 2 km leaves both cases an order of magnitude of headroom.
+SAME_PLACE_KM = 2.0
+
+# How far from a settlement's own centre an extracted street or district may sit.
+#
+# A backstop, not the fix — the identity-keyed query below should make it
+# impossible for anything to be this far out, so a row that trips it means
+# something ELSE is wrong and the report is how you find out. That is why it
+# reports rather than silently dropping.
+#
+# The errors it was written against were 29–269 km (11 settlements' street sets
+# came from same-named towns elsewhere in Bulgaria: Бяла's 177 streets from Бяла
+# in Русе, 185 km away). 15 km is an order of magnitude tighter than the smallest
+# of those and still generous for Варна, whose own streets reach 10.7 km from the
+# centre at the 95th percentile.
+MAX_EXTRACT_KM = 15.0
 
 # One settlement's whole contribution to the seed, in one round trip: its
-# streets and its districts, both bounded by its own admin_level 8 boundary.
+# streets and its districts, both bounded by its own boundary relation.
 #
-# `map_to_area` on the named relation rather than `area["name"=…]` is what keeps
-# this off the province-scope trap the polygon builder still has — the city of
-# Варна and the province of Варна share a name, and the bare area lookup matches
-# whichever it likes. Resolving the relation by name AND level, then converting
-# that one relation to an area, can only ever mean the settlement.
+# Bounded by that relation's OSM **id**, which is the only thing about a
+# settlement that is actually unique. This used to resolve the relation by name
+# and admin_level, on the reasoning that pinning the level keeps the city of
+# Варна apart from the province of Варна. It does — and it does nothing at all
+# about the far bigger collision one level down: settlement names repeat all over
+# Bulgaria. There are two Бяла, two Левски, two Дебелец, two Войводино, two
+# Ботево, two Искър and FOUR Горица, every one of them an admin_level 8 relation.
+# `map_to_area` turned all of them into `.s`, the union was searched, and 416 of
+# the seed's 2,974 streets came back from a town in another province — Бяла's 177
+# from Бяла in Русе, 185 km away, while ViK published for the real Бяла three
+# times in one review window.
+#
+# The id comes from the enumeration, which resolved it INSIDE the province area
+# (province_settlements). Identity, not a name; nothing can collide with it.
 SETTLEMENT_SWEEP_TEMPLATE = """\
 [out:json][timeout:{timeout}];
-relation["name"="{name}"]["boundary"="administrative"]["admin_level"="{level}"];
+rel(id:{rel_id});
 map_to_area->.s;
 (
   way(area.s)["highway"~"^({streets})$"]["name"];
@@ -769,12 +814,23 @@ def merge_into_seed(target: str, incoming: list[dict], overwrite: bool,
     # Without that second condition this would be a trap rather than a repair: a
     # hand merge of Белослав's "Цветен квартал" alone would look exactly like a
     # sweep that had stopped finding Варна's, and delete it.
+    # A settlement row is never something a DISTRICT batch is authoritative
+    # about, and retiring one is how the seed lost `с. Припек`. Варна province
+    # holds two places of that name 10 km apart — the village at 43.255, 27.738
+    # and a suburb of Константиново at 43.174, 27.796 — so the district pass
+    # produced ("Припек", Константиново), the name matched, the key did not, and
+    # the village row was deleted. `с. Припек` then had only the suburb to match,
+    # settlementScope followed its parent link, and two alerts pinned
+    # Константиново. Since migration 0017 a settlement row and a district row of
+    # the same name are two different places BY CONSTRUCTION — that is what
+    # putting the parent in the key means — so a batch of districts can say
+    # nothing about the parentless row.
     removed = []
     if not keyed and overwrite and authoritative:
         for key, entry in list(existing.items()):
-            if entry["name"] in seen_names and key not in seen_keys:
+            if entry.get("settlement") and entry["name"] in seen_names and key not in seen_keys:
                 del existing[key]
-                removed.append(f"{entry['name']} ({entry.get('settlement') or 'no parent'})")
+                removed.append(f"{entry['name']} ({entry.get('settlement')})")
 
     entries = list(existing.values())
     path = save_seed(target, store, entries)
@@ -1024,15 +1080,27 @@ def _sweep_set(**fields) -> None:
         _sweep.update(fields)
 
 
-def province_settlements(endpoint: str, province: str, timeout: int = 300) -> tuple[list[dict], set]:
+def province_settlements(endpoint: str, province: str,
+                         timeout: int = 300) -> tuple[list[dict], dict[str, list[int]]]:
     """
-    Every settlement in a province, and the names among them OSM gives a
-    boundary relation.
+    Every settlement in a province, and the boundary relation IDs the province
+    holds for each name.
 
-    The boundary set decides how each one is swept: a settlement that has one is
-    bounded exactly, and the rest fall back to a radius. Asked once for the whole
-    province rather than probed per settlement, which is 2 queries instead of
-    2 × 171.
+    The boundary map decides how each one is swept: a settlement with exactly one
+    relation inside this province is bounded by that relation's id, and the rest
+    fall back to a radius. Asked once for the whole province rather than probed
+    per settlement, which is 2 queries instead of 2 × 171.
+
+    Ids rather than the bare set of names this used to return. The names were
+    enough to answer "is this one bounded" and not enough to bound it: the
+    per-settlement query then re-resolved the name with no province filter, which
+    is how eleven settlements' streets came from same-named towns elsewhere in
+    Bulgaria. This query is already scoped by `area.p`, so the ids it returns are
+    the province's own — carrying them through is the whole fix.
+
+    A name with more than one relation IN THE PROVINCE is returned as such rather
+    than picked between. See run_sweep: that is a condition to report and stop
+    on, not to union.
     """
     escaped = province.strip().replace("\\", "\\\\").replace('"', '\\"')
     if not escaped:
@@ -1073,17 +1141,20 @@ def province_settlements(endpoint: str, province: str, timeout: int = 300) -> tu
             "lat": lat if isinstance(lat, (int, float)) else None,
             "lng": lng if isinstance(lng, (int, float)) else None,
         }
-    have_boundary = {(e.get("tags") or {}).get("name", "").strip() for e in bounded}
-    return sorted(settlements.values(), key=lambda s: s["name"]), have_boundary
+    boundary_ids: dict[str, list[int]] = {}
+    for element in bounded:
+        name = ((element.get("tags") or {}).get("name") or "").strip()
+        if name and isinstance(element.get("id"), int):
+            boundary_ids.setdefault(name, []).append(element["id"])
+    return sorted(settlements.values(), key=lambda s: s["name"]), boundary_ids
 
 
-def sweep_settlement(endpoint: str, settlement: dict, bounded: bool,
+def sweep_settlement(endpoint: str, settlement: dict, rel_id: int | None,
                      radius: int, timeout: int = 300) -> tuple[list[dict], list[dict]]:
     """One settlement's streets and districts, as two grouped row lists."""
-    if bounded:
+    if rel_id is not None:
         query = SETTLEMENT_SWEEP_TEMPLATE.format(
-            timeout=timeout, level=SETTLEMENT_ADMIN_LEVEL,
-            name=settlement["name"].replace("\\", "\\\\").replace('"', '\\"'),
+            timeout=timeout, rel_id=int(rel_id),
             streets=STREET_HIGHWAYS, districts=DISTRICT_PLACES)
     else:
         if settlement["lat"] is None or settlement["lng"] is None:
@@ -1097,6 +1168,47 @@ def sweep_settlement(endpoint: str, settlement: dict, bounded: bool,
     streets = [e for e in elements if "highway" in (e.get("tags") or {})]
     districts = [e for e in elements if "place" in (e.get("tags") or {})]
     return group_elements(streets), group_elements(districts)
+
+
+# A name that is nothing but its own kind word: OSM carries `name=Площад` for an
+# unnamed square, and one such row reached the seed. It can never match anything
+# — the matcher scores on the name minus its kind prefix, and that is the empty
+# string here — so it is dead weight the fuzzy matcher pays for on every lookup.
+# Mirrors core/place-names.ts's KIND_PATTERNS and ingestion/normalize.ts's A1.
+KINDLESS_NAME = re.compile(
+    r"^(?:улица|ул\s*\.|булевард|бул\s*\.|алея|ал\s*\.|площад|пл\s*\.|"
+    r"квартал|кв\s*\.|жилищен\s+комплекс|ж\s*\.?\s*к\s*\.?|местност|м\s*-\s*с?т|"
+    r"град|гр\s*\.|село|с\s*\.)\s*$",
+    re.IGNORECASE)
+
+
+def drop_kindless(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Split rows into usable names and bare kind words. See KINDLESS_NAME."""
+    kept, dropped = [], []
+    for row in rows:
+        (dropped if KINDLESS_NAME.match(row["name"].strip()) else kept).append(row)
+    return kept, [r["name"] for r in dropped]
+
+
+def within_reach(rows: list[dict], settlement: dict) -> tuple[list[dict], list[str]]:
+    """
+    Split extracted rows into those inside MAX_EXTRACT_KM of the settlement
+    centre and those beyond it.
+
+    Belt-and-braces behind the identity-keyed query: with the relation id
+    carrying the province scope through, nothing should ever be out here. So the
+    far rows are RETURNED rather than dropped in silence — a rule you cannot see
+    applied is one you cannot notice being wrong, and this one firing is evidence
+    that some other part of the extraction has gone astray.
+    """
+    if settlement["lat"] is None or settlement["lng"] is None:
+        return rows, []
+    near, far = [], []
+    for row in rows:
+        km = haversine_km(row["lat"], row["lng"], settlement["lat"], settlement["lng"])
+        (near if km <= MAX_EXTRACT_KM else far).append(
+            row if km <= MAX_EXTRACT_KM else f"{row['name']} ({km:.0f} km)")
+    return near, far
 
 
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
@@ -1162,13 +1274,18 @@ def resolve_district_rows(found: dict[str, list[dict]]) -> tuple[list[dict], lis
         м. Шашкъните from 0.24 km, nearer than the town. Proximity alone would
         hand it to the hamlet, so **a boundary match beats a radius match**: it
         is authoritative containment where a radius is a guess.
-      * *A boundary that is not a settlement's.* `admin_level 8` in Bulgaria is
-        the **община**, so the relation named "Варна" spans the whole
-        municipality — Кичево and Осеново sit inside it. That is how the city
-        came to claim four villa zones 8–12 km out that are 2.1–2.7 km from a
-        village. Containment by an area that large says nothing about which
-        settlement a place is *in*, so among boundary matches the **nearest
-        settlement wins**, not the biggest.
+      * *A boundary claim that is merely large.* Measured against the local
+        Overpass instance on 10.08.2026: `admin_level 8` in Bulgaria is the
+        **населено място**, not the община — `rel(13477567)` ("Варна", level 8)
+        contains exactly one `place` settlement, Варна itself. (An earlier
+        comment here asserted the opposite and was wrong; §1.0 of ACCURACY.md
+        was right.) The city's boundary is still *big* — it reaches Галата and
+        Аспарухово — so it legitimately contains villa zones 8–12 km from the
+        centre that sit 2.1–2.7 km from a village. Among boundary matches the
+        **nearest settlement wins**, not the biggest. Administrative boundaries
+        at one level do not overlap, so in practice at most one settlement
+        claims a place by boundary and this degenerates to that claim; the rule
+        earns its keep on the radius claims below.
 
     Villages do legitimately own districts — every one is a `с.о.`/`со` villa
     zone, a countryside formation inside a village boundary rather than a housing
@@ -1219,27 +1336,58 @@ def run_sweep(endpoint: str, province: str, radius: int,
     try:
         _sweep_set(state="running", phase="Resolving the province…", done=0, total=0,
                    settlements=0, districts=0, streets=0, current="",
-                   skipped=[], resolved=[], error=None)
-        settlements, have_boundary = province_settlements(endpoint, province)
+                   skipped=[], dropped=[], resolved=[], error=None)
+        settlements, boundary_ids = province_settlements(endpoint, province)
         _sweep_set(phase="Sweeping settlements…", total=len(settlements))
+
+        # Every name this province enumerates as a settlement in its own right,
+        # with where it is. A district may not be filed under another settlement
+        # when it is one of these AND sits on top of it: `с. Припек` is a village
+        # of община Аврен that OSM also tags as a place inside Константиново's
+        # boundary, so the district pass overwrote its own settlement row with a
+        # parented one and `settlementScope` then answered "с. Припек" with
+        # Константиново's centroid, 1.7 km off. Раков дол and Гара Бяла are the
+        # same shape at 260 and 190 km, and those two became impossible the
+        # moment the query was keyed by relation id; this rule is what catches
+        # the one that is genuinely next door.
+        #
+        # The proximity half is not optional. Without it the rule also refuses
+        # the resort suburb `Чайка` (43.25, 28.03) because a *village* Чайка
+        # exists 50 km away at 43.08, 27.43 — two different places sharing a
+        # name, which is exactly what migration 0017 lets the table hold. See
+        # SAME_PLACE_KM.
+        settlement_points = {s["name"]: (s["lat"], s["lng"]) for s in settlements}
 
         district_where: dict[str, list[dict]] = {}
         street_rows: list[tuple[str, list[dict]]] = []
         skipped: list[str] = []
+        dropped: list[str] = []
         streets_total = 0
 
         for i, settlement in enumerate(settlements, 1):
             name = settlement["name"]
             _sweep_set(current=name, done=i - 1)
-            bounded = name in have_boundary
-            if not bounded and (settlement["lat"] is None or settlement["lng"] is None):
+            ids = boundary_ids.get(name, [])
+            if len(ids) > 1:
+                # Two boundary relations of one name INSIDE one province. Nothing
+                # in the data says which is the settlement, and unioning them is
+                # exactly the failure this sweep was rewritten to make impossible
+                # — so it stops and says so rather than guessing.
+                skipped.append(
+                    f"{name}: {len(ids)} admin_level {SETTLEMENT_ADMIN_LEVEL} relations in this "
+                    f"province ({', '.join(str(i) for i in ids)}) — ambiguous, not swept")
+                _sweep_set(skipped=list(skipped))
+                continue
+            rel_id = ids[0] if ids else None
+            if rel_id is None and (settlement["lat"] is None or settlement["lng"] is None):
                 # No boundary to bound it and no point to search around: OSM
                 # knows the name and nothing else about where it is.
                 skipped.append(f"{name}: no boundary and no centre — nothing to search")
                 _sweep_set(skipped=list(skipped))
                 continue
+            bounded = rel_id is not None
             try:
-                streets, districts = sweep_settlement(endpoint, settlement, bounded, radius)
+                streets, districts = sweep_settlement(endpoint, settlement, rel_id, radius)
             except ToolError as e:
                 skipped.append(f"{name}: {e}")
                 _sweep_set(skipped=list(skipped))
@@ -1248,11 +1396,37 @@ def run_sweep(endpoint: str, province: str, radius: int,
             if cyrillic_only:
                 streets, _ = split_by_script(streets)
                 districts, _ = split_by_script(districts)
+            # Names that are nothing but a kind word, then the distance backstop.
+            streets, kindless = drop_kindless(streets)
+            districts, kindless_d = drop_kindless(districts)
+            if kindless or kindless_d:
+                dropped.append(f"{name}: {len(kindless) + len(kindless_d)} name(s) that are only "
+                               f"a kind word — {', '.join(kindless + kindless_d)}")
+            streets, far_streets = within_reach(streets, settlement)
+            districts, far_districts = within_reach(districts, settlement)
+            for label, far in (("street", far_streets), ("district", far_districts)):
+                if far:
+                    dropped.append(f"{name}: {len(far)} {label}(s) beyond {MAX_EXTRACT_KM:.0f} km "
+                                   f"— {', '.join(far[:5])}{' …' if len(far) > 5 else ''}")
+            if far_streets or far_districts:
+                _sweep_set(dropped=list(dropped))
             # A district that repeats the settlement's own name is the settlement
             # tagged twice, not a place inside itself.
             for d in districts:
                 if d["name"] == name:
                     continue
+                # …and one that IS another settlement of this province, standing
+                # on that settlement's own spot, is that settlement rather than a
+                # district of this one.
+                twin = settlement_points.get(d["name"])
+                if twin is not None:
+                    km = haversine_km(d["lat"], d["lng"], twin[0], twin[1])
+                    if km <= SAME_PLACE_KM:
+                        dropped.append(
+                            f"{name}: '{d['name']}' is a settlement of this province "
+                            f"({km:.1f} km away), not a district of it")
+                        _sweep_set(dropped=list(dropped))
+                        continue
                 # Everything the resolution needs, recorded where it is known:
                 # which OSM elements this sweep actually saw (the identity the
                 # name is not), how the settlement matched, what size it is, and
@@ -1299,7 +1473,8 @@ def run_sweep(endpoint: str, province: str, radius: int,
                             store="output", settlement=settlement_name)
 
         _sweep_set(state="done", phase="Finished.", current="", done=len(settlements),
-                   districts=len(district_entries), skipped=skipped, resolved=resolved,
+                   districts=len(district_entries), skipped=skipped, dropped=dropped,
+                   resolved=resolved,
                    seeds=seed_status())
     except (ToolError, OSError, ValueError, KeyError) as e:
         _sweep_set(state="error", error=str(e), phase="Failed.")

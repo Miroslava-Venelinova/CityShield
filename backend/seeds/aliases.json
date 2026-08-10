@@ -6,5 +6,10 @@
   {
     "alias": "кв. Владислав Варненчик",
     "region": "кв. Владиславово"
+  },
+  {
+    "_why": "м-т Траката is published by epro and ViK and OSM has no place of that name — it maps the area as three neighbourhoods, Горна/Средна/Долна Трака. Средна Трака is the middle of the three, so it is the least wrong single pin for the whole locality. An alias rather than a new region row: inventing a 'Траката' row would put a fourth, made-up place beside three real ones.",
+    "alias": "Траката",
+    "region": "Средна Трака"
   }
 ]

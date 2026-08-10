@@ -536,14 +536,26 @@ function renderSweep(s) {
   $("sweepStreets").textContent = s.streets ?? 0;
 
   const skipped = s.skipped || [];
+  const dropped = s.dropped || [];
   const resolved = s.resolved || [];
-  $("sweepSkipped").classList.toggle("hide", skipped.length === 0 && resolved.length === 0);
+  $("sweepSkipped").classList.toggle(
+    "hide", skipped.length === 0 && dropped.length === 0 && resolved.length === 0);
   const parts = [];
   if (skipped.length) {
     // Named, not just counted: a skipped settlement is a hole in the seed, and
     // the only place it is ever visible is here.
     parts.push(`<strong>${skipped.length} skipped</strong> — nothing was seeded for these:<br>` +
       skipped.map((x) => escapeHtml(x)).join("<br>"));
+  }
+  if (dropped.length) {
+    // The distance backstop and the settlement/district collision rule. Both
+    // are supposed to be unreachable now that each settlement is swept by its
+    // own relation id, so anything here is evidence that something else is
+    // wrong — read it before promoting the seed.
+    parts.push(
+      `<strong>${dropped.length} extraction(s) dropped</strong> — these should not happen ` +
+      `once each settlement is swept by its own boundary id; read them before promoting:<br>` +
+      dropped.map((x) => escapeHtml(x)).join("<br>"));
   }
   if (resolved.length) {
     // Reported rather than silent: the tie-break is a rule, and a rule you
