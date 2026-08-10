@@ -1111,28 +1111,52 @@ of that name when the model drops the settlement.
 
 **F20.** Needs a week of `wrangler tail` or a log sink.
 
-**Purging the poisoned `geocode_cache` rows** behind §2.5, and **applying the new
-seed to D1**. Both are deploy actions; see below.
+## Applied 10.08.2026
 
-## Applying this
+Deployed as version `fe5f0fdd`, and both databases rebuilt. What was done, and
+the one step that turned out not to be needed:
 
-The repo is consistent and the suite is green, but nothing has been applied to a
-database or deployed. In order:
+1. **Local D1** — migrations, `seeds/generate-seed.mjs`, apply, then
+   `node seeds/verify.mjs` and `test/seeds.spec.ts`. Both green.
+2. **Wipe-and-reseed, both databases.** `seed.sql` is an upsert and never
+   deletes, so applying it alone would have added and corrected without removing
+   anything: local was still carrying 362 regions and 2,974 streets *after* a
+   plain apply. Both now read **350 regions (177 linked), 2,565 streets, 3
+   aliases**, matching `seeds/*.json` exactly.
 
-1. `npm run db:local` — migrations, `seeds/generate-seed.mjs`, apply. Then
-   `node seeds/verify.mjs` and `npx vitest run test/seeds.spec.ts`.
-2. The remote D1 still holds the **420 mis-filed street rows**: `seed.sql` is an
-   upsert and never deletes, so applying it adds and corrects but does not remove
-   them. A wipe-and-reseed is the only way to drop them — routine here, since the
-   app is unreleased, but **preserve `users` by name and leave `crawl_state`
-   alone**; resetting the cursor would replay history into `alerts` and destroy
-   the evaluation window.
-3. `DELETE FROM geocode_cache` for the poisoned entries (§2.5), or the plausibility
-   check does nothing for names already cached.
-4. Redeploy — `seeds/*.json` is bundled and feeds the module-scope memo, so the
-   deploy is part of the seed fix rather than an afterthought. Watch the startup
-   budget `wrangler deploy` prints: 27 ms against 400 ms last measured, and the
-   seed has grown by ~90 regions.
-5. Re-run the review over a fresh window. The structural-reach table at the top of
-   this file is the number to re-measure, and `polygon_failed` is now the query
-   that answers whether the polygon path is working without opening a map.
+   The procedure is committed rather than improvised, as
+   `seeds/reseed-{pre,post}.sql` behind `npm run db:reseed:local` and
+   `db:reseed:remote`; plain `db:local`/`db:remote` remain the upsert-only path.
+
+   Ids are `AUTOINCREMENT` and change across a reseed, so users cannot be left
+   pointing at them. Each user's placement was snapshotted **by name** — region
+   name plus its parent settlement name, street name plus its region — the
+   reference tables dropped, `seed.sql` applied, and the placements re-resolved
+   against the new ids. Matching on (name, parent) rather than name alone is
+   what keeps the two Припек apart. All five remote users kept both their region
+   and their street, identical to the snapshot. `crawl_state` (4 rows) and
+   `alerts` (143 rows) were not touched: resetting the cursor would replay
+   history into `alerts` and destroy the evaluation window.
+3. ~~`DELETE FROM geocode_cache` for the poisoned entries~~ — **not needed, and
+   the reason given here was wrong.** The claim was that "the plausibility check
+   does nothing for names already cached". It does: `resolveCoordinates` wraps
+   `plausible(...)` around `geocode(...)`'s **return value**, and the cache hit
+   returns through that same value, so a cached point is judged exactly like a
+   fresh one. The `803a51e4` entry is still there —
+   `Синчец, Долни чифлик, България` at 42.9866, 27.7970, `resolved_at
+   2026-08-03T07:00:39Z` — and is now rejected on read, because Долни чифлик's
+   42 seeded streets put its limit at the 2 km floor against a 6.4 km answer.
+   Deleting it would only spend a Nominatim slot to be told the same thing:
+   Nominatim's answer has not changed, so the row would come back identical.
+   `namesAPlace` has filtered hits since `6deac05` (28.07), before the window
+   opened, so no cached row predates the current accept rules either.
+4. **Deployed** — `seeds/*.json` is bundled and feeds the module-scope memo, so
+   the deploy is part of the seed fix rather than an afterthought. Live and
+   routing; the startup budget line was not captured on this run, so 27 ms
+   against 400 ms remains the last measured figure and the seed has since grown
+   by ~90 regions. Worth reading off the next deploy.
+
+**Still to do:** re-run the review over a fresh window. The structural-reach
+table at the top of this file is the number to re-measure, and `polygon_failed`
+is now the query that answers whether the polygon path is working without
+opening a map.
