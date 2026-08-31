@@ -106,7 +106,7 @@ and CI enforces it with `wrangler deploy --dry-run`:
 |---|---|
 | `hono` | Router + middleware + JWT helpers |
 | `zod` | Request validation and AI-output validation |
-| `cheerio` | HTML parsing for the scrapers |
+| `cheerio` | **devDependency only.** The scrapers use HTMLRewriter and string scans (§1.7); cheerio remains as the tests' reference oracle for text extraction |
 | `jsts` | JTS geometry for the polygon builder |
 | (WebCrypto) | Passwords, JWT signing, token hashing — no crypto dependency |
 
@@ -165,6 +165,8 @@ alerts (
 )
 
 crawl_state   ( source TEXT PK, last_id INTEGER, seen_ids TEXT, updated_at TEXT )
+ingest_attempts ( source TEXT, ref TEXT, attempts INTEGER, skipped_at TEXT, first_at TEXT, last_at TEXT, PK(source,ref) )
+ingest_health   ( cron TEXT PK, started_at TEXT, completed_at TEXT, last_duration_ms INTEGER )
 geocode_cache ( query TEXT PK, lat REAL, lng REAL, resolved_at TEXT )  -- NULL,NULL = cached miss
 auth_tokens   ( token_hash TEXT PK, user_id, purpose, expires_at, used_at, created_at )
 refresh_tokens( token_hash TEXT PK, user_id, family_id, expires_at, used_at, created_at )
@@ -454,6 +456,7 @@ and field casing are locked in by `frontend/src/services/api.ts`. Note the split
 | `PUT /api/preferences/{category}` | JWT | `{isEnabled}` → 204; unknown category → 400 |
 | `GET /api/preferences/bus-lines` | JWT | `{available, selected}` |
 | `PUT /api/preferences/bus-lines` | JWT | `{busLines}` → 204; unknown line → 400 |
+| `GET /api/health` | `X-Api-Key` | Tick heartbeat, per-source cursor ages, and the messages the pre-store cap gave up on; `status` is `degraded` when a tick started without completing or a cursor has stalled 6 h (§3.8). Behind the ingest key: nothing personal, but nothing the public needs |
 | `GET /privacy` | — | Bilingual privacy policy (§2.5) |
 
 `AlertDTO`: `{id, original_message:{title, content}, processed_data:{locations,
@@ -535,6 +538,54 @@ sending mail, warming the feed cache — can never 500 the endpoint that schedul
 it.
 
 ### 1.5 Alert service (`core/alert-service.ts`)
+
+**The unseeded `м-т` names are not seedable — checked 31.08.2026.** The obvious
+remedy for the locality misses (`м-т Ваялар`, `м-т "Малко Ю"` and ten others that
+fall to the Варна centroid) is to seed them, and it does not work: **none of the
+twelve exists in OSM or in Nominatim.** Overpass over a Varna-wide bbox
+(43.05–43.40, 27.65–28.10) returns exactly one hit for any of them — `Коджатепе`,
+one word, tagged `natural=peak`, a summit rather than a locality. Nominatim
+returns zero results for all twelve, tried as the Worker builds the query
+(`<name>, Варна, България`, `countrycodes=bg`), with and without the `м-т`
+prefix.
+
+So there is nothing authoritative to seed them *from*. Seeding coordinates that
+neither source can confirm would put invented pins into push notifications, and a
+seeded name that OSM does not hold is also dead as an Overpass key. `Малко Ю` is
+worth singling out for a different reason: it is ViK's own wording, not a
+truncation of ours — the source really publishes `м-т "Малко Ю"`, six times in
+this corpus, never once resolved.
+
+What this leaves is `coords_source` above: the misses cannot be removed, so they
+are at least made *visible* rather than being byte-identical to a real city-centre
+pin. Recovering the names needs a source that has them — the cadastre, or adding
+them to OSM upstream — which is a data-gathering task, not a code change.
+
+**Where a coordinate came from (`coords_source`).** 37 of 783 locations in the
+08.2026 review (4.7%) were positionally wrong or unlocated and **nothing on the
+row said so** — a settlement-centroid fallback is byte-identical to a genuine
+city-centre location, so "how often are we guessing" could only be answered by a
+manual audit. This is the blind spot `polygon_failed` was invented to fix, one
+level down, and it takes the same shape: record *why* the coordinate is what it
+is. `resolveCoordinates` returns `seed` | `nominatim` | `settlement` | `none`
+beside the point, it rides inside `locations_json` so it needs no migration, and
+the review tool badges the fallback. Both settlement branches report
+`settlement`, seeded or geocoded: what makes it a fallback is not where the
+number came from but what it describes — the centre of a settlement standing in
+for a place we lost, and a seeded city centroid is exactly as wrong for a lost
+district as a geocoded one.
+
+**Severity (§1.6).** 477 of 479 stored alerts were `warning`, so severity carried
+no information — yet the sources draw the distinction themselves and draw it
+consistently: "ще бъде прекъснато електрозахранването" is a confirmed outage,
+"възможни са смущения" is a disruption that may not happen, and 92 alerts
+corpus-wide are the hedged kind. `isHedged` matches the source text (not the
+model's opinion, so it cannot regress when a prompt is edited) and maps the
+hedged form to `info`. Deliberately conservative: anything unrecognised keeps the
+category's severity, so the failure mode over-warns rather than under-warns. The
+real ViK 17375 wording — "ще бъдат със смущения ... както и липса на вода" — is a
+CONFIRMED disruption and is pinned as such by a test, because matching on
+"смущения" alone would have downgraded a live outage.
 
 **`storeAlert`** enriches the locations, then inserts the row. Severity comes
 from a fixed map (`vik`/`epro`/`heating` → `warning`, `vt` → `info`, unknown →
@@ -719,6 +770,21 @@ targeting runs off those.
 
 ### 1.6 Push delivery (`core/onesignal.ts`)
 
+**Duplicate pairs.** 9 groups in the 08.2026 corpus (18 alerts, 3.8%) shared
+identical locations, window and category — almost all an outage message paired
+with a "possible disturbances" message for the same area and hours — and both
+notified, so subscribers got two pushes for one event. A hedged alert whose
+places and window match an ALREADY-DELIVERED confirmed alert in the same category
+within 6 hours is stored (it stays in the feed) and `notified_at` is stamped
+without sending.
+
+The asymmetry is the safety property, and it is the whole design: **only the
+hedged one is ever suppressed, and only against something already delivered.** A
+confirmed outage can never be silenced by a hedge, whichever order the pair
+arrives in, and an alert with no locations is never suppressed at all — matching
+on the window alone would catch unrelated messages that happen to share their
+hours. The check never throws; a D1 hiccup degrades to sending the push.
+
 `POST https://api.onesignal.com/notifications`, header
 `Authorization: Key <ONESIGNAL_API_KEY>`, body
 `{app_id, target_channel:"push", include_aliases:{external_id:[…]}, headings,
@@ -799,6 +865,19 @@ belt-and-braces guard.
 - A failed message **blocks newer ones**, so a retried run cannot re-notify.
 - A persistently failing message ages off the listing (and, for pushes, is
   abandoned after `MAX_PUSH_ATTEMPTS = 3`, see below).
+- **A message that fails before the store is capped too**, at
+  `MAX_PRE_STORE_ATTEMPTS = 5` (`ingestion/state.ts`, migration 0018). Past the
+  cap the crawler logs loudly, records the id in `ingest_attempts.skipped_at`,
+  and moves the cursor past it: that message is **deliberately not delivered**.
+  The status quo it replaces is worse — the cursor advances only past successes,
+  so one message failing forever blocked *every newer message from that source*
+  (20 h on 30.07.2026, ~21 h from 28.08.2026, both ended by hand). Five strikes
+  on a 15-minute cron is ~75 minutes of retrying before giving up.
+  The attempt is claimed **before** the work, not counted after it: a tick killed
+  on the 10 ms CPU cap never reaches its own trailing writes, and that is
+  precisely the message the cap has to bound. A success deletes the row, so a
+  flaky message never accumulates toward the cap; a failed *counter* read
+  proceeds with the attempt (the cap bounds damage, it must not cause it).
 - **Persist per success, not per batch.** A trailing write never runs when the
   invocation is killed mid-batch — and it routinely is, because the next
   message's AI parse can burn the remaining budget. The already-notified message
@@ -862,6 +941,7 @@ in production output:
 | A12 | A message opening a block **twice** (`каре … и карето …`) with streets between the two cues becomes **two** polygon locations, split by where each street is named. A street named in both halves stays in both | Both the prompt and A2 assumed one polygon per message. `d29913c5` came back as one entry with all seven streets of two disjoint blocks, which cannot close a single ring however well the names resolve |
 | A13 | An entry named inside an explicit `улиците:` list is never promoted by A4 | epro writes `гр. X – улиците: A, B, C`, and A4 lifted list entries into locations of their own: `5b048900` pinned `Георги Бенковски` on с. Бенковски 30 km from Суворово, and `0d59345b` made `Васил Левски` the *area* of a Вълчи дол alert, which then resolved to Varna's street of that name. The marker had already answered the question A4 was guessing at |
 | A14 | Streets named **only after** a remedy cue (`водоноска`, `кръстовището между`) are dropped; the location itself stays | `675df786`: "разположена водоноска на кръстовището между ул. Юпитер и ул. Сатурн" is a water truck parked at a junction — the streets locate the fix, not the outage. Positional, so a message naming the outage's own streets *before* the remedy keeps them. Runs **before A2**, because `POLYGON_CUE` contains `между` and a third street would otherwise turn the parking spot into a block |
+| A15 | A location that resolved to the bare city with **no area and no streets** — the shape §5.1 sends to nobody — has the source text re-scanned for a seeded district of that settlement, and adopts it when exactly ONE is named literally | Four alerts reached nobody, all industrial zones, and `Южна промишлена зона` is a byte-exact match for a seeded region with `area` stored as null: the extractor dropped it and the matcher never saw it. Runs only on the shape already guaranteed to reach nobody, so it cannot widen an audience — only recover one. Literal match, not `mentions`: the trigram test is safe for a guard that DELETES and would fabricate an area here. One candidate only; two named districts means ownership is unknowable, as in A4 |
 
 **A6 changes targeting only.** The street list stays on the location, so the feed,
 the pin and the review tool still show the most specific thing the message said;
@@ -932,8 +1012,74 @@ offset on purpose: the audience is in Bulgaria, so
   `push_attempts` at the cap).
 
 **Scrape client (`scrape.ts`)**: browser-like `DEFAULT_HEADERS`, deadline-aware
-`AbortSignal`, retry on 429/5xx, plus the cheerio parsers for each source, all
-asserted against fixture HTML in `test/fixtures/`.
+`AbortSignal`, retry on 429/5xx, plus the parsers for each source, all asserted
+against fixture HTML in `test/fixtures/`.
+
+**Keeping the parse inside the CPU cap.** `cheerio.load()` is one uninterrupted
+synchronous stretch, which is exactly what the 10 ms bounds, and a 15-minute cron
+is always a cold isolate — it never gets the JIT-warmed path a test suite sees.
+Measured cold in **Node v24** against full-size captures of the live pages
+(`*_full.html`); workerd is slower, so read these as a floor:
+
+| Call site | Page | Before | After |
+|---|---|---|---|
+| `vikParsePage` | 17.3 K listing | 9.81 ms | **0.34 ms** |
+| `vikParseMessage` | 9.9 K message | 7.76 ms | 6.15 ms |
+| `vtParse` | 42.5 K page | 11.60 ms | 8.96 ms |
+| `heatingParsePage` | 51.4 K listing | 14.43 ms | **0.46 ms** |
+| `heatingParseMessage` | 39.5 K message | 12.32 ms | 10.69 ms |
+
+Three of the five were **over the cap in a runtime faster than workerd**. Two
+techniques, both in `scrape.ts`:
+
+1. **No DOM when only ids are wanted.** The listing pages are read for their
+   message links and nothing else, so `sectionsByClass`/`firstHref` scan the raw
+   HTML instead. This is where the wins are, and it removes the two largest
+   parses outright. Scoping to the container first is *not* cosmetic: the
+   crawlers stop at the first id at or below the cursor, so a stray older link
+   from elsewhere on the page would truncate the list and stall the source.
+2. **`sliceToContainer` before `cheerio.load`** for the three that do need a
+   DOM. Every one of these pages carries its content about two thirds of the way
+   in, behind a header, menus and inline script. It takes more than one marker
+   where a parser selects things that are not in one subtree —
+   `heatingParseMessage` reads an `<h1>` that is a *sibling* of the body field,
+   and slicing to the field alone silently emptied the title.
+
+Note what the numbers say about the second technique: feeding cheerio ~60% fewer
+bytes bought only ~20%, because the cold cost is dominated by a fixed floor
+(module init plus JIT of the parse path), not by byte count. **Narrowing alone
+does not get a cheerio path safely under 10 ms** — and warming cheerio at module
+scope, where the 400 ms startup budget would have paid for it, was measured too
+and did not reliably help.
+
+So the three that need structure moved to **`HTMLRewriter`**, Cloudflare's native
+streaming parser. It processes the body in chunks interleaved with I/O, so the
+work never forms one uninterrupted stretch for the cap to catch; that is why
+`vikParseMessage`, `vtParse` and `heatingParseMessage` are async. **cheerio is
+gone from the Worker entirely** (`stripHtml`, which epro calls on every tick, is
+a string scan now) and is a devDependency, where the tests keep the original
+implementations as a reference oracle. The bundle went from 406 KB to 252 KB
+gzipped.
+
+Two HTMLRewriter behaviours are worth writing down, because both produce
+plausible output rather than an error and the oracle is what caught them:
+
+- A `text` handler fires for text ANYWHERE inside the matched element, nested
+  included. Also registering `sel *`, on the assumption it fired only for direct
+  children, collects every nested text node **twice**.
+- It does **not** decode character references — `lol-html` streams source bytes
+  through, so `&quot;` and `&#1073;` arrive verbatim where a DOM parser would
+  have resolved them. `decodeEntities` runs once per text node, before trimming,
+  so a reference split across chunks still resolves and a decoded `&nbsp;` is
+  trimmed like the whitespace it is.
+
+`test/scrape.spec.ts` keeps the original cheerio implementations as a reference
+oracle and asserts the rewrites agree with them on the full-size captures, plus a
+**byte budget** on what still reaches cheerio. The budget counts bytes, not
+milliseconds, on purpose: workerd's `performance.now()`/`Date.now()` advance only
+~97 ms into a synchronous stretch and then pin, and quantise to 1 ms, so timing a
+sub-10 ms parse there produces numbers that look plausible and are not real
+(§3.8).
 
 **Daily cleanup** (`30 3 * * *`) runs independent jobs — one failure must not
 skip the rest, because retention deletions that silently stop are how a 500 MB D1
@@ -945,6 +1091,8 @@ fills up:
 | `geocode_cache` | 180 days |
 | `auth_tokens` (expired) | 1 day past expiry (so an "already used" click still lands on a sensible page) |
 | `refresh_tokens` (expired) | at expiry |
+| `ingest_attempts` (still failing) | 7 days |
+| `ingest_attempts` (skipped) | 90 days — the record of a message deliberately not delivered, kept as long as the alerts it sits among |
 | `refresh_tokens` (spent) | 7 days, so replay detection still recognizes a leaked chain |
 
 ### 1.8 Workers AI (`ingestion/ai.ts`)
@@ -991,6 +1139,57 @@ any failure — the source then skips the message and retries next tick.
 - Optional: route calls through a free **AI Gateway** for request logs and replay.
 
 ### 1.9 Polygon builder (`ingestion/polygon.ts`)
+
+**Overpass endpoint failover.** Six of the eight polygon failures in the 08.2026
+review were `Overpass HTTP 521`/`504` — the public endpoint being down, not our
+geometry. The builder is deterministic and correct: the identical four-street set
+failed on 08-18 and built a byte-identical 66-point ring twice on 08-20, so its
+true success rate is ~80% against an observed 50%. A 521 means the origin is
+down, so retrying the *same* host cannot help — the existing pause-and-retry is
+tuned for 429 rate-limiting. `overpassQuery` now walks a list of endpoints,
+moving on immediately for any origin-down status (502/503/504/520–524) or a
+connection failure, and keeping the pause-and-retry only for the rate-limit case.
+
+`OVERPASS_FALLBACK_URL` is optional and currently **unset**, for a concrete
+reason: the self-hosted instance in `tools/osm-seed-builder/overpass` binds
+`127.0.0.1:12345`, and a Worker runs on Cloudflare's edge — it cannot reach
+loopback. Making it the primary needs it published first (a Cloudflare Tunnel is
+the least-effort route); the failover is already built, so that is a config
+change and nothing else. See the comment in `wrangler.jsonc`.
+
+**Rejecting degenerate blocks.** A failed build is loud; a degenerate one is
+silent, and silently under-reaches everyone in the real block. Alert `15a862fb`
+stored a 4-point ring of 0.004 km² — a ~110 m triangle — for a block bounded by
+arteries a kilometre apart, and it passed every check: `is_polygon` stayed true
+and `polygon_failed` was never set.
+
+Both thresholds are fitted against the five Overpass fixtures, and the workable
+**range** is recorded rather than the single value that happens to pass:
+
+| fixture | vertices | area km² | mean width |
+|---|---|---|---|
+| set1 | 22 | 0.0206 | 57 m |
+| varnenchik | 72 | 0.1742 | 199 m |
+| levski | 82 | 0.1869 | 208 m |
+| ruse | 182 | 0.3041 | 209 m |
+| saharov | 177 | 0.3849 | 242 m |
+
+The smallest genuine block is 20,600 m² / 22 vertices against the degenerate
+one's 4,000 m² / 4. Any area threshold in **5,000–15,000 m²** separates them
+(20,000 is already too close to set1); `MIN_BLOCK_AREA_M2 = 10_000` is
+essentially their geometric mean. Any vertex floor in **5–22** separates them;
+`MIN_RING_VERTICES = 8` sits clear of a triangle without approaching set1.
+Rejected faces are dropped *before* the candidate sort, not after — the sort
+ranks on how many streets a face touches, so a triangle touching three of them
+would otherwise win outright over the real block. A rejection takes the existing
+`polygon_failed` path with a reason naming the numbers, so the location falls
+back to a pin and still notifies.
+
+The `Орлово гнездо` ambiguity flagged as a plausible cause was **checked and is
+not one**: the two rows are in *different settlements* (Аксаково 43.2641/27.8177
+and Варна 43.2121/27.8845), which is the case migration 0015's scoping already
+handles, and 335 of 2,565 seeded street names span more than one settlement. The
+seed holds no duplicate `(settlement, name)` pair at all.
 
 For a location the model marked `is_polygon: true`, I/O and CPU are deliberately
 separated:
@@ -1551,18 +1750,34 @@ DNS rebinding.
   nothing to do. That is how the 30.07.2026 outage stayed invisible for 20 hours.
   `outcome` and `cpuTime` are the tell: a `cpuTime` sitting exactly on the limit
   is a kill, not a coincidence.
+- **The heartbeat is in D1, because the alarm cannot live in the logs it
+  destroys.** The stalled-cursor warning above is a `console.error`, and on the
+  three dead ticks of 28.08.2026 it was written into a log stream the kill threw
+  away. So the tick also writes `ingest_health.started_at` **before any parsing**
+  and `completed_at` only if it reaches the end (migration 0019). A committed D1
+  write is I/O and costs essentially no CPU against the cap it reports on.
+  `started_at` advancing while `completed_at` stands still *is* the `exceededCpu`
+  signature, and it is a `SELECT` rather than a 15-minute `wrangler tail` vigil —
+  which matters more than usual here, given historical logs are not queryable at
+  all (below). `GET /api/health` (ingest key) returns it alongside every cursor's
+  age and the messages the pre-store cap gave up on; hang an external uptime ping
+  off it to be told rather than to look.
 - **The signature of a stalled ingest** is a `crawl_state.updated_at` that has not
   moved while the source has published ids above the cursor. Two queries settle
   it: `SELECT source, last_id, updated_at FROM crawl_state`, then fetch
   `last_id + 1` from the source by hand. If the page is there and parses, the
   fault is ours and downstream of the fetch.
   **The tick now says so itself**: `runIngestion` ends by warning
-  `Source '<name>' has not advanced its cursor in N h` past 6 hours. It is the
-  cheap half of the cursor-pin problem — the real fix is a pre-store attempt
-  counter, which means deliberately skipping a public-safety alert after N
-  strikes and is a product decision. 6 hours is set against the *quietest*
-  source (vt and heating publish a handful of items a week) and is well inside
-  the 20-hour outage of 30.07.2026.
+  `Source '<name>' has not advanced its cursor in N h` past 6 hours. 6 hours is
+  set against the *quietest* source (vt and heating publish a handful of items a
+  week) and is well inside the 20-hour outage of 30.07.2026.
+  The pin itself is now **bounded** rather than only reported:
+  `MAX_PRE_STORE_ATTEMPTS = 5` gives up on a message after ~75 minutes and moves
+  the cursor past it (§1.7). That is a deliberate product decision — a skipped
+  public-safety message — taken because the alternative it replaces is skipping
+  *every* message from that source until a human intervenes. What was skipped is
+  never silent: it is a loud `GIVING UP on id=…`, a row in `ingest_attempts` with
+  `skipped_at` set, and an entry on `/api/health`.
 - **An alert that reached nobody now says so.** `sendUsersNotification` warns
   `Alert '…' notified NOBODY` with a per-location trace — the resolved
   settlement, region and every street's match or miss — and warns per location
@@ -1600,6 +1815,18 @@ DNS rebinding.
   error` and the only option is catching a live tick with `wrangler tail`. On a
   15-minute cron that is a 15-minute wait per data point. Worth granting before
   the next incident rather than during it.
+- **You cannot time a sub-10 ms burst from inside workerd.** The obvious way to
+  find which synchronous stretch blows the CPU cap — `performance.now()` around
+  the candidates, under `@cloudflare/vitest-pool-workers` — does not work, and
+  fails *quietly*. The clock quantises to 1 ms, and it advances only ~97 ms into
+  any one synchronous stretch before pinning: measured 2/20/75 ms for 1e6/1e7/5e7
+  iteration burn loops (linear, so it is real), then **0.000 ms for everything
+  after**, including 100 parses of a 17 KB document. Yielding to the event loop
+  between measurements makes it worse, not better. Three different harness shapes
+  gave three contradictory pictures. Measure in Node with `process.hrtime.bigint`
+  instead — one fresh process per measurement, since the cost is dominated by
+  cold-isolate JIT — and read the result as a *floor*, because workerd is slower.
+  The authoritative instrument remains real `cpuTime` from `wrangler tail`.
 - **D1 Time Travel** (`wrangler d1 time-travel`) gives 7-day point-in-time
   restore on the free plan — the recovery path referenced by the breach runbook.
 - Retention deletions log their row counts each night; a cleanup that starts

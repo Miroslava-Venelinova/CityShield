@@ -67,6 +67,26 @@
     "HEATING_BASE_URL": "https://energy-varna.bg",
     "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
     // Spike 1 verdict: kumi.systems was down; overpass-api.de works with a descriptive UA.
+    //
+    // SIX of the eight polygon failures in the 08.2026 review were
+    // `Overpass HTTP 521`/`504` — this endpoint being down, not our geometry.
+    // The builder is deterministic and correct (the identical four-street set
+    // failed on 08-18 and built a byte-identical 66-point ring twice on 08-20);
+    // its true success rate is ~80% against an observed 50%.
+    //
+    // The fix is a SECOND ENDPOINT, because a 521 means the origin is down and
+    // retrying the same host cannot help. `OVERPASS_FALLBACK_URL` is optional
+    // and unset here for one concrete reason: the self-hosted instance in
+    // tools/osm-seed-builder/overpass binds 127.0.0.1:12345, and a Worker runs
+    // on Cloudflare's edge — it cannot reach loopback. To make the self-hosted
+    // instance the primary it has to be published first (a Cloudflare Tunnel is
+    // the least-effort route), and then:
+    //
+    //   "OVERPASS_URL":          "https://<your-tunnel-host>/api/interpreter",
+    //   "OVERPASS_FALLBACK_URL": "https://overpass-api.de/api/interpreter",
+    //
+    // Failover is already implemented (overpassQuery in ingestion/polygon.ts),
+    // so that is a config change and nothing else.
     "OVERPASS_URL": "https://overpass-api.de/api/interpreter",
     "NOMINATIM_URL": "https://nominatim.openstreetmap.org",
     "JWT_ISSUER": "CityShield",

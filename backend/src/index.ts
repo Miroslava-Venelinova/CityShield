@@ -1,4 +1,5 @@
 import { app } from "./api/app";
+import { markTickCompleted, markTickStarted } from "./db/queries";
 import type { Env } from "./env";
 import { runDailyCleanup, runIngestion } from "./ingestion/runner";
 
@@ -36,7 +37,19 @@ export default {
   async scheduled(event, env, _ctx) {
     switch (event.cron) {
       case INGEST_CRON:
-        await guard("ingestion", runIngestion(env));
+        // The heartbeat brackets the work and is written to D1, not to the log
+        // stream: an `exceededCpu` kill discards the invocation's logs, so the
+        // one signal that a tick died is the one that must not live in them
+        // (migration 0019). `started_at` is committed before any parsing;
+        // `completed_at` only if the tick reaches the end. Both are I/O, so
+        // neither adds meaningfully to the 10 ms CPU burst they report on.
+        await guard("tick heartbeat (start)", markTickStarted(env, event.cron));
+        {
+          const startedAt = Date.now();
+          await guard("ingestion", runIngestion(env));
+          await guard("tick heartbeat (end)",
+            markTickCompleted(env, event.cron, Date.now() - startedAt));
+        }
         break;
       case CLEANUP_CRON:
         await guard("daily cleanup", runDailyCleanup(env));

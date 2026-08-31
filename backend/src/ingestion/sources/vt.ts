@@ -33,7 +33,7 @@ export async function run(env: Env, deadline: number): Promise<void> {
     return;
   }
 
-  const rawMessages = vtParse(pageHtml);
+  const rawMessages = await vtParse(pageHtml);
   if (rawMessages === null) {
     console.error("[VT] Page parsing returned no data. Stopping.");
     return;

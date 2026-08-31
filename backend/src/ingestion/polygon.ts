@@ -198,25 +198,74 @@ const OVERPASS_QUERY_TIMEOUT_S = 12;
 const OVERPASS_FETCH_TIMEOUT_MS = 15_000;
 const OVERPASS_RETRY_PAUSE_MS = 5_000;
 
-/** POST one Overpass query, with the single budgeted retry. */
+/**
+ * Statuses where trying the SAME endpoint again is pointless.
+ *
+ * A 521/522/523 is Cloudflare in front of Overpass saying the origin is down or
+ * unreachable; a 502/503/504 says much the same. Six of the eight polygon
+ * failures in the 08.2026 review were `Overpass HTTP 521`/`504` — the public
+ * endpoint being down, not our geometry. Proof that the builder itself is fine:
+ * the identical four-street set failed on 08-18 and built a byte-identical
+ * 66-point ring twice on 08-20. Against a dead origin the right retry is a
+ * different *endpoint*, not a second attempt at the same one; the existing
+ * pause-and-retry is tuned for 429 rate-limiting and cannot help here.
+ */
+const ORIGIN_DOWN_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
+
+/** Endpoints in preference order — the fallback only when one is configured. */
+function overpassEndpoints(env: Env): string[] {
+  const endpoints = [env.OVERPASS_URL];
+  if (env.OVERPASS_FALLBACK_URL && env.OVERPASS_FALLBACK_URL !== env.OVERPASS_URL)
+    endpoints.push(env.OVERPASS_FALLBACK_URL);
+  return endpoints;
+}
+
+/** POST one Overpass query, with the single budgeted retry and endpoint failover. */
 async function overpassQuery(
   env: Env, query: string, deadline?: number,
 ): Promise<OverpassResponse> {
-  for (let attempt = 1; ; attempt++) {
-    if (expired(deadline, 1_000)) throw new Error("No time budget left for Overpass");
-    const res = await fetch(env.OVERPASS_URL, {
-      method: "POST",
-      headers: OVERPASS_HEADERS,
-      body: "data=" + encodeURIComponent(query),
-      signal: abortIn(OVERPASS_FETCH_TIMEOUT_MS, deadline),
-    });
-    if (res.ok) return await res.json();
-    // Overpass rate-limits aggressive retries (429) — a retry needs a real
-    // pause for a slot to free up. One retry, and only if it fits the budget:
-    // a polygon is an enhancement, never worth losing the message over.
-    if (attempt === 2 || !(await sleepWithin(OVERPASS_RETRY_PAUSE_MS, deadline)))
-      throw new Error(`Overpass HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const endpoints = overpassEndpoints(env);
+  let lastError: Error | undefined;
+
+  for (const [index, endpoint] of endpoints.entries()) {
+    for (let attempt = 1; ; attempt++) {
+      if (expired(deadline, 1_000)) {
+        throw lastError ?? new Error("No time budget left for Overpass");
+      }
+      let res: Response;
+      try {
+        res = await fetch(endpoint, {
+          method: "POST",
+          headers: OVERPASS_HEADERS,
+          body: "data=" + encodeURIComponent(query),
+          signal: abortIn(OVERPASS_FETCH_TIMEOUT_MS, deadline),
+        });
+      } catch (e) {
+        // A refused connection or a timeout is the same story as a 521: this
+        // endpoint is not answering, so move to the next one.
+        lastError = e instanceof Error ? e : new Error(String(e));
+        break;
+      }
+      if (res.ok) {
+        if (index > 0) console.warn(`[polygon] Overpass served by fallback endpoint ${endpoint}.`);
+        return await res.json();
+      }
+
+      lastError = new Error(
+        `Overpass HTTP ${res.status} from ${endpoint}: ${(await res.text()).slice(0, 200)}`);
+
+      // The origin is down — another attempt here buys nothing, so go straight
+      // to the next endpoint and keep the budget for it.
+      if (ORIGIN_DOWN_STATUS.has(res.status)) break;
+
+      // Otherwise it is most likely 429: Overpass rate-limits aggressive
+      // retries, and a retry needs a real pause for a slot to free up. One
+      // retry, and only if it fits the budget — a polygon is an enhancement,
+      // never worth losing the message over.
+      if (attempt === 2 || !(await sleepWithin(OVERPASS_RETRY_PAUSE_MS, deadline))) break;
+    }
   }
+  throw lastError ?? new Error("Overpass produced no response");
 }
 
 /**
@@ -558,6 +607,46 @@ function countSamplesNearStreet(
   return hits;
 }
 
+// ── Degenerate-block guard ───────────────────────────────────────────────────
+//
+// A failed build is loud; a degenerate build is SILENT, and silently
+// under-reaches everyone in the real block. Alert `15a862fb` stored a 4-point
+// ring of 0.004 km² — a ~110 m triangle — for a block bounded by arteries a
+// kilometre apart. It passed every existing check, `is_polygon` stayed true and
+// `polygon_failed` was never set, so nothing on the row said the outline was
+// nonsense.
+//
+// Both numbers are fitted against the five Overpass fixtures rather than
+// picked, and the range that works is reported rather than the single value
+// (the 200→25 m extension mistake). Measured winners:
+//
+//   fixture       vertices   area km²   mean width
+//   set1              22      0.0206       57 m
+//   varnenchik        72      0.1742      199 m
+//   levski            82      0.1869      208 m
+//   ruse             182      0.3041      209 m
+//   saharov          177      0.3849      242 m
+//
+// So the smallest genuine block is 20,600 m² / 22 vertices, and the degenerate
+// one is 4,000 m² / 4 vertices.
+//
+// Area: anything in **5,000–15,000 m²** separates them. 20,000 is already too
+// close to set1 to be safe. 10,000 is essentially the geometric mean of the two
+// (9,077), leaving 2.5× clearance above the sliver and 2.1× below the smallest
+// real block — the balance point rather than an edge of the range.
+const MIN_BLOCK_AREA_M2 = 10_000;
+
+// Vertices: anything in **5–22** separates them. 8 sits clear of a triangle or
+// quadrilateral without approaching set1's 22. Rejected faces in the fixtures
+// run 6–27 vertices, so this is a weaker signal than area on its own — it is
+// here because the two catch different pathologies, and a ring with almost no
+// vertices is not a shape the road-band cutter produces for a real block.
+const MIN_RING_VERTICES = 8;
+
+// A rejected polygon is NOT a lost alert: clearing is_polygon drops the location
+// back to a pin, which still notifies. Under-reaching a whole block silently is
+// the worse failure, so this errs toward rejecting.
+
 // ── Main pipeline (port of extract_city_block + streets_to_geojson) ──────────
 
 export interface BlockPolygonResult {
@@ -590,6 +679,8 @@ export const BLOCK_POLYGON_DEFAULTS = {
   clipMargin: CLIP_MARGIN_M,
   maxSingleStreetCoverage: MAX_SINGLE_STREET_COVERAGE,
   minTouchSamples: MIN_TOUCH_SAMPLES,
+  minBlockAreaM2: MIN_BLOCK_AREA_M2,
+  minRingVertices: MIN_RING_VERTICES,
 };
 
 export type BlockPolygonOptions = Partial<typeof BLOCK_POLYGON_DEFAULTS> & {
@@ -628,7 +719,7 @@ export interface BlockPolygonDebug {
     samples: number;
     coverage: Array<{ name: string; hits: number; share: number }>;
     bounding: string[];
-    verdict: "winner" | "runner-up" | "dominated" | "too-few-streets";
+    verdict: "winner" | "runner-up" | "dominated" | "too-few-streets" | "degenerate";
   }>;
 }
 
@@ -656,7 +747,7 @@ export async function buildBlockPolygon(
 ): Promise<BlockPolygonResult> {
   const {
     extensionDist, sampleStep, roadHalfWidth, clipMargin,
-    maxSingleStreetCoverage, minTouchSamples,
+    maxSingleStreetCoverage, minTouchSamples, minBlockAreaM2, minRingVertices,
   } = { ...BLOCK_POLYGON_DEFAULTS, ...options };
   // Block edges sit a road half-width off the centrelines that produced them,
   // so the touch test has to reach exactly that far — plus the slack.
@@ -829,7 +920,8 @@ export async function buildBlockPolygon(
   //    of the ring on its own; best = (touchCount, area).
   const candidates: Array<{ poly: any; touched: number; streets: string[] }> = [];
   const extendedEntries = [...extended.entries()];
-  let slivers = 0; // rejected for single-street dominance — reported below
+  let slivers = 0;
+  let degenerate = 0; // rejected for single-street dominance — reported below
   for (const poly of rawPolygons) {
     // A burst per face *and* per street within it. This is the other half of
     // the cost — a boulevard-long face carries the most samples and is measured
@@ -887,7 +979,19 @@ export async function buildBlockPolygon(
       });
     }
     if (dominated) { slivers++; continue; }
-    if (streets.length >= 2) candidates.push({ poly, touched: streets.length, streets });
+    if (streets.length < 2) continue;
+
+    // Degenerate faces are dropped HERE rather than after the sort: the sort
+    // ranks on how many streets a face touches, so a 110 m triangle that
+    // happens to touch three of them would win outright over the real block.
+    const faceArea = poly.getArea();
+    const faceVertices = poly.getExteriorRing().getCoordinates().length;
+    if (faceArea < minBlockAreaM2 || faceVertices < minRingVertices) {
+      degenerate++;
+      if (dbg) dbg.candidates[dbg.candidates.length - 1]!.verdict = "degenerate";
+      continue;
+    }
+    candidates.push({ poly, touched: streets.length, streets });
   }
   candidates.sort((a, b) => b.touched - a.touched || b.poly.getArea() - a.poly.getArea());
 
@@ -901,7 +1005,14 @@ export async function buildBlockPolygon(
         ? "the streets enclose no block"
         : slivers === rawPolygons.length
           ? `all ${slivers} enclosed area(s) were bounded by a single street`
-          : `none of ${rawPolygons.length} enclosed area(s) was bounded by ≥2 distinct streets`,
+          : degenerate > 0
+            // Named separately from the ≥2-streets case because it means
+            // something different and actionable: a ring DID close and was
+            // thrown away for being too small to be a block. Before this, that
+            // ring was stored and quietly under-reached everyone inside it.
+            ? `${degenerate} of ${rawPolygons.length} enclosed area(s) closed but were degenerate `
+              + `(under ${minBlockAreaM2} m² or ${minRingVertices} vertices)`
+            : `none of ${rawPolygons.length} enclosed area(s) was bounded by ≥2 distinct streets`,
       ...sealed(),
     };
   }

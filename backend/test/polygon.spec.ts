@@ -291,3 +291,83 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
     expect(result.reason).not.toContain("street names resolved");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The degenerate-block guard
+// ---------------------------------------------------------------------------
+//
+// Alert 15a862fb stored a 4-point ring of 0.004 km² — a ~110 m triangle — for a
+// block bounded by arteries a kilometre apart. It passed every check above,
+// `is_polygon` stayed true and `polygon_failed` was never set: a failed build is
+// loud, a degenerate one is silent, and it silently under-reaches everyone in
+// the real block.
+//
+// The Overpass response behind that alert was not captured at the time, so the
+// degenerate case is exercised by moving the threshold onto a known-good block
+// rather than by a saved fixture of the bad one. That still pins what matters:
+// the gate fires, it takes the polygon_failed path, and it says why.
+
+describe("degenerate blocks are rejected, not stored", () => {
+  const ALL: Array<[string, string[]]> = [
+    ["set1", SET1],
+    ...BLOCK_SETS.map((b) => [b.id, b.streets] as [string, string[]]),
+  ];
+  const waysFor = (id: string) =>
+    groupWaysByName(JSON.parse(env.TEST_FIXTURES[`overpass-${id}.json`]!));
+
+  it("keeps every genuine block across the whole workable threshold range", async () => {
+    // Sweep, don't spot-check (SPEC.md §1.9 — the 200→25 m extension mistake).
+    // Measured: the smallest genuine block is set1 at 20,600 m²/22 vertices; the
+    // degenerate one was 4,000 m²/4. Every area threshold in 5,000–15,000 m²
+    // and every vertex floor in 5–22 separates the two, and the shipped values
+    // (10,000 / 8) sit near the middle of both.
+    for (const minBlockAreaM2 of [5_000, 7_500, 10_000, 12_500, 15_000]) {
+      for (const [id, streets] of ALL) {
+        const r = await buildBlockPolygon(waysFor(id), streets, { minBlockAreaM2 });
+        expect(r.polygon, `${id} @ ${minBlockAreaM2} m²: ${r.reason}`).not.toBeNull();
+      }
+    }
+    for (const minRingVertices of [5, 8, 12, 16, 20, 22]) {
+      for (const [id, streets] of ALL) {
+        const r = await buildBlockPolygon(waysFor(id), streets, { minRingVertices });
+        expect(r.polygon, `${id} @ ${minRingVertices}v: ${r.reason}`).not.toBeNull();
+      }
+    }
+  });
+
+  it("rejects a face that is too small, and says so", async () => {
+    // set1's real winner is 20,600 m²; asking for 50,000 makes it degenerate by
+    // definition, which is the only way to reach this branch with the fixtures
+    // available.
+    const result = await buildBlockPolygon(waysFor("set1"), SET1, { minBlockAreaM2: 50_000 });
+    expect(result.polygon).toBeNull();
+    expect(result.reason).toContain("degenerate");
+    // The reason has to name the numbers — it is what the review tool renders
+    // and the only account an operator gets of why the outline is missing.
+    expect(result.reason).toContain("50000");
+  });
+
+  it("rejects a ring with too few vertices, and says so", async () => {
+    const result = await buildBlockPolygon(waysFor("set1"), SET1, { minRingVertices: 500 });
+    expect(result.polygon).toBeNull();
+    expect(result.reason).toContain("degenerate");
+  });
+
+  it("marks the rejected face in the debug channel the tester draws", async () => {
+    const result = await buildBlockPolygon(
+      waysFor("set1"), SET1, { minBlockAreaM2: 50_000, debug: true });
+    expect(result.polygon).toBeNull();
+    expect(result.debug!.candidates.some((c) => c.verdict === "degenerate")).toBe(true);
+  });
+
+  it("a degenerate winner never outranks a real block", async () => {
+    // The gate runs before the sort, not after. The sort ranks on how many
+    // streets a face touches, so a triangle touching three of them would win
+    // outright over the real block if it were only filtered afterwards.
+    const result = await buildBlockPolygon(waysFor("ruse"), BLOCK_SETS[1]!.streets, { debug: true });
+    expect(result.polygon).not.toBeNull();
+    const winner = result.debug!.candidates.find((c) => c.verdict === "winner")!;
+    expect(winner.areaM2).toBeGreaterThan(10_000);
+    expect(winner.ring.length).toBeGreaterThanOrEqual(8);
+  });
+});

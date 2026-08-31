@@ -23,8 +23,8 @@ export async function run(env: Env, deadline: number): Promise<void> {
     listingUrl: env.VIK_URL,
     idPattern: VIK_URL_PATTERN,
     parsePage: vikParsePage,
-    parseMessage: (html) => {
-      const msg = vikParseMessage(html);
+    parseMessage: async (html) => {
+      const msg = await vikParseMessage(html);
       return msg ? { title: msg.title, content: msg.content } : null;
     },
   });

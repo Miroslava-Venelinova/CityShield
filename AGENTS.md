@@ -56,7 +56,7 @@ From `frontend/`: `npm run lint`, `npm run typecheck`. CI runs exactly these, pl
 ## The pipeline, in one pass
 
 `scheduled` (every 15 min) → `schedule.ts` picks the due sources → scrape
-(cheerio) → **AI parse** (Workers AI, JSON-schema mode) → **`normalize.ts`
+(HTMLRewriter + string scans) → **AI parse** (Workers AI, JSON-schema mode) → **`normalize.ts`
 deterministic guards** → geocode (Nominatim, cached in D1) → build polygon
 (Overpass + JSTS) → store → target → push (OneSignal). A daily cleanup cron runs
 retention deletions.
@@ -80,8 +80,10 @@ one pin.
 - Module-scope caches (regions/streets, Overpass responses, the Nominatim slot
   chain) are **per-isolate and best-effort**. Nothing may be correct only because
   a cache is warm.
-- **Adding a dependency needs a reason.** The set is `hono`, `zod`, `cheerio`,
-  `jsts`. WebCrypto instead of any crypto package; no ORM.
+- **Adding a dependency needs a reason.** The runtime set is `hono`, `zod`,
+  `jsts`. WebCrypto instead of any crypto package; no ORM. `cheerio` is a
+  devDependency only — the scrapers use `HTMLRewriter` and string scans, and the
+  tests keep cheerio as a reference oracle for text extraction.
 
 ## Rules that look like bugs — do not "simplify" them
 
@@ -101,6 +103,10 @@ Each of these was a real incident. Changing one changes who gets woken up.
   successes, a failed message blocks newer ones, and **persist per success, not
   per batch** — a trailing write never runs when the tick is killed mid-batch, and
   the message is then re-stored and re-pushed every tick until the cursor moves.
+  A message that keeps failing before the store is given up on after
+  `MAX_PRE_STORE_ATTEMPTS = 5` (~75 min) so it cannot pin the cursor forever;
+  the attempt is claimed *before* the work, because a CPU kill never reaches a
+  counter bumped after it.
 - **Store before notify, always**, so a store failure is safely retryable.
   `ingestAlert` returns true only once the push landed or is owed to nobody;
   3 failed attempts then let the cursor advance.
@@ -109,10 +115,15 @@ Each of these was a real incident. Changing one changes who gets woken up.
   completed lookup may clear them. Stale beats blank; those two columns *are* the
   targeting.
 - **Enrichment never throws** — an alert without coordinates is still worth storing.
-- **The guards A1–A14 (`ingestion/normalize.ts`) each exist for one real message**,
+- **The guards A1–A15 (`ingestion/normalize.ts`) each exist for one real message**,
   cited by hash in SPEC.md §1.7. A10 and A12–A14 read a name's *position* in the
   source text and some of them DELETE model output, so a false positive is a
-  silenced alert. Order between them matters (A14 runs before A2).
+  silenced alert. Order between them matters (A14 runs before A2, A15 runs last).
+  A15 is the only one that ADDS a place, which is why it is literal-match,
+  single-candidate, and runs only on a location already bound for nobody.
+- **Only a hedged alert is ever suppressed as a duplicate**, and only against one
+  already delivered (`pipeline.ts`). A confirmed outage is never silenced by a
+  "възможни са смущения" restatement, whichever order the pair arrives in.
 - Deploy **migrations before the Worker that needs them** — a Worker ahead of its
   schema fails every alert it handles.
 
@@ -152,6 +163,15 @@ Each of these was a real incident. Changing one changes who gets woken up.
 - Historical logs are **not** queryable: the wrangler token lacks the
   observability scope, so catching a live tick with `wrangler tail` is the only
   option, at one data point per 15-minute cron.
+- **`GET /api/health`** (header `X-Api-Key`) is the check that survives an
+  `exceededCpu` kill: the tick writes `started_at` to D1 before parsing and
+  `completed_at` only on success, so a start with no completion is the kill
+  signature. It also lists cursor ages and every message the attempt cap skipped.
+- **Do not time a sub-10 ms burst with `performance.now()` inside workerd.** The
+  clock quantises to 1 ms and advances only ~97 ms into a synchronous stretch
+  before pinning — it returns plausible-looking zeros, not errors. Measure in
+  Node (`process.hrtime.bigint`, one fresh process per data point, since the cost
+  is cold-isolate JIT) and treat it as a floor; workerd is slower. See SPEC §3.8.
 
 ## Working notes
 

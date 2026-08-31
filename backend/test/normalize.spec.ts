@@ -788,3 +788,86 @@ describe("heating messages carry the city", () => {
     expect(out.locations[0]!.settlement).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A15 · rescuing a district the extractor dropped
+// ---------------------------------------------------------------------------
+//
+// Four alerts in the 08.2026 review reached nobody, all industrial zones. The
+// decisive detail: `Южна промишлена зона` is a byte-exact match for a seeded
+// region and the stored `area` was null — the extractor dropped the name, so
+// the matcher never saw it. §5.1 ("a bare city is not an audience") is correct
+// and stays; this runs only on the shape that rule is about to send to nobody.
+
+describe("A15 · lost district rescue", () => {
+  // Zones that are seeded regions of Варна, as they are in seeds/regions.json.
+  const varna = refs.regions[0]!;
+  // Districts OF Варна carry settlement_id; Игнатиево, Припек, Баново and
+  // с. Аврен are settlements in their own right and must not, or the test
+  // asserting that a foreign settlement is never rescued would assert nothing.
+  const districtNames = new Set([
+    "ж.к. Младост", "кв. Владиславово", "Владислав Варненчик",
+    "кв. Аспарухово", "кв. Виница", "м-т Фичоза",
+  ]);
+  const zoneRefs: ReferenceRows = {
+    ...refs,
+    regions: [
+      ...refs.regions.map((r) => (districtNames.has(r.name) ? { ...r, settlement_id: varna.id } : r)),
+      { ...row("Южна промишлена зона", 43.1919304, 27.8919344), settlement_id: varna.id },
+      { ...row("Западна промишлена зона", 43.2186994, 27.8680923), settlement_id: varna.id },
+    ],
+  };
+  const rescue = (locations: ProcessedData["locations"], message: string) =>
+    normalizeParse(parse(locations), message, zoneRefs, "epro");
+
+  it("recovers a seeded zone the parse dropped, instead of notifying nobody", () => {
+    const out = rescue(
+      [location("гр. Варна")],
+      "гр. Варна - прекъсване на електрозахранването в Южна промишлена зона от 09:00 до 16:00 часа.");
+    expect(out.locations).toHaveLength(1);
+    expect(out.locations[0]!.area).toBe("Южна промишлена зона");
+    expect(out.locations[0]!.settlement).toBe("гр. Варна");
+  });
+
+  it("leaves a location that already has an area or streets alone", () => {
+    const withArea = rescue(
+      [location("гр. Варна", "кв. Виница")],
+      "гр. Варна - авария в кв. Виница и Южна промишлена зона");
+    expect(withArea.locations[0]!.area).toBe("кв. Виница");
+
+    // A street list means the location already reaches someone; §5.1 was never
+    // going to fire, so neither does this.
+    const withStreet = rescue(
+      [location("гр. Варна", null, ["ул. Девня"])],
+      "гр. Варна - авария на ул. Девня, Южна промишлена зона");
+    expect(withStreet.locations[0]!.area).toBeNull();
+  });
+
+  it("refuses to guess when the message names two districts", () => {
+    // Ownership is unknowable from a flat list, and guessing wrong silences
+    // everyone in the zone that lost — the same reasoning A4 uses.
+    const out = rescue(
+      [location("гр. Варна")],
+      "гр. Варна - прекъсване в Южна промишлена зона и Западна промишлена зона.");
+    expect(out.locations[0]!.area).toBeNull();
+  });
+
+  it("does not invent an area the message never names", () => {
+    const out = rescue([location("гр. Варна")], "гр. Варна - авария в града.");
+    expect(out.locations[0]!.area).toBeNull();
+  });
+
+  it("only considers districts of the settlement that resolved", () => {
+    // с. Аврен is its own settlement, not a district of Варна, so naming it
+    // must not turn into an area under the city.
+    const out = rescue([location("гр. Варна")], "гр. Варна - авария в с. Аврен.");
+    expect(out.locations[0]!.area).toBeNull();
+  });
+
+  it("matches literally — the trigram test the deleting guards use is too loose here", () => {
+    // `mentions` would accept an inflected near-miss, which is right for a guard
+    // that KEEPS data and wrong for one that fabricates an area.
+    const out = rescue([location("гр. Варна")], "гр. Варна - авария в промишлената зона на юг.");
+    expect(out.locations[0]!.area).toBeNull();
+  });
+});

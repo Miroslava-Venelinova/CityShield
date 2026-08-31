@@ -72,16 +72,23 @@ export async function runIngestion(env: Env): Promise<void> {
  * How long a source's cursor may sit still before the tick says so.
  *
  * The cheap half of the cursor-pin problem (§4.1). The crawler is oldest-first
- * and advances only past successes, and while MAX_PUSH_ATTEMPTS caps a dead
- * *push*, nothing caps a message that fails before the store: on 30.07.2026 a
- * single over-budget message turned into a 20-hour ingestion outage and six
- * unsent ViK outages, and the only reason anyone found out was that someone went
- * looking. A pinned cursor produces no errors — every tick reads the same
- * message, fails the same way, and writes nothing.
+ * and advances only past successes, so a pinned cursor produces no errors —
+ * every tick reads the same message, fails the same way, and writes nothing.
+ * On 30.07.2026 a single over-budget message turned into a 20-hour ingestion
+ * outage and six unsent ViK outages, and the only reason anyone found out was
+ * that someone went looking.
  *
- * The real fix is a pre-store attempt counter, which means deliberately skipping
- * a public-safety alert after N strikes and is a product decision rather than a
- * refactor. This is not that. It just makes the silence audible.
+ * The bound itself now exists: MAX_PRE_STORE_ATTEMPTS (state.ts, migration
+ * 0018) gives up on a message after five strikes and moves the cursor past it,
+ * so the same failure costs one message rather than the source. This stays as
+ * the narrower check it always was — five strikes is ~75 minutes, and a source
+ * that is quiet for six hours for any *other* reason is still worth saying so.
+ *
+ * One thing it cannot do is survive the failure it most needs to report: an
+ * `exceededCpu` kill discards the invocation's logs, so on 28.08.2026 this
+ * warning was written into a log stream that was thrown away. That is what the
+ * D1 heartbeat and /api/health are for (migration 0019) — this remains the
+ * convenient version for anyone already reading a tail.
  *
  * 6 hours is chosen against the quietest source rather than the busiest: vt and
  * heating publish a handful of items a week, so anything tighter would cry wolf
@@ -137,6 +144,12 @@ export async function runDailyCleanup(env: Env): Promise<void> {
     // it as an unknown token; past that, the family is long dead anyway.
     { label: "expired refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE expires_at < ?", cutoffDays: 0 },
     { label: "spent refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE used_at IS NOT NULL AND used_at < ?", cutoffDays: 7 },
+    // Pre-store attempt counters (migration 0018). A row for a message that is
+    // merely failing is transient — it is deleted the moment the message goes
+    // through. A row that was SKIPPED is the record of a message deliberately
+    // not delivered, so it is kept as long as the alerts it sits among.
+    { label: "stale ingest attempt(s)", sql: "DELETE FROM ingest_attempts WHERE skipped_at IS NULL AND last_at < ?", cutoffDays: 7 },
+    { label: "old skipped ingest(s)", sql: "DELETE FROM ingest_attempts WHERE skipped_at IS NOT NULL AND skipped_at < ?", cutoffDays: 90 },
   ];
 
   for (const job of jobs) {

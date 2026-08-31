@@ -1,0 +1,162 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="bg">
+<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<title>Съобщения за аварии&nbsp;|&nbsp;Водоснабдяване и канализация ООД - Варна </title>
+	<base href="https://vikvarna.com/" />
+	<meta name="keywords" content="Водоснабдяване и канализация - Варна, ВиК Варна" />
+	<meta name="description" content="Официален интернет сайт на Водоснабдяване и канализация ООД - Варна "/>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600&display=swap" rel="stylesheet" />
+	
+	<script src="js/jquery.js"></script>
+	<script src="js/jquery-ui-1.8.17.custom.min.js"></script>
+	<script src="js/base_functions.js"></script>
+	<script src="js/jquery.mask.js"></script>		
+	<script>
+		var _recaptcha = null;
+		var BASE_URL = "https://vikvarna.com/";
+		var LANG = "bg";		
+	</script>	
+	<link rel="stylesheet" type="text/css" href="https://vikvarna.com/css/layout.css?ver=4" />
+	<link rel="stylesheet" type="text/css" href="https://vikvarna.com/css/content.css?ver=4" />	
+	<link rel="stylesheet" type="text/css" href="https://vikvarna.com/css/menu.css?ver=4" />
+			
+		<script src="https://vikvarna.com/js/lightbox.js"></script>
+	<link href="https://vikvarna.com/css/lightbox.css" rel="stylesheet" />
+		<script>
+		function updateFilters() {
+			$.post("https://vikvarna.com/index.php?item=messages&mode=filters", $('#filtersForm').serialize(), function(resp) {
+				$('#filters').html(resp.filters);
+				$('#main_content').html(resp.content);
+			});
+		}
+	</script>
+</head>
+<body>
+	<div class="outer">
+			<header>
+		<a href="https://vikvarna.com/" class="logo" title="Начало"></a>
+		<div class="header-caption"><h1>"Водоснабдяване и канализация - Варна" ООД</h1></div>
+		<div class="header">
+			<div class="phone">НАЦИОНАЛЕН ТЕЛЕФОН<span>070011300</span></div>
+			<div class="phone emergency">ТЕЛЕФОН ЗА АВАРИИ<span>080019160</span></div>
+            <ul class="top-menu">
+												<li><a href="https://vikvarna.com/bg/about-company.html">За Компанията</a></li>
+																																																																				<li><a href="https://vikvarna.com/bg/projects.html">Проекти</a></li>
+																				<li><a href="https://vikvarna.com/bg/opinions-and-recommends.html">Жалби, молби, сигнали</a></li>
+																								<li><a href="https://vikvarna.com/bg/curious.html">Любопитно</a></li>
+																<li><a href="https://vikvarna.com/bg/useful-links.html">Полезни връзки</a></li>
+																<li><a href="https://vikvarna.com/bg/payments.html">Начини и места за плащане</a></li>
+																<li><a href="https://vikvarna.com/bg/clients.html">Клиенти</a></li>
+																<li><a href="https://vikvarna.com/bg/careers.html">Кариери</a></li>
+												<li id="last-top-menu"><a href="https://vikvarna.com/bg/sitemap.html">Карта на сайта</a></li>
+			</ul>
+			<ul class="header-menu">
+				<li><a href="https://vikvarna.com/">Начало</a></li>
+												<li><a href="https://vikvarna.com/bg/services.html">Услуги</a></li>
+																<li><a href="https://vikvarna.com/bg/regulatory-base.html">Нормативна база</a></li>
+																				<li><a href="https://vikvarna.com/bg/news.html">Новини</a></li>
+				<li><a href="https://vikvarna.com/bg/about-company/DeklaraciaDostypnost.html">Декларация за достъпност</a></li>
+																												<li><a href="https://vikvarna.com/bg/contacts.html">Контакти</a></li>
+											</ul>
+		</div>
+	</header>
+	<div style="text-align:center;background: #fff;"><a href="http://vikvarna.com/bg/projects.html" title="проекти" ><img src="img/Europroject.png" alt="Европроект"/></a></div>
+		<div class="content">
+			<ul class="path">
+				<li><a href="https://vikvarna.com/">Начало</a></li>
+																<li><a href="bg/messages.html">Съобщения за аварии</a></li>
+				<li>Без вода днес ще бъдат:</li>
+							</ul>
+			<div >
+					<a target="_blank" href="https://experience.arcgis.com/experience/54f02e81882f40a5bcd69d75a871dc03/page/%D0%9F%D1%83%D0%B1%D0%BB%D0%B8%D1%87%D0%B5%D0%BD-%D0%BF%D1%80%D0%B5%D0%B3%D0%BB%D0%B5%D0%B4?views=%D0%A0%D0%B5%D0%BC%D0%BE%D0%BD%D1%82%D0%B8">Карта на ремонтите и нарушеното водоснабдяване</a>
+					<br/><br/>
+			</div>
+			<div class="content-left" >
+                <div class="filters" id="filters">
+                						<form action="#" id="filtersForm">					
+					<input type="hidden" name="type" value="breakdown" />
+					<select name="region_id" onchange="updateFilters()">
+                    	<option value="">Моля изберете</option>
+                    	                        <option value="15" >ЕТР Варна</option>
+                                                <option value="2" >ЕТР Девня</option>
+                                                <option value="6" >ЕТР Провадия</option>
+                                                <option value="11" >ЕТР Долни Чифлик</option>
+                                            </select>
+                                        <div class="menu">
+                    <ul>
+                        <li  class="active" ><a href="https://vikvarna.com/bg/messages.html?region_id=0&sub_region_id=0&type=breakdown"><span>›</span> Съобщения за аварии</a></li>
+                        <li ><a href="https://vikvarna.com/bg/messages.html?region_id=0&sub_region_id=0&type=repair"><span>›</span> Планови ремонти</a></li>
+                                            </ul>
+                	</div>
+                    </form>                    
+                </div>                
+								<div class="banners-left">
+					<a href="https://vikvarna.com/bg/check-and-payment.html" title="Провери своята сметка"><img src="img/banner_check.png" alt="Провери своята сметка" /></a>
+					<a href="https://vikvarna.com/bg/check-and-payment.html" title="Начини и места за плащане"><img src="img/banner_payment.png" alt="Начини и места за плащане" /></a>
+					
+					<a href="https://vikvarna.com/bg/messages/breakdown.html" title="Известия за спиране на вода"><img src="img/sidebar.png" alt="Известия за спиране на вода" /></a>
+					<a href="http://vikvarna.com/bg/self-report.html" title="Самоотчет"><img src="img/samootchet_vik.png" alt="Самоотчет" /></a>
+					<a href="https://kampania.vikvarna.com/" title="Водата е дар - кампания" target="_blank"><img src="img/vodata_e_dar.png" alt="Водата е дар!" /></a>
+				</div>
+			</div>
+			<div class="content-right" id="main_content">
+																			<h1>Без вода днес ще бъдат:/</h1>
+						<div class="list-item-date">29.08.2026 г.</div>
+						<div class="view">
+																					<p>Поради възникнала авария, абонатите от местност "Поляните" ще бъдат със смущения във водоподаването както и липса на вода до около 24.00ч. на 29.август 2026г.</p>
+							<div class="clear"></div><br/>
+							<p class="link-subscribe left"><a href="https://vikvarna.com/bg/messages/breakdown.html?region_id=0&sub_region_id=0">Виж всички съобщения за аварии</a></p>
+							<div class="clear"></div>
+						</div>
+																	
+			</div>
+			<div class="clear"></div>			
+		</div>
+	</div>
+		<div style="text-align:center;">
+		<img src="img/bank-ecards-logos.png" alt="Плащане с Visa, MasterCard" />
+	</div>
+	<div class="bottom">
+		<div class="outer">
+			<div class="footer">
+				<ul>
+					<li><a href="https://vikvarna.com/">Начало</a></li>
+															<li><a href="https://vikvarna.com/bg/services.html">Услуги</a></li>
+																				<li><a href="https://vikvarna.com/bg/regulatory-base.html">Нормативна база</a></li>
+																									<li><a href="https://vikvarna.com/bg/news.html">Новини</a></li>
+																																			<li><a href="https://vikvarna.com/bg/contacts.html">Контакти</a></li>
+																									<li><a href="https://vikvarna.com/bg/about-company.html">За Компанията</a></li>
+																																																																																					<li><a href="https://vikvarna.com/bg/projects.html">Проекти</a></li>
+																									<li><a href="https://vikvarna.com/bg/opinions-and-recommends.html">Жалби, молби, сигнали</a></li>
+																				<li><a href="https://vikvarna.com/bg/self-report.html">Самоотчет</a></li>
+																				<li><a href="https://vikvarna.com/bg/curious.html">Любопитно</a></li>
+																				<li><a href="https://vikvarna.com/bg/useful-links.html">Полезни връзки</a></li>
+																				<li><a href="https://vikvarna.com/bg/payments.html">Начини и места за плащане</a></li>
+																				<li><a href="https://vikvarna.com/bg/clients.html">Клиенти</a></li>
+																				<li><a href="https://vikvarna.com/bg/careers.html">Кариери</a></li>
+															<li><a href="https://vikvarna.com/bg/sitemap.html">Карта на сайта</a></li>
+				</ul>
+				<a href="https://vikvarna.com/bg/index.html?forceMobileVersion=1" title="към мобилна версия"><img src="img/icon_mobile.png" alt="Мобилна версия" class="left mobile_icon"/></a>
+				<p> <a href="http://dotmedia.bg" target="_blank">поддръжка: Дот Медиа</a></p>
+				<div class="clear"></div>
+			</div>
+		</div>
+	</div>
+		<script>
+	var onloadCallback = function() {		
+		_recaptcha = grecaptcha;
+	}
+	</script>
+	<script src="https://www.google.com/recaptcha/api.js?onload=onloadCallback" async defer></script>
+		
+
+	
+	<script type="text/javascript" src="https://vikvarna.com/js/jquery.js"></script>
+	<script type="text/javascript" src="https://vikvarna.com/js/jquery-ui-1.8.17.custom.min.js"></script>
+	<script type="text/javascript" src="https://vikvarna.com/js/base_functions.js"></script>
+	<script type="text/javascript" src="https://vikvarna.com/js/custom-form-elements.js"></script>
+	<script type="text/javascript" src="https://vikvarna.com/js/jquery.mask.js"></script>	
+</body>
+</html>

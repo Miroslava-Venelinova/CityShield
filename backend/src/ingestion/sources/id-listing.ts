@@ -8,7 +8,9 @@
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
 import { fetchPage, readCapped, resolveSameHost } from "../scrape";
-import { getLastId, hasStateRow, writeLastId } from "../state";
+import {
+  claimAttempt, getLastId, hasStateRow, MAX_PRE_STORE_ATTEMPTS, recordSkip, releaseAttempts, writeLastId,
+} from "../state";
 
 export const MAX_MESSAGES_PER_TICK = 2;
 
@@ -18,7 +20,7 @@ export interface IdListingOptions {
   listingUrl: string;
   idPattern: RegExp;
   parsePage: (html: string) => string[] | null;
-  parseMessage: (html: string) => { title: string; content: string } | null;
+  parseMessage: (html: string) => Promise<{ title: string; content: string } | null>;
   /** Injectable for tests; defaults to fetchPage. */
   fetchImpl?: (url: string, headers?: Record<string, string>, deadline?: number) => Promise<Response>;
   /** Injectable for tests; defaults to processOutageMessage. */
@@ -93,10 +95,36 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
       break;
     }
 
+    let html: string;
+    try {
+      html = await readCapped(await fetchImpl(url, undefined, deadline));
+    } catch (e) {
+      // Outside the attempt cap on purpose: a 503 or a dropped connection says
+      // nothing about the message, and transient network trouble must not spend
+      // a real message's strikes.
+      console.error(`[${tag}] Failed to fetch message (id=${id}): ${e}. Stopping.`);
+      break;
+    }
+
+    // Claim the attempt BEFORE the parse-and-process, and after the fetch. The
+    // ordering is the whole point: whatever kills an isolate mid-message does
+    // so from here on, and a counter bumped afterwards would never record the
+    // one failure this cap exists to bound (MAX_PRE_STORE_ATTEMPTS). The claim
+    // is committed I/O, so it survives the kill.
+    const { proceed, attempts } = await claimAttempt(env, category, String(id));
+    if (!proceed) {
+      console.error(
+        `[${tag}] GIVING UP on id=${id} after ${attempts - 1} failed attempts before the store. ` +
+        `Advancing the cursor past it — this message is NOT delivered. It is recorded in ` +
+        `ingest_attempts (skipped_at) and on /api/health.`);
+      await recordSkip(env, category, String(id));
+      await writeLastId(env, category, id);
+      continue;
+    }
+
     let submitted = false;
     try {
-      const message = opts.parseMessage(
-        await readCapped(await fetchImpl(url, undefined, deadline)));
+      const message = await opts.parseMessage(html);
       if (message === null) {
         console.warn(`[${tag}] Could not parse message content (id=${id}).`);
       } else {
@@ -107,9 +135,12 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
     }
 
     if (!submitted) {
-      console.warn(`[${tag}] Stopping at id=${id}; it will be retried next run.`);
+      console.warn(
+        `[${tag}] Stopping at id=${id}; it will be retried next run ` +
+        `(attempt ${attempts}/${MAX_PRE_STORE_ATTEMPTS}).`);
       break;
     }
+    await releaseAttempts(env, category, String(id));
 
     // Persist the cursor after EACH success, not once after the whole batch.
     // A trailing write never runs when the invocation is killed mid-batch —

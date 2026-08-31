@@ -151,7 +151,7 @@ describe("crawlIdListing host pinning", () => {
         listingUrl: LISTING,
         idPattern: /(\d+)\.html/,
         parsePage: () => urls,
-        parseMessage: (html) => ({ title: `t-${html}`, content: `c-${html}` }),
+        parseMessage: async (html) => ({ title: `t-${html}`, content: `c-${html}` }),
         fetchImpl: async (url) => {
           if (url !== LISTING) fetched.push(url);
           return new Response(url);

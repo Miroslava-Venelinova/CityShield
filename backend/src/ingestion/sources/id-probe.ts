@@ -23,7 +23,10 @@
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
 import { fetchPage, readCapped, resolveSameHost } from "../scrape";
-import { getLastId, getLastIdUpdatedAt, hasStateRow, writeLastId } from "../state";
+import {
+  claimAttempt, getLastId, getLastIdUpdatedAt, hasStateRow, MAX_PRE_STORE_ATTEMPTS,
+  recordSkip, releaseAttempts, writeLastId,
+} from "../state";
 import { MAX_MESSAGES_PER_TICK } from "./id-listing";
 
 /**
@@ -52,7 +55,7 @@ export interface IdProbeOptions {
    * message for whichever region it actually belongs to.
    */
   messageUrl: (id: number) => string;
-  parseMessage: (html: string) => { title: string; content: string } | null;
+  parseMessage: (html: string) => Promise<{ title: string; content: string } | null>;
   /**
    * Listing page, used ONLY to seed the cursor on the very first run and to
    * recover from a dead id run — never for the ordinary crawl.
@@ -104,19 +107,46 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
       return;
     }
 
-    let message: { title: string; content: string } | null;
+    let html: string;
     try {
-      message = opts.parseMessage(
-        await readCapped(await fetchImpl(opts.messageUrl(id), undefined, deadline)));
+      html = await readCapped(await fetchImpl(opts.messageUrl(id), undefined, deadline));
     } catch (e) {
       // A fetch that failed says nothing about whether the id holds a message,
       // so it must not be counted as a miss — that would let a 503 burn the
-      // budget and, worse, look like the end of the queue.
+      // budget and, worse, look like the end of the queue. It is not counted as
+      // an attempt either: the claim below sits after the fetch so transient
+      // network trouble cannot spend a message's strikes.
       console.error(`[${tag}] Failed to fetch message (id=${id}): ${e}. Stopping.`);
       return;
     }
 
+    // Claim the attempt BEFORE the parse-and-process, and after the fetch. The
+    // ordering is the whole point: whatever kills an isolate mid-message does
+    // so from here on, and a counter bumped afterwards would never record the
+    // one failure this cap exists to bound (MAX_PRE_STORE_ATTEMPTS). The claim
+    // is committed I/O, so it survives the kill.
+    const { proceed, attempts } = await claimAttempt(env, category, String(id));
+    if (!proceed) {
+      console.error(
+        `[${tag}] GIVING UP on id=${id} after ${attempts - 1} failed attempts before the store. ` +
+        `Advancing the cursor past it — this message is NOT delivered. It is recorded in ` +
+        `ingest_attempts (skipped_at) and on /api/health.`);
+      await recordSkip(env, category, String(id));
+      await writeLastId(env, category, id);
+      // Counts against the per-tick cap: giving up is still work, and a long
+      // run of poisoned ids must not burn the whole tick in one go.
+      processed++;
+      id++;
+      continue;
+    }
+
+    const message = await opts.parseMessage(html);
     if (message === null) {
+      // An empty id is not a failure, so it must not keep a claim: the probe
+      // walks the same few ids every tick, and left standing they would reach
+      // the cap on a merely quiet source and step the cursor over an id that
+      // has not been published *yet*.
+      await releaseAttempts(env, category, String(id));
       misses++;
       id++;
       continue;
@@ -131,9 +161,12 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
     }
 
     if (!submitted) {
-      console.warn(`[${tag}] Stopping at id=${id}; it will be retried next run.`);
+      console.warn(
+        `[${tag}] Stopping at id=${id}; it will be retried next run ` +
+        `(attempt ${attempts}/${MAX_PRE_STORE_ATTEMPTS}).`);
       return;
     }
+    await releaseAttempts(env, category, String(id));
 
     // Persist per success, not once at the end — see id-listing.ts. Doubles as
     // the hole handler: this write also moves the cursor past any dead ids

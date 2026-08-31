@@ -525,3 +525,134 @@ export async function getRecentAlertRows(env: Env, cutoffIso: string, limit: num
   ).bind(cutoffIso, limit).all<AlertRow>();
   return results;
 }
+
+// ── Pre-store ingest attempts (migration 0018) ──────────────────────────────
+
+export interface IngestAttemptRow {
+  source: string;
+  ref: string;
+  attempts: number;
+  skipped_at: string | null;
+  first_at: string;
+  last_at: string;
+}
+
+/**
+ * Record that an attempt on `ref` is ABOUT to be made, and return the new total.
+ *
+ * Called before the work, not after: the failure this bounds is a tick killed
+ * on the CPU cap, which never reaches anything written afterwards (migration
+ * 0018).
+ */
+export async function bumpIngestAttempt(env: Env, source: string, ref: string): Promise<number> {
+  const now = nowIso();
+  const row = await env.DB.prepare(
+    `INSERT INTO ingest_attempts (source, ref, attempts, first_at, last_at)
+     VALUES (?, ?, 1, ?, ?)
+     ON CONFLICT(source, ref) DO UPDATE SET
+       attempts = ingest_attempts.attempts + 1,
+       last_at  = excluded.last_at
+     RETURNING attempts`,
+  ).bind(source, ref, now, now).first<{ attempts: number }>();
+  return row?.attempts ?? 0;
+}
+
+/** Forget a message that finally went through — it is no longer failing. */
+export async function clearIngestAttempts(env: Env, source: string, ref: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM ingest_attempts WHERE source = ? AND ref = ?")
+    .bind(source, ref).run();
+}
+
+/**
+ * Mark a message as given up on. The row is KEPT (unlike a success, which
+ * deletes it) because a deliberately skipped public-safety message is exactly
+ * what an operator needs to be able to find afterwards.
+ */
+export async function markIngestSkipped(env: Env, source: string, ref: string): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE ingest_attempts SET skipped_at = ? WHERE source = ? AND ref = ?",
+  ).bind(nowIso(), source, ref).run();
+}
+
+/** Messages this source gave up on, newest first — the operator/health view. */
+export async function getSkippedIngests(env: Env, limit: number): Promise<IngestAttemptRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM ingest_attempts WHERE skipped_at IS NOT NULL
+     ORDER BY skipped_at DESC LIMIT ?`,
+  ).bind(limit).all<IngestAttemptRow>();
+  return results;
+}
+
+// ── Tick heartbeat (migration 0019) ─────────────────────────────────────────
+
+export interface IngestHealthRow {
+  cron: string;
+  started_at: string;
+  completed_at: string | null;
+  last_duration_ms: number | null;
+}
+
+/**
+ * Mark a tick as started. Called before any work, so that a tick killed on the
+ * CPU cap — which loses its logs — still leaves this behind.
+ *
+ * `completed_at` is deliberately NOT cleared: keeping the last successful
+ * completion is what makes "started_at is newer than completed_at" readable as
+ * "the tick that started then never finished".
+ */
+export async function markTickStarted(env: Env, cron: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO ingest_health (cron, started_at) VALUES (?, ?)
+     ON CONFLICT(cron) DO UPDATE SET started_at = excluded.started_at`,
+  ).bind(cron, nowIso()).run();
+}
+
+/** Mark a tick as having run to the end. */
+export async function markTickCompleted(env: Env, cron: string, durationMs: number): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE ingest_health SET completed_at = ?, last_duration_ms = ? WHERE cron = ?`,
+  ).bind(nowIso(), Math.round(durationMs), cron).run();
+}
+
+export async function getIngestHealth(env: Env): Promise<IngestHealthRow[]> {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM ingest_health ORDER BY cron",
+  ).all<IngestHealthRow>();
+  return results;
+}
+
+/** Every source's cursor and when it last moved — the other half of the health view. */
+export async function getCrawlStateRows(
+  env: Env,
+): Promise<Array<{ source: string; last_id: number; updated_at: string }>> {
+  const { results } = await env.DB.prepare(
+    "SELECT source, last_id, updated_at FROM crawl_state ORDER BY source",
+  ).all<{ source: string; last_id: number; updated_at: string }>();
+  return results;
+}
+
+/**
+ * Alerts in the same category that are still current, for duplicate detection.
+ *
+ * Narrow on purpose: a duplicate pair is published within minutes of itself and
+ * always by the same source, so the window is short and the category is pinned.
+ * Reads only the columns the comparison needs, because D1 bills rows examined.
+ */
+export async function getRecentAlertsForDedup(
+  env: Env, category: string, sinceIso: string,
+): Promise<Array<{
+  id: string; title: string; content: string; severity: string;
+  start_time: string | null; end_time: string | null; locations_json: string;
+  notified_at: string | null;
+}>> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, content, severity, start_time, end_time, locations_json, notified_at
+     FROM alerts WHERE category = ? AND created_on_utc >= ?
+     ORDER BY created_on_utc DESC LIMIT 25`,
+  ).bind(category, sinceIso).all<{
+    id: string; title: string; content: string; severity: string;
+    start_time: string | null; end_time: string | null; locations_json: string;
+    notified_at: string | null;
+  }>();
+  return results;
+}

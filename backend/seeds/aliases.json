@@ -11,5 +11,18 @@
     "_why": "м-т Траката is published by epro and ViK and OSM has no place of that name — it maps the area as three neighbourhoods, Горна/Средна/Долна Трака. Средна Трака is the middle of the three, so it is the least wrong single pin for the whole locality. An alias rather than a new region row: inventing a 'Траката' row would put a fourth, made-up place beside three real ones.",
     "alias": "Траката",
     "region": "Средна Трака"
+  },
+  {
+    "_why": "ViK's own shorthand for Владиславово: it publishes 'ж.к. В -во' (and 'В -во'), which is an abbreviation no similarity measure can reach — the core 'В -во' shares no trigram with 'Владиславово'. region_aliases is exactly the mechanism for source shorthand, and both the bare and prefixed forms are listed because parseName strips the kind and the sources write it either way (the Владислав Варненчик pair above does the same).",
+    "alias": "В -во",
+    "region": "кв. Владиславово"
+  },
+  {
+    "alias": "ж.к. В -во",
+    "region": "кв. Владиславово"
+  },
+  {
+    "alias": "В-во",
+    "region": "кв. Владиславово"
   }
 ]

@@ -10,6 +10,7 @@
 // tick instead, since the next tick costs at most five minutes of latency.
 
 import type { Env } from "../env";
+import { bumpIngestAttempt, clearIngestAttempts, markIngestSkipped } from "../db/queries";
 
 // Sources only ever compare against ids still visible on the listing page,
 // so old ids can be dropped; keeping the newest few hundred stops the array
@@ -128,5 +129,64 @@ export async function addSeenIds(env: Env, source: string, ids: string[]): Promi
     ).bind(source, JSON.stringify(merged), nowIso()).run();
   } catch (e) {
     console.error(`[state] addSeenIds(${source}) failed: ${e}`);
+  }
+}
+
+// ── Pre-store attempt cap (migration 0018) ──────────────────────────────────
+
+/**
+ * How many times a single message may fail before the store before the crawler
+ * gives up on it and moves the cursor past.
+ *
+ * Deliberately skipping a public-safety message reads badly on its own. The
+ * status quo it replaces is worse: the crawlers advance only past successes, so
+ * one message that always fails blocks *every newer message from that source*,
+ * forever — a 20-hour ViK outage on 30.07.2026 and a ~21-hour one from
+ * 28.08.2026, both of which lost far more alerts than the one being skipped and
+ * both of which ended only because a human went looking.
+ *
+ * Five strikes on a 15-minute cron is ~75 minutes of retrying one message
+ * before giving up on it. Generous, and bounded.
+ */
+export const MAX_PRE_STORE_ATTEMPTS = 5;
+
+/**
+ * Claim an attempt on `ref` before making it, and say whether to go ahead.
+ *
+ * The write happens FIRST, which is the whole point: a tick killed on the 10 ms
+ * CPU cap discards its logs and never runs its trailing writes, so a counter
+ * bumped after a failure would never see the failures that pin cursors. A
+ * committed D1 write ahead of the work is I/O, and costs essentially no CPU.
+ *
+ * A failed count read returns `true` (attempt it). The counter exists to bound
+ * damage, not to cause it: a D1 hiccup must not skip a message.
+ */
+export async function claimAttempt(
+  env: Env, source: string, ref: string,
+): Promise<{ proceed: boolean; attempts: number }> {
+  try {
+    const attempts = await bumpIngestAttempt(env, source, ref);
+    return { proceed: attempts <= MAX_PRE_STORE_ATTEMPTS, attempts };
+  } catch (e) {
+    console.error(`[state] claimAttempt(${source}, ${ref}) failed: ${e}`);
+    return { proceed: true, attempts: 0 };
+  }
+}
+
+/** A message finally went through — stop counting it. */
+export async function releaseAttempts(env: Env, source: string, ref: string): Promise<void> {
+  try {
+    await clearIngestAttempts(env, source, ref);
+  } catch (e) {
+    console.error(`[state] releaseAttempts(${source}, ${ref}) failed: ${e}`);
+  }
+}
+
+/** Record that the cap was hit and the cursor was moved past `ref`. */
+export async function recordSkip(env: Env, source: string, ref: string): Promise<void> {
+  try {
+    await markIngestSkipped(env, source, ref);
+  } catch (e) {
+    console.error(`[state] recordSkip(${source}, ${ref}) failed: ${e}`);
   }
 }

@@ -69,6 +69,12 @@ describe("parseName", () => {
     ["м-ст Планова", "м-т", "Планова"],
     ["к.к. Чайка", "к.к.", "Чайка"],
     ["к.к-с Чайка", "к.к.", "Чайка"],
+    // ViK writes the -с suffix after a dot too. This form used to leave
+    // "-с Златни пясъци" as the core and match nothing, while the line above
+    // resolved — the same resort, spelled two ways, one of them unreachable.
+    ["к.к.-с Златни пясъци", "к.к.", "Златни пясъци"],
+    ["к.к.-с Чайка", "к.к.", "Чайка"],
+    ["к.к. -с Чайка", "к.к.", "Чайка"],
     ["с. Баново", "с.", "Баново"],
     ["гр. Варна", "гр.", "Варна"],
     ["ул.7", "ул.", "7"],

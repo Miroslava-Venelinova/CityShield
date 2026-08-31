@@ -4,10 +4,10 @@
 // store-first / notification-failure-never-fails rule.
 
 import {
-  type AlertPayload, incrementPushAttempts, markAlertNotified, sendUsersNotification,
-  settlementScope, storeAlert,
+  type AlertPayload, incrementPushAttempts, isHedged, markAlertNotified,
+  sendUsersNotification, settlementScope, storeAlert,
 } from "../core/alert-service";
-import { getRegions, getStreets } from "../db/queries";
+import { getRecentAlertsForDedup, getRegions, getStreets } from "../db/queries";
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
 import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../shared/schemas";
@@ -77,6 +77,24 @@ export async function ingestAlert(
   // flag set): the push is done, so let the cursor advance without re-sending.
   if (stored.notified_at !== null) {
     console.log(`[${tag}] ${msgRef} already delivered as alert ${stored.id}; skipping push.`);
+    return true;
+  }
+
+  // §1.6: a hedged restatement of an outage we already pushed is STORED but not
+  // pushed a second time. 9 groups in the 08.2026 corpus (18 alerts, 3.8%) were
+  // an outage message paired with a "possible disturbances" one for the same
+  // area and hours, and both notified — two pushes for one event.
+  //
+  // Only the hedged one is ever suppressed, and only against a confirmed alert
+  // that has ALREADY been delivered. That asymmetry is the safety property: a
+  // confirmed outage can never be silenced by a hedge, whichever order they
+  // arrive in, and the suppressed alert is still stored and still in the feed.
+  const duplicateOf = await findDeliveredDuplicate(env, alert, processed, stored.id);
+  if (duplicateOf !== null) {
+    console.log(
+      `[${tag}] ${msgRef} stored as ${stored.id} but NOT pushed: it restates alert `
+      + `${duplicateOf} (same locations and window), which was already delivered.`);
+    await markAlertNotified(env, stored.id);
     return true;
   }
 
@@ -184,4 +202,82 @@ export async function processOutageMessage(
   }
 
   return ingestAlert(env, tag, category, title, content, processed, msgRef, deadline);
+}
+
+
+// ── Duplicate pairs (§1.6) ───────────────────────────────────────────────────
+
+/**
+ * How far back to look for the alert this one restates.
+ *
+ * The pairs in the corpus are published minutes apart by the same source, and a
+ * short window is what keeps this from suppressing a genuine repeat outage of
+ * the same block a day later.
+ */
+const DUPLICATE_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/** The comparison key: which places, for which hours. */
+function dedupKey(
+  locations: readonly { settlement: string | null; area: string | null; streets: string[] }[],
+  startTime: string | null, endTime: string | null,
+): string {
+  const places = locations
+    .map((l) => [l.settlement ?? "", l.area ?? "", [...l.streets].sort().join("|")].join("~"))
+    .sort()
+    .join(";");
+  return `${places}@${startTime ?? ""}..${endTime ?? ""}`;
+}
+
+/**
+ * The id of an already-delivered alert this one merely restates, or null.
+ *
+ * Returns non-null ONLY when the incoming alert is the hedged one. A confirmed
+ * outage is never suppressed — if the hedged message happened to arrive first
+ * and was pushed, the confirmed one that follows still goes out, because that is
+ * the message people actually need.
+ *
+ * Never throws: this decides whether to send a second push, and a D1 hiccup must
+ * degrade to sending it rather than to losing an alert.
+ */
+async function findDeliveredDuplicate(
+  env: Env, alert: AlertPayload, processed: ProcessedData, selfId: string,
+): Promise<string | null> {
+  if (!isHedged(alert.title, alert.content)) return null;
+  // Nothing to compare on: a city-wide alert or one with no locations has no
+  // place list, and matching on the window alone would suppress unrelated
+  // messages that happen to share their hours. `processed` rather than
+  // `alert.locations`, which is deliberately untyped on the payload.
+  if (processed.locations.length === 0) return null;
+
+  try {
+    const since = new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString();
+    const recent = await getRecentAlertsForDedup(env, alert.category, since);
+    const key = dedupKey(processed.locations, alert.startTime, alert.endTime);
+
+    for (const row of recent) {
+      if (row.id === selfId) continue;
+      // Only against something already delivered — suppressing against an alert
+      // that has not gone out yet could silence the event entirely.
+      if (row.notified_at === null) continue;
+      if (isHedged(row.title, row.content)) continue; // both hedged: not the pair
+
+      // The stored side is compared on its ENRICHED locations, which carry the
+      // same three slots under different key names (AlertLocationDTO).
+      const stored = JSON.parse(row.locations_json) as Array<{
+        settlement: string | null; area: string | null; sublocations?: string[];
+      }>;
+      if (!Array.isArray(stored) || stored.length === 0) continue;
+      const storedKey = dedupKey(
+        stored.map((l) => ({
+          settlement: l.settlement ?? null,
+          area: l.area ?? null,
+          streets: l.sublocations ?? [],
+        })),
+        row.start_time, row.end_time);
+      if (storedKey === key) return row.id;
+    }
+  } catch (e) {
+    console.warn(`[pipeline] Duplicate check failed, sending anyway: ${e}`);
+  }
+  return null;
 }

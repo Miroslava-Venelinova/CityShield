@@ -35,6 +35,53 @@ const CATEGORY_SEVERITY: Record<string, string> = {
   vt: "info",
 };
 
+/**
+ * Wording that marks an alert as HEDGED rather than confirmed.
+ *
+ * 477 of 479 stored alerts were `warning`, so severity carried no information at
+ * all. The sources do draw the distinction themselves and draw it consistently:
+ * "ще бъде прекъснато електрозахранването" is a confirmed outage, "възможни са
+ * смущения" is a disruption that may not happen, and 92 alerts corpus-wide are
+ * the hedged kind. Mapping the hedged form to `info` is just carrying a
+ * distinction the source already made through to the marker colour.
+ *
+ * Matched on the source text rather than asked of the model, for the same
+ * reason the normalize.ts guards are: it is deterministic, and it cannot
+ * regress silently when a prompt is edited.
+ *
+ * Deliberately conservative. Anything not recognised as hedged keeps the
+ * category's own severity, so the failure mode is "a hedged alert still looks
+ * confirmed" — the direction that over-warns rather than under-warns.
+ */
+const HEDGE_PATTERNS: RegExp[] = [
+  // Bulgarian puts the copula either side of the adjective, and the sources use
+  // both — "възможни са смущения" and "смущения са възможни" — so each order is
+  // written out rather than guessed at with a loose gap.
+  /възможн[аио]?\s+(?:са\s+|е\s+)?(?:смущени|прекъсван|затруднени|спиран)/iu,
+  /(?:са|е)\s+възможн[аиои]?/iu,
+  /възможн[оаи]\s+е(?![\p{L}])/iu,
+  /вероятн[оаи](?![\p{L}])/iu,
+  /може\s+да\s+(?:има|бъде|се|настъп)/iu,
+];
+
+/** Whether the message hedges — "смущения са възможни" rather than "ще бъде спряно". */
+export function isHedged(title: string, content: string): boolean {
+  const text = `${title}
+${content}`;
+  return HEDGE_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Severity for a stored alert: the category's own, unless the source hedged.
+ *
+ * `vt` is already `info` and stays there — a route change is not an outage, and
+ * hedging cannot make it less severe than it already is.
+ */
+function severityFor(category: string, title: string, content: string): string {
+  const base = CATEGORY_SEVERITY[category] ?? "info";
+  return base === "warning" && isHedged(title, content) ? "info" : base;
+}
+
 export interface AlertLocationDTO {
   /** The settlement slot (schemas.ts): "гр. Варна", "с. Аврен", or null. */
   settlement: string | null;
@@ -76,6 +123,27 @@ export interface AlertLocationDTO {
   polygon_geojson?: unknown; // bare GeoJSON Polygon geometry
   lat?: number;
   lng?: number;
+  /**
+   * WHERE the coordinate came from — the same blind spot `polygon_failed` was
+   * invented to fix, and the same fix.
+   *
+   * 37 of 783 locations in the 08.2026 review (4.7%) were positionally wrong or
+   * unlocated and nothing on the row said so: a settlement-centroid fallback is
+   * byte-identical to a genuine city-centre location, so "how often are we
+   * guessing" could only be answered by a manual audit.
+   *
+   *   `seed`       a seeded region/street centroid — deterministic, ours
+   *   `nominatim`  an external lookup that answered, and passed `plausible`
+   *   `settlement` NOTHING specific resolved; this is the settlement centroid,
+   *                which is a coarse pin standing in for a place we lost
+   *   `none`       no coordinate at all
+   *
+   * Rides inside `locations_json`, so it needs no migration, and it turns the
+   * question into a SELECT and gives the review tool a badge. Seeding the names
+   * that currently miss would remove most of today's fallbacks but not the
+   * class — the next unseeded name falls back just as silently.
+   */
+  coords_source?: "seed" | "nominatim" | "settlement" | "none";
 }
 
 export interface AlertDTO {
@@ -759,7 +827,7 @@ export async function storeAlert(
     category: alert.category,
     title: alert.title,
     content: alert.content,
-    severity: CATEGORY_SEVERITY[alert.category] ?? "info",
+    severity: severityFor(alert.category, alert.title, alert.content),
     start_time: alert.startTime,
     end_time: alert.endTime,
     windows_json: alert.windows === null ? null : JSON.stringify(alert.windows),
@@ -866,10 +934,11 @@ async function enrichLocations(
           + `[${dto.sublocations.join(", ")}]${why ? `: ${why}` : ""}`);
       }
       dto.is_polygon = false;
-      const point = await resolveCoordinates(env, dto, deadline);
-      if (point) {
-        dto.lat = point.lat;
-        dto.lng = point.lng;
+      const located = await resolveCoordinates(env, dto, deadline);
+      dto.coords_source = located.source;
+      if (located.point) {
+        dto.lat = located.point.lat;
+        dto.lng = located.point.lng;
       }
     }
 
@@ -1110,7 +1179,14 @@ function seededPoint(row: q.NamedRow | null): GeoPoint | null {
  * street inside the named settlement is strictly the better marker, and falling
  * back to the settlement centroid still beats no pin at all.
  */
-async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: number) {
+interface LocatedPoint {
+  point: GeoPoint | null;
+  source: NonNullable<AlertLocationDTO["coords_source"]>;
+}
+
+async function resolveCoordinates(
+  env: Env, dto: AlertLocationDTO, deadline?: number,
+): Promise<LocatedPoint> {
   // Everything this location looks up is searched inside its own settlement,
   // so a village street is never resolved against the like-named city one.
   const regions = await q.getRegions(env);
@@ -1142,12 +1218,12 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
   if (dto.area?.trim()) {
     const match = matchRegion(dto.area, regions, undefined, scope?.id);
     const seeded = seededPoint(match);
-    if (seeded) return seeded;
+    if (seeded) return { point: seeded, source: "seed" };
 
     const name = match?.name ?? geocodableName(dto.area);
     const point = plausible(
       await geocode(env, buildGeocodeQuery(name, settlement), deadline), anchor, streets, name);
-    if (point) return point;
+    if (point) return { point, source: "nominatim" };
     // Area named but unresolvable — fall through to the streets rather than
     // leaving the alert with no pin at all.
   }
@@ -1164,25 +1240,30 @@ async function resolveCoordinates(env: Env, dto: AlertLocationDTO, deadline?: nu
       // up-to-8 s request at a time, on the ingest deadline.
       const match = scope === null ? null : matchStreet(raw, streets, scope.id);
       const seeded = seededPoint(match);
-      if (seeded) return seeded;
+      if (seeded) return { point: seeded, source: "seed" };
 
       const name = match?.name ?? geocodableName(raw);
       const point = plausible(
         await geocode(env, buildGeocodeQuery(name, settlement), deadline), anchor, streets, name);
-      if (point) return point;
+      if (point) return { point, source: "nominatim" };
     }
   }
 
   // 3. Settlement level: no area and no street resolved, so the city or village
   // centroid is all that is left. Below the streets deliberately — see above.
   if (dto.settlement?.trim()) {
+    // Both branches are `settlement`, not `seed`/`nominatim`: what makes this a
+    // fallback is not where the number came from but WHAT it describes — the
+    // centre of a settlement, standing in for a place we failed to locate. A
+    // seeded city centroid is exactly as wrong for a lost district as a
+    // geocoded one.
     const seeded = seededPoint(scope);
-    if (seeded) return seeded;
+    if (seeded) return { point: seeded, source: "settlement" };
 
     const point = await geocode(
       env, buildGeocodeQuery(scope?.name ?? geocodableName(dto.settlement), settlement), deadline);
-    if (point) return point;
+    if (point) return { point, source: "settlement" };
   }
 
-  return null;
+  return { point: null, source: "none" };
 }

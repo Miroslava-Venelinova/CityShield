@@ -7,6 +7,7 @@
 
 import { env, fetchMock } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { isHedged } from "../src/core/alert-service";
 import { clearRefCaches } from "../src/db/queries";
 import { ingestAlert, MAX_PUSH_ATTEMPTS, processOutageMessage } from "../src/ingestion/pipeline";
 import type { ProcessedData } from "../src/shared/schemas";
@@ -286,5 +287,169 @@ describe("ingestAlert idempotency + push retry (migration 0009)", () => {
 
     const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM alerts").first<{ n: number }>();
     expect(count!.n).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Severity, and the duplicate pairs it makes detectable (§1.6)
+// ---------------------------------------------------------------------------
+//
+// 477 of 479 stored alerts were `warning`, so severity carried no information —
+// yet the sources distinguish a confirmed outage ("ще бъде прекъснато
+// електрозахранването") from a hedged one ("възможни са смущения") and 92 alerts
+// corpus-wide are the hedged kind. Classifying them is P4.1; the duplicate pairs
+// key on that classification, which is why they are tested together.
+
+describe("hedged alerts", () => {
+  const realAI = env.AI;
+  const PUSH_ENV = env as { ONESIGNAL_APP_ID?: string; ONESIGNAL_API_KEY?: string };
+
+  beforeAll(() => {
+    fetchMock.activate();
+    fetchMock.disableNetConnect();
+  });
+  beforeEach(() => {
+    PUSH_ENV.ONESIGNAL_APP_ID = "test-app-id";
+    PUSH_ENV.ONESIGNAL_API_KEY = "test-api-key";
+  });
+  afterEach(() => {
+    (env as { AI: unknown }).AI = realAI;
+    delete PUSH_ENV.ONESIGNAL_APP_ID;
+    delete PUSH_ENV.ONESIGNAL_API_KEY;
+    // An interceptor left unused means a push we expected did not happen.
+    fetchMock.assertNoPendingInterceptors();
+  });
+
+  /**
+   * Seed the areas these alerts name AND put a resident in each.
+   *
+   * Both halves are needed for the push counts to mean anything: without the
+   * seeded region `resolveCoordinates` reaches for Nominatim (which fetchMock
+   * blocks), and without a user holding that region_id the alert targets nobody,
+   * so a suppressed push and an unaddressed one look identical.
+   */
+  async function seedAreas(): Promise<void> {
+    clearRefCaches();
+    const now = new Date().toISOString();
+    for (const name of ["Аспарухово", "Виница", "Владиславово", "Младост"]) {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES (?, 43.2, 27.9)",
+      ).bind(name).run();
+      const region = await env.DB.prepare(
+        "SELECT id FROM regions WHERE region_name = ?").bind(name).first<{ id: number }>();
+      const userId = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO users (user_id, email, password_hash, region_id, receives_all_alerts, subscribed_bus_lines, created_on_utc, updated_on_utc)
+         VALUES (?, ?, 'x', ?, 0, '[]', ?, ?)`,
+      ).bind(userId, `${userId}@example.com`, region!.id, now, now).run();
+    }
+  }
+  function interceptPush(times = 1): () => number {
+    let calls = 0;
+    fetchMock.get("https://api.onesignal.com")
+      .intercept({ path: "/notifications", method: "POST" })
+      .reply(() => {
+        calls++;
+        return {
+          statusCode: 200,
+          data: JSON.stringify({ id: "n", recipients: 1 }),
+          responseOptions: { headers: { "Content-Type": "application/json" } },
+        };
+      })
+      .times(times);
+    return () => calls;
+  }
+
+  const at = (area: string): ProcessedData => ({
+    locations: [{ settlement: "гр. Варна", area, streets: [], is_polygon: false }],
+    start_time: "2026-08-31T09:00", end_time: "2026-08-31T17:00",
+    windows: null, city_wide: false,
+  });
+
+  it("classifies the hedged form as info and the confirmed one as warning", () => {
+    expect(isHedged("Авария", "ще бъде прекъснато електрозахранването")).toBe(false);
+    expect(isHedged("Авария", "Възможни са смущения във водоподаването")).toBe(true);
+    expect(isHedged("Авария", "Смущения във водоподаването са възможни до 18ч.")).toBe(true);
+    expect(isHedged("Авария", "Възможно е да има затруднения")).toBe(true);
+    // The real ViK 17375 wording: a CONFIRMED disruption, not a hedge. Matching
+    // on "смущения" alone would have called this one hedged and downgraded a
+    // live outage.
+    expect(isHedged("Без вода",
+      "абонатите ще бъдат със смущения във водоподаването както и липса на вода")).toBe(false);
+  });
+
+  it("stores the hedged form as info", async () => {
+    await seedAreas();
+    interceptPush();
+    await ingestAlert(
+      env, "VIK", "vik", "Авария", "Възможни са смущения във водоподаването",
+      at("кв. Виница"), "id=700");
+    const row = await env.DB.prepare(
+      "SELECT severity FROM alerts WHERE source_ref = 'vik:id=700'").first<{ severity: string }>();
+    expect(row!.severity).toBe("info");
+  });
+
+  it("suppresses the second push when a hedge restates a delivered outage", async () => {
+    await seedAreas();
+
+    // The confirmed outage goes out.
+    const first = interceptPush();
+    expect(await ingestAlert(
+      env, "VIK", "vik", "Без вода", "ще бъде прекъснато водоподаването",
+      at("кв. Аспарухово"), "id=801")).toBe(true);
+    expect(first()).toBe(1);
+
+    // The paired "possible disturbances" message for the same area and hours is
+    // STORED — it stays in the feed — but does not push a second time. No
+    // interceptor is registered: disableNetConnect makes an attempted send throw,
+    // so this fails loudly if the suppression stops working.
+    expect(await ingestAlert(
+      env, "VIK", "vik", "Смущения", "Възможни са смущения във водоподаването",
+      at("кв. Аспарухово"), "id=802")).toBe(true);
+
+    const rows = await env.DB.prepare(
+      "SELECT source_ref, severity, notified_at FROM alerts WHERE source_ref IN ('vik:id=801','vik:id=802') ORDER BY source_ref")
+      .all<{ source_ref: string; severity: string; notified_at: string | null }>();
+    expect(rows.results).toHaveLength(2);
+    expect(rows.results[1]!.severity).toBe("info");
+    // Stamped, so a re-drive does not try to push it again either.
+    expect(rows.results[1]!.notified_at).not.toBeNull();
+  });
+
+  it("never suppresses a CONFIRMED outage, whichever order the pair arrives in", async () => {
+    await seedAreas();
+
+    // Hedge first this time.
+    const first = interceptPush();
+    await ingestAlert(env, "VIK", "vik", "Смущения", "Възможни са смущения",
+      at("кв. Виница"), "id=811");
+    expect(first()).toBe(1);
+
+    // The confirmed message still goes out — this is the one people need.
+    const second = interceptPush();
+    await ingestAlert(env, "VIK", "vik", "Без вода", "ще бъде спряно водоподаването",
+      at("кв. Виница"), "id=812");
+    expect(second()).toBe(1);
+  });
+
+  it("does not suppress a hedge for a different area or a different window", async () => {
+    await seedAreas();
+
+    const first = interceptPush();
+    await ingestAlert(env, "VIK", "vik", "Без вода", "ще бъде спряно водоподаването",
+      at("кв. Владиславово"), "id=821");
+    expect(first()).toBe(1);
+
+    // Same wording, different place — a separate event, so it still notifies.
+    const second = interceptPush();
+    await ingestAlert(env, "VIK", "vik", "Смущения", "Възможни са смущения",
+      at("кв. Младост"), "id=822");
+    expect(second()).toBe(1);
+
+    // Same place, different hours — also separate.
+    const third = interceptPush();
+    const later = { ...at("кв. Владиславово"), start_time: "2026-09-01T09:00" };
+    await ingestAlert(env, "VIK", "vik", "Смущения", "Възможни са смущения", later, "id=823");
+    expect(third()).toBe(1);
   });
 });

@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { crawlIdListing, type IdListingOptions } from "../src/ingestion/sources/id-listing";
 import { crawlIdProbe, STALE_CURSOR_MS, type IdProbeOptions } from "../src/ingestion/sources/id-probe";
 import {
-  addSeenIds, getLastId, getLastIdUpdatedAt, getSeenIds, MAX_SEEN_IDS, mergeSeenIds, writeLastId,
+  addSeenIds, getLastId, getLastIdUpdatedAt, getSeenIds, MAX_PRE_STORE_ATTEMPTS, MAX_SEEN_IDS,
+  mergeSeenIds, writeLastId,
 } from "../src/ingestion/state";
+import { getSkippedIngests } from "../src/db/queries";
 
 describe("crawl state", () => {
   it("defaults: last_id 0, seen_ids []", async () => {
@@ -60,7 +62,7 @@ describe("crawlIdListing cursor semantics", () => {
       listingUrl: "https://example.com/listing",
       idPattern: /(\d+)\.html/,
       parsePage: () => urls,
-      parseMessage: (html) => ({ title: `t-${html}`, content: `c-${html}` }),
+      parseMessage: async (html) => ({ title: `t-${html}`, content: `c-${html}` }),
       fetchImpl: async (url) => new Response(url),
       processImpl: async (_env, _tag, _cat, _title, _content, msgRef) => {
         const id = Number(msgRef.replace("id=", ""));
@@ -137,7 +139,7 @@ describe("crawlIdListing cursor semantics", () => {
       listingUrl: "https://example.com/listing",
       idPattern: /(\d+)\.html/,
       parsePage: () => listing([1052, 1051, 1050]),
-      parseMessage: (html) => ({ title: `t-${html}`, content: `c-${html}` }),
+      parseMessage: async (html) => ({ title: `t-${html}`, content: `c-${html}` }),
       fetchImpl: async (url) => new Response(url),
       processImpl: async (_env, _tag, _cat, _title, _content, msgRef) => {
         const id = Number(msgRef.replace("id=", ""));
@@ -203,7 +205,7 @@ describe("crawlIdProbe cursor semantics", () => {
       listingUrl: LISTING_URL,
       idPattern: /(\d+)\.html/,
       parsePage: () => listed.map(messageUrl),
-      parseMessage: (html) => (html === "" ? null : { title: `t-${html}`, content: `c-${html}` }),
+      parseMessage: async (html) => (html === "" ? null : { title: `t-${html}`, content: `c-${html}` }),
       fetchImpl: async (url) => {
         fetched.push(url);
         if (url === LISTING_URL) return new Response("listing");
@@ -361,5 +363,258 @@ describe("crawlIdProbe cursor semantics", () => {
     const { opts } = makeOpts([], { listed: [1040, 1030] });
     await crawlIdProbe(env, deadline(), opts);
     expect(await getLastId(env, CATEGORY)).toBe(1050);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The pre-store attempt cap (migration 0018)
+// ---------------------------------------------------------------------------
+//
+// The cursor model advances only past successes, so a message that reliably
+// fails before the store blocks every newer message from that source for as
+// long as it keeps failing — 20 hours on 30.07.2026, ~21 hours from 28.08.2026.
+// MAX_PUSH_ATTEMPTS already capped the *post*-store half of this; these cover
+// the half that had no cap.
+
+describe("a message that always fails is eventually skipped", () => {
+  const deadline = () => Date.now() + 5000;
+  const listing = (ids: number[]) => ids.map((id) => `https://example.com/messages/${id}.html`);
+
+  function listingOpts(urls: string[], outcomes: Record<number, boolean>, onProcess?: () => void) {
+    const processedIds: number[] = [];
+    const opts: IdListingOptions = {
+      tag: "TEST",
+      category: "vik",
+      listingUrl: "https://example.com/listing",
+      idPattern: /(\d+)\.html/,
+      parsePage: () => urls,
+      parseMessage: async (html) => ({ title: `t-${html}`, content: `c-${html}` }),
+      fetchImpl: async (url) => new Response(url),
+      processImpl: async (_env, _tag, _cat, _title, _content, msgRef) => {
+        const id = Number(msgRef.replace("id=", ""));
+        processedIds.push(id);
+        onProcess?.();
+        return outcomes[id] ?? true;
+      },
+    };
+    return { opts, processedIds };
+  }
+
+  it("retries MAX_PRE_STORE_ATTEMPTS times, then advances past it", async () => {
+    await writeLastId(env, "vik", 1050);
+    const urls = listing([1052, 1051, 1050]);
+
+    // Ticks 1..5: 1051 fails, holds the cursor, and blocks 1052 — the behaviour
+    // that produced both outages, and still correct while the cap has room.
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS; tick++) {
+      const { opts, processedIds } = listingOpts(urls, { 1051: false });
+      await crawlIdListing(env, deadline(), opts);
+      expect(processedIds).toEqual([1051]);
+      expect(await getLastId(env, "vik")).toBe(1050);
+    }
+
+    // Tick 6: the cap is spent. 1051 is skipped WITHOUT being attempted again,
+    // and 1052 — blocked for over an hour — finally gets through.
+    const { opts, processedIds } = listingOpts(urls, { 1051: false });
+    await crawlIdListing(env, deadline(), opts);
+    expect(processedIds).toEqual([1052]);
+    expect(await getLastId(env, "vik")).toBe(1052);
+
+    const skipped = await getSkippedIngests(env, 10);
+    expect(skipped.map((r) => [r.source, r.ref])).toEqual([["vik", "1051"]]);
+    expect(skipped[0]!.skipped_at).toBeTruthy();
+  });
+
+  it("counts the attempt even when the work never returns", async () => {
+    // The failure that matters most is an exceededCpu kill: it discards the
+    // tick's logs and never runs its trailing writes. A counter bumped after
+    // the failure would never see it, so the claim is written first — a throw
+    // from inside processImpl stands in for the kill here.
+    await writeLastId(env, "vik", 2000);
+    const urls = listing([2001, 2000]);
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS; tick++) {
+      const { opts } = listingOpts(urls, {}, () => { throw new Error("isolate died"); });
+      await crawlIdListing(env, deadline(), opts);
+      expect(await getLastId(env, "vik")).toBe(2000);
+    }
+    const { opts, processedIds } = listingOpts(urls, {}, () => { throw new Error("isolate died"); });
+    await crawlIdListing(env, deadline(), opts);
+    expect(processedIds).toEqual([]); // not attempted a sixth time
+    expect(await getLastId(env, "vik")).toBe(2001);
+  });
+
+  it("a success clears the count, so flaky messages never reach the cap", async () => {
+    await writeLastId(env, "vik", 3000);
+    const urls = listing([3001, 3000]);
+
+    // Four failures, then a success: the count must reset, not carry over.
+    for (let tick = 1; tick <= 4; tick++) {
+      const { opts } = listingOpts(urls, { 3001: false });
+      await crawlIdListing(env, deadline(), opts);
+    }
+    const ok = listingOpts(urls, {});
+    await crawlIdListing(env, deadline(), ok.opts);
+    expect(ok.processedIds).toEqual([3001]);
+    expect(await getLastId(env, "vik")).toBe(3001);
+    expect(await getSkippedIngests(env, 10)).toEqual([]);
+
+    // The row is gone, so the next failure on this id starts from one again.
+    const row = await env.DB.prepare(
+      "SELECT attempts FROM ingest_attempts WHERE source = 'vik' AND ref = '3001'").first();
+    expect(row).toBeNull();
+  });
+
+  it("counts a strike when the PARSE is what dies, on both crawler shapes", async () => {
+    // The ordering this pins is the whole point of the cap. The burst that
+    // overruns the CPU cap is `cheerio.load` inside parseMessage, so the claim
+    // has to sit between the fetch and the parse. Put it after the parse — where
+    // the probe's first went — and the one failure mode the cap exists for
+    // records nothing and pins the cursor forever.
+    await writeLastId(env, "vik", 4000);
+    const urls = listing([4001, 4000]);
+    const dyingListing = (): IdListingOptions => ({
+      tag: "TEST",
+      category: "vik",
+      listingUrl: "https://example.com/listing",
+      idPattern: /(\d+)\.html/,
+      parsePage: () => urls,
+      parseMessage: async () => { throw new Error("exceededCpu"); },
+      fetchImpl: async (url) => new Response(url),
+      processImpl: async () => true,
+    });
+
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS; tick++) {
+      await crawlIdListing(env, deadline(), dyingListing());
+      expect(await getLastId(env, "vik")).toBe(4000);
+    }
+    await crawlIdListing(env, deadline(), dyingListing());
+    expect(await getLastId(env, "vik")).toBe(4001);
+    expect((await getSkippedIngests(env, 10)).some((r) => r.ref === "4001")).toBe(true);
+
+    // The probe shape, which is what ViK actually runs. A parse that throws is
+    // NOT a miss — it must spend a strike, or the walk retries it forever.
+    const CATEGORY = "probe-parse-death";
+    const dyingProbe = (): IdProbeOptions => ({
+      tag: "TEST",
+      category: CATEGORY,
+      messageUrl: (id: number) => `https://example.com/messages/${id}.html`,
+      listingUrl: "https://example.com/listing",
+      idPattern: /(\d+)\.html/,
+      parsePage: () => [],
+      parseMessage: async () => { throw new Error("exceededCpu"); },
+      fetchImpl: async (url) => new Response(url),
+      processImpl: async () => true,
+    });
+
+    await writeLastId(env, CATEGORY, 700);
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS; tick++) {
+      await crawlIdProbe(env, deadline(), dyingProbe()).catch(() => {});
+      expect(await getLastId(env, CATEGORY)).toBe(700);
+    }
+    await crawlIdProbe(env, deadline(), dyingProbe()).catch(() => {});
+    expect(await getLastId(env, CATEGORY)).toBe(701);
+    expect((await getSkippedIngests(env, 20)).some(
+      (r) => r.source === CATEGORY && r.ref === "701")).toBe(true);
+  });
+
+  it("a fetch failure does not spend a message's strikes", async () => {
+    // Transient network trouble says nothing about the message, so the claim
+    // sits after the fetch. Ten failed fetches must still leave the cursor
+    // recoverable rather than having burned through the cap.
+    await writeLastId(env, "vik", 5000);
+    const urls = listing([5001, 5000]);
+    const deadFetch = (): IdListingOptions => ({
+      tag: "TEST",
+      category: "vik",
+      listingUrl: "https://example.com/listing",
+      idPattern: /(\d+)\.html/,
+      parsePage: () => urls,
+      parseMessage: async (html) => ({ title: "t", content: html }),
+      fetchImpl: async (url) => {
+        if (url.includes("5001")) throw new Error("HTTP 503");
+        return new Response(url);
+      },
+      processImpl: async () => true,
+    });
+
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS + 3; tick++) {
+      await crawlIdListing(env, deadline(), deadFetch());
+      expect(await getLastId(env, "vik")).toBe(5000);
+    }
+    expect(await getSkippedIngests(env, 10)).toEqual([]);
+    const row = await env.DB.prepare(
+      "SELECT attempts FROM ingest_attempts WHERE source = 'vik' AND ref = '5001'").first();
+    expect(row).toBeNull(); // never even claimed
+
+    // And once the source recovers, the message goes through normally.
+    const ok = listingOpts(urls, {});
+    await crawlIdListing(env, deadline(), ok.opts);
+    expect(await getLastId(env, "vik")).toBe(5001);
+  });
+
+  it("a probe miss releases its claim, so a quiet source never reaches the cap", async () => {
+    // The probe walks the same few empty ids every tick. If a miss kept its
+    // claim, six quiet hours would "give up" on an id that simply has not been
+    // published yet and step the cursor over it.
+    const CATEGORY = "probe-quiet";
+    const opts = (): IdProbeOptions => ({
+      tag: "TEST",
+      category: CATEGORY,
+      messageUrl: (id: number) => `https://example.com/messages/${id}.html`,
+      listingUrl: "https://example.com/listing",
+      idPattern: /(\d+)\.html/,
+      parsePage: () => [],
+      parseMessage: async () => null, // every id is empty
+      fetchImpl: async () => new Response(""),
+      processImpl: async () => true,
+    });
+
+    await writeLastId(env, CATEGORY, 900);
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS + 3; tick++) {
+      await crawlIdProbe(env, deadline(), opts());
+    }
+    expect(await getLastId(env, CATEGORY)).toBe(900); // cursor never moved
+    expect(await getSkippedIngests(env, 10)).toEqual([]);
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM ingest_attempts WHERE source = ?").bind(CATEGORY).all();
+    expect(results).toEqual([]); // no residue from probing empty ids
+  });
+
+  it("the probe crawler skips a poisoned id and keeps walking", async () => {
+    const CATEGORY = "probe-skip";
+    const messageUrl = (id: number) => `https://example.com/messages/${id}.html`;
+    const probeOpts = (outcomes: Record<number, boolean>) => {
+      const processedIds: number[] = [];
+      const opts: IdProbeOptions = {
+        tag: "TEST",
+        category: CATEGORY,
+        messageUrl,
+        listingUrl: "https://example.com/listing",
+        idPattern: /(\d+)\.html/,
+        parsePage: () => [],
+        parseMessage: async (html) => (html === "" ? null : { title: `t-${html}`, content: `c-${html}` }),
+        fetchImpl: async (url) => new Response(`body-${/(\d+)\.html/.exec(url)![1]}`),
+        processImpl: async (_e, _t, _c, _ti, _co, msgRef) => {
+          const id = Number(msgRef.replace("id=", ""));
+          processedIds.push(id);
+          return outcomes[id] ?? true;
+        },
+      };
+      return { opts, processedIds };
+    };
+
+    await writeLastId(env, CATEGORY, 500);
+    for (let tick = 1; tick <= MAX_PRE_STORE_ATTEMPTS; tick++) {
+      const { opts } = probeOpts({ 501: false });
+      await crawlIdProbe(env, deadline(), opts);
+      expect(await getLastId(env, CATEGORY)).toBe(500);
+    }
+    const { opts, processedIds } = probeOpts({ 501: false });
+    await crawlIdProbe(env, deadline(), opts);
+    // 501 is stepped over and the walk continues to 502 in the same tick.
+    expect(processedIds).toEqual([502]);
+    expect(await getLastId(env, CATEGORY)).toBe(502);
+    const skipped = await getSkippedIngests(env, 10);
+    expect(skipped.some((r) => r.source === CATEGORY && r.ref === "501")).toBe(true);
   });
 });

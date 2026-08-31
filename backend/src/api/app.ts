@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { assertConfig } from "../env";
 import { alertRoutes } from "./alerts";
 import { authRoutes } from "./auth";
-import type { AppEnv } from "./middleware";
+import { healthRoutes } from "./health";
+import { requireIngestKey, type AppEnv } from "./middleware";
 import { preferenceRoutes } from "./preferences";
 import { privacyRoutes } from "./privacy";
 import { globalRateLimit } from "./rate-limit";
@@ -64,6 +65,14 @@ app.use("/api/*", globalRateLimit);
 app.route("/api/auth", authRoutes);
 app.route("/api/alerts", alertRoutes);
 app.route("/api/preferences", preferenceRoutes);
+// Operational health (SPEC.md §3.8). Behind the ingest key rather than public:
+// it reports cursors, tick outcomes and the ids of messages deliberately not
+// delivered — nothing personal, but nothing the public needs either. A header
+// is all an external uptime ping needs, so this still meets the goal of being
+// checkable without wrangler.
+app.use("/api/health", requireIngestKey);
+app.route("/api/health", healthRoutes);
+
 app.route("/privacy", privacyRoutes);
 
 // Uniform 500 without stack traces — parity with the production exception

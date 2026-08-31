@@ -915,6 +915,14 @@ def summarize() -> dict:
                     # in the 08.08.2026 review blamed the AI for a failure the
                     # deterministic guard had gotten right.
                     "polygon_failed": bool(location.get("polygon_failed")),
+                    # WHERE the coordinate came from. The same blind spot as
+                    # polygon_failed, one level down: a settlement-centroid
+                    # fallback is byte-identical to a genuine city-centre pin, so
+                    # 37 of 783 locations in the 08.2026 review were positionally
+                    # wrong with nothing on the row saying so. Absent on alerts
+                    # stored before the Worker wrote it, which is why the badge
+                    # below distinguishes "unknown" from "settlement".
+                    "coords_source": location.get("coords_source"),
                     "polygon_failure": location.get("polygon_failure"),
                     "polygon_points": polygon_points(location.get("polygon_geojson")),
                     "region_wide": bool(location.get("region_wide")),
@@ -1072,6 +1080,17 @@ def render_markdown(summary: dict) -> str:
                 pin = (f"{location['lat']}, {location['lng']}"
                        if location["lat"] is not None and location["lng"] is not None
                        else "no coordinates")
+                # Only the fallback is called out. `seed` and `nominatim` both
+                # located the place that was actually named; `settlement` means
+                # we lost it and pinned the city centre instead, which is the
+                # one an accuracy review has to be able to see at a glance.
+                source = location.get("coords_source")
+                if source == "settlement":
+                    pin += " · **settlement centroid, not the named place**"
+                elif source == "nominatim":
+                    pin += " · via Nominatim"
+                elif source == "none":
+                    pin = "no coordinates"
                 subs = (" — " + ", ".join(location["sublocations"])) if location["sublocations"] else ""
                 # The flag and the geometry decide different things and can
                 # disagree: a ring means everyone inside it was notified, no

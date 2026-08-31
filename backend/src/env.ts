@@ -31,6 +31,12 @@ export interface Env {
   HEATING_BASE_URL: string;
   HEATING_URL: string;
   OVERPASS_URL: string;
+  /**
+   * Second Overpass endpoint, tried when OVERPASS_URL answers a server error.
+   * Optional: unset means "one endpoint", which is the behaviour before this
+   * existed. See overpassQuery in ingestion/polygon.ts.
+   */
+  OVERPASS_FALLBACK_URL?: string;
   NOMINATIM_URL: string;
   JWT_ISSUER: string;
   JWT_AUDIENCE: string;

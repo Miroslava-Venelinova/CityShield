@@ -829,8 +829,76 @@ export function normalizeParse(
     locations.push(...siblings);
   }
 
+  // A15 before A11, because a rescued district can itself create a duplicate.
+  for (const location of locations) rescueLostDistrict(location, message, src, refs);
+
   // A11 last: every rule above can create a duplicate that was not in the parse
   // — A4 splits one entry into siblings that repeat the settlement, A10 can null
   // an `area` and leave two entries identical, A12 splits one polygon into two.
   return applyCityWideGuard({ ...output, locations: mergeDuplicates(locations) }, message);
+}
+
+// ── A15 · rescue a district the extractor dropped ────────────────────────────
+
+/**
+ * A location that resolves to the bare city with no area and no streets reaches
+ * NOBODY — that is the §5.1 rule, and it is correct: a genuine whole-city outage
+ * is published in words and routed to `city_wide`, so this shape means the
+ * district got lost. But four alerts in the 08.2026 review reached nobody this
+ * way and all four were industrial zones, and the decisive detail is that
+ * `Южна промишлена зона` is a **byte-exact match for a seeded region**. The
+ * extractor dropped the name; the matcher never got to see it.
+ *
+ * So before giving up, read it back out of the source text. This runs only on
+ * the shape that is otherwise guaranteed to reach nobody, which is what makes it
+ * safe: there is no audience to widen, only one to recover. Prompt work alone
+ * was the wrong lever here — it is unfalsifiable and regresses silently — though
+ * the zone forms are added to the prompt examples as well, to fix it at source.
+ *
+ * Deliberately narrow:
+ *
+ *  - Only districts of the settlement the location already resolved to, so this
+ *    can never invent a place somewhere else.
+ *  - Only a LITERAL appearance of the seeded name in the message. `mentions` is
+ *    the trigram test the deleting guards use, and its looseness is safe when it
+ *    keeps data; here it would fabricate an area, so the test is exact.
+ *  - Exactly one candidate. Two districts named in one message means ownership
+ *    is unknowable from the text, and guessing wrong silences everyone in the
+ *    one that lost — the same reasoning A4 uses for a flat list.
+ */
+function rescueLostDistrict(
+  location: Location, message: string, src: SourceText, refs: ReferenceRows,
+): void {
+  if (location.area !== null || location.streets.length > 0) return;
+  if (!isBareCity(location.settlement)) return;
+
+  // `isBareCity` is this module's one definition of "the settlement that owns
+  // the city-wide path" — the same test the guard above used on the location, so
+  // the two cannot drift apart.
+  const settlement = refs.regions.find((r) => isBareCity(r.name));
+  if (!settlement) return;
+
+  const lower = src.lower;
+  const found = new Set<string>();
+  for (const region of refs.regions) {
+    if (region.settlement_id !== settlement.id || region.id === settlement.id) continue;
+    const core = parseName(region.name).core;
+    // Short cores would match inside longer words; a district recovered from a
+    // three-letter coincidence is worse than no district.
+    if (core.length < 4) continue;
+    if (lower.includes(core.toLowerCase())) found.add(region.name);
+  }
+
+  if (found.size !== 1) {
+    if (found.size > 1) {
+      console.warn(
+        `[normalize] A15: ${[...found].join(", ")} all named — ambiguous, leaving it to reach nobody.`);
+    }
+    return;
+  }
+  const rescued = [...found][0]!;
+  console.warn(
+    `[normalize] A15 rescued area "${rescued}" for a location that resolved to the bare `
+    + `city — the extractor dropped it and it would have notified nobody.`);
+  location.area = rescued;
 }

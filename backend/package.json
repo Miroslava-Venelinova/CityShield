@@ -14,7 +14,6 @@
     "db:reseed:remote": "wrangler d1 migrations apply cityshield-db --remote && node seeds/generate-seed.mjs && wrangler d1 execute cityshield-db --remote --file=seeds/reseed-pre.sql && wrangler d1 execute cityshield-db --remote --file=seeds/seed.sql && wrangler d1 execute cityshield-db --remote --file=seeds/reseed-post.sql"
   },
   "dependencies": {
-    "cheerio": "^1.2.0",
     "hono": "^4.8.0",
     "jsts": "^2.12.1",
     "zod": "^3.25.0"
@@ -22,6 +21,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.8.19",
     "@cloudflare/workers-types": "^4.20260701.0",
+    "cheerio": "^1.2.0",
     "typescript": "^5.5.0",
     "vitest": "~3.2.0",
     "wrangler": "~4.36.0"

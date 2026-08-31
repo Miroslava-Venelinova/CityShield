@@ -46,6 +46,7 @@ List of abbreviations and their meaning:
 - "гр." /град/ - city
 - "м-т" (NO DOT) /местност/ (can also be encountered as "м." or "м-ст") - locality
 - "к.к." /курортен комплекс/ (can also be encountered as "к.к-с") - resort complex
+- "ПЗ" or "ЗПЗ" /промишлена зона, западна промишлена зона/ - industrial zone. Written out in full as "Промишлена зона" or "... промишлена зона"
 
 If something isn't from the things listed assume it's a building or something else and do not include it.
 If there are details regarding what happened and who caused it - ignore it.
@@ -55,6 +56,7 @@ These are NEVER locations. Leave them out entirely - do not put them in "settlem
 - an electrical installation: "ТП 726" /трафопост/, "БКТП ...", a substation, a transformer
 - an abbreviation with NO name after it: a lone "м-т", "местност", "м.", "кв." or "ж.к." names no place
 - a word that describes a place instead of naming one: "карето", "зона", "квартал", "улица", "блок"
+  BUT a zone WITH a name in front of it is a real place and MUST be kept: "Южна промишлена зона", "Западна промишлена зона", "ЗПЗ" are districts and go in "area". Only a bare "зона" with no name is dropped.
 
 ## Requirements
 - Output ONLY valid JSON.
@@ -90,7 +92,7 @@ These are NEVER locations. Leave them out entirely - do not put them in "settlem
 ## Locations
 Every entry in "locations" describes ONE place, in three slots:
 - "settlement" is the city or the village: "гр. Варна", "с. Аврен". Use null when the message names none.
-- "area" is the district, residential complex, locality or resort complex INSIDE that settlement: "кв. Виница", "ж.к. Младост", "м-т Ваялар", "к.к. Чайка". Use null when the message names none.
+- "area" is the district, residential complex, locality, resort complex or industrial zone INSIDE that settlement: "кв. Виница", "ж.к. Младост", "м-т Ваялар", "к.к. Чайка", "Южна промишлена зона". Use null when the message names none.
 - "streets" holds the streets and boulevards, each as a separate entry.
 - List EVERY place the message names. A message naming five villages must produce five entries - do not stop early and do not merge them.
 - NEVER invent a settlement the message does not name. If the message says only "кв. Чайка", then "settlement" is null.
@@ -103,6 +105,9 @@ Every entry in "locations" describes ONE place, in three slots:
 - Example: "гр. Варна - част от: ул. Арх. Стоян Доков, м-ст Ваялар и м-ст Свети Никола" gives "locations": [{"settlement": "гр. Варна", "area": null, "streets": ["ул. Арх. Стоян Доков"], "is_polygon": false}, {"settlement": "гр. Варна", "area": "м-т Ваялар", "streets": [], "is_polygon": false}, {"settlement": "гр. Варна", "area": "м-т Свети Никола", "streets": [], "is_polygon": false}]
 - When the message names ONLY streets under the city and no district at all, "area" is null.
 - Example: "гр. Варна - ул. Неофит Бозвели 46; ул. Ангел Кънчев 3" gives "locations": [{"settlement": "гр. Варна", "area": null, "streets": ["ул. Неофит Бозвели", "ул. Ангел Кънчев"], "is_polygon": false}]
+- An industrial zone is an "area" like any other district, and is one of the most frequently dropped.
+- Example: "гр. Варна - Южна промишлена зона" gives "locations": [{"settlement": "гр. Варна", "area": "Южна промишлена зона", "streets": [], "is_polygon": false}]
+- Example: "гр. Варна - ЗПЗ, ул. Атанас Москов" gives "locations": [{"settlement": "гр. Варна", "area": "ЗПЗ", "streets": ["ул. Атанас Москов"], "is_polygon": false}]
 - A village with its own streets fills "settlement" and "streets" and leaves "area" null.
 - Example: "Без вода остава с. Аврен, ул. Тича" gives "locations": [{"settlement": "с. Аврен", "area": null, "streets": ["ул. Тича"], "is_polygon": false}]
 - When the message says "улиците:" (or "ул.:") before a list, EVERY name in that list is a street. Put them all in "streets", even when one of them is also the name of a district or a village.

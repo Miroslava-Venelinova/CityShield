@@ -83,7 +83,11 @@ const KIND_PATTERNS: Array<{ re: RegExp; kind: PlaceKind }> = [
   { re: /^(?:площад(?![\p{L}])|пл\s*\.)\s*/iu, kind: "пл." },
   { re: /^(?:жилищен\s+комплекс(?![\p{L}])|ж\s*\.?\s*к\s*\.?)\s*/iu, kind: "ж.к." },
   { re: /^(?:квартал(?![\p{L}])|кв\s*\.|кв(?=\s))\s*/iu, kind: "кв." },
-  { re: /^(?:курортен\s+комплекс(?![\p{L}])|к\s*\.\s*к(?:\s*-\s*с)?\s*\.?|кк(?=\s))\s*/iu, kind: "к.к." },
+  // The `-с` suffix may follow a dot of its own: ViK writes both `к.к-с Златни
+  // пясъци` and `к.к.-с Златни пясъци`. Without the optional dot the second form
+  // left `-с Златни пясъци` as the core and never matched a row, while the first
+  // resolved — the same resort, spelled two ways, one of them unreachable.
+  { re: /^(?:курортен\s+комплекс(?![\p{L}])|к\s*\.\s*к(?:\s*\.)?(?:\s*-\s*с)?(?:\s*\.)?|кк(?=\s))\s*/iu, kind: "к.к." },
   { re: /^(?:местност(?![\p{L}])|м\s*-\s*с?т|м\s*\.)\s*/iu, kind: "м-т" },
   { re: /^(?:с\s*\.\s*о\s*\.|со(?=\s))\s*/iu, kind: "с.о." },
   { re: /^(?:село(?![\p{L}])|с\s*\.)\s*/iu, kind: "с." },
