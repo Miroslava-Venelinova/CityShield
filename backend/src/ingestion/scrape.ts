@@ -372,7 +372,7 @@ class FirstElementText {
     el.onEndTag(() => { this.active = false; });
   };
 
-  /** `text` handler, for `sel` and `sel *` alike. */
+  /** `text` handler. One registration on the selector covers nested text too. */
   readonly onText = (chunk: Text): void => {
     if (!this.active) return;
     // One text node can arrive as several chunks; `lastInTextNode` is the only
@@ -394,8 +394,13 @@ function collect(
   return rewriter.on(selector, { element: sink.onElement, text: sink.onText });
 }
 
-/** Drive the rewriter over an in-memory document and discard the output. */
-async function run(html: string, rewriter: HTMLRewriter): Promise<void> {
+/**
+ * Drive the rewriter over an in-memory document and discard the output.
+ *
+ * Consuming the transformed body is what makes the parse happen; HTMLRewriter
+ * does the work as the stream is read, in chunks, which is the whole point.
+ */
+async function driveRewriter(html: string, rewriter: HTMLRewriter): Promise<void> {
   await rewriter.transform(new Response(html)).arrayBuffer();
 }
 
@@ -469,7 +474,7 @@ export async function vikParseMessage(html: string): Promise<VikMessage | null> 
   rewriter = collect(rewriter, "#main_content h1", title);
   rewriter = collect(rewriter, "#main_content .list-item-date", date);
   rewriter = collect(rewriter, "#main_content .view p", content);
-  await run(fragment, rewriter);
+  await driveRewriter(fragment, rewriter);
 
   if (!container) {
     console.error("[scrape] vikParseMessage: #main_content not found.");
@@ -546,7 +551,7 @@ export async function vtParse(html: string): Promise<VtMessage[] | null> {
   rewriter = wire(rewriter, "div.accordion-group a.accordion-toggle", (g) => g.header);
   rewriter = wire(rewriter, "div.accordion-group div.accordion-inner", (g) => g.body);
   rewriter = wire(rewriter, "div.accordion-group div.info-time", (g) => g.time);
-  await run(fragment, rewriter);
+  await driveRewriter(fragment, rewriter);
 
   if (!container) {
     console.error("[scrape] vtParse: #infoAccordion not found.");
@@ -603,7 +608,7 @@ export async function heatingParseMessage(
   const body = new FirstElementText(" ");
   let rewriter = collect(new HTMLRewriter(), "h1", title);
   rewriter = collect(rewriter, "div.main .field--name-body", body);
-  await run(fragment, rewriter);
+  await driveRewriter(fragment, rewriter);
 
   if (!body.opened) {
     console.error("[scrape] heatingParseMessage: body field not found.");
