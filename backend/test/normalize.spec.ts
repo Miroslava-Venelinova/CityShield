@@ -234,7 +234,7 @@ describe("A8 · city-wide demotion", () => {
   });
 
   it("runs as part of normalizeParse, not just standalone", () => {
-    const out = normalizeParse(parse([], true), "Авария на ул. Дубровник", refs);
+    const out = normalizeParse(parse([], true), "Авария на ул. Дубровник", refs, "vik");
     expect(out.city_wide).toBe(false);
   });
 });
