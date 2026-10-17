@@ -2,7 +2,7 @@
 
 The Cloudflare migration is finished and the app runs on a real device: the APK built
 against OneSignal is installed, sign-in works and push delivery is proven end to end.
-What the system *does* is specified in [SPEC.md](SPEC.md); this file is only what is
+What the system *does* is specified in the [specification](specification.md); this file is only what is
 still open.
 
 Two things are left, and they are independent of each other:
@@ -63,7 +63,7 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       after three queries when this was tried. Use the *around a settlement* kind: most
       villages have no boundary relation to query. Then extend to the rest of the
       province; vik does publish Долни чифлик and Аврен.
-      Two checks after applying, both in SPEC §1.2: the street count matches the JSON
+      Two checks after applying, both in specification §1.2: the street count matches the JSON
       (a settlement missing from `regions` inserts nothing, silently), and the
       **startup budget** `wrangler deploy` prints — it was 27 ms against 400 ms, and the
       seed growing ~4× is the one number worth watching.
@@ -79,7 +79,7 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       burst on a cold isolate — and a 15-minute cron is a cold isolate every time. Fixed
       by building the per-name data at module evaluation (§1.3), 11.6 ms → 1.27 ms. The
       in-memory trigram index below would **not** have fixed it: an index is still built
-      per isolate on first use. Read SPEC.md §1.1 on what the 10 ms actually bounds.
+      per isolate on first use. Read specification.md §1.1 on what the 10 ms actually bounds.
 - [ ] **A message that cannot be processed still pins the cursor forever.** This is what
       turned one over-budget message into a 20-hour outage instead of one late alert. The
       design is deliberate for the transient cases — oldest-first, advance only past
@@ -91,7 +91,7 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       then N strikes means skipping a real public-safety alert on purpose. That trade is
       a product decision, not a refactor, which is why this is a checkbox and not a
       patch. Cheap partial credit meanwhile: alert on a `crawl_state.updated_at` that
-      has not moved in a few hours (SPEC.md §3.8 has the query).
+      has not moved in a few hours (specification.md §3.8 has the query).
 - [ ] **Workers AI is timing out far more than spike 2 measured — watch this.** Over the
       three recovery ticks on 30.07.2026: **6 `AI.run timed out after 30000 ms` against 8
       messages ingested**, and one epro message exhausted all 3 attempts and was deferred
@@ -133,7 +133,7 @@ through a third party fails SPF/DKIM alignment.
       user via their Users API before a notification can target the email channel. That
       is the real work here — the send call itself mirrors `onesignal.ts`.
 - [ ] Amend, do not extend, the paperwork: OneSignal's entry in `src/api/privacy.ts`
-      (both languages) and COMPLIANCE.md §5 currently say it receives the account id and
+      (both languages) and compliance.md §5 currently say it receives the account id and
       push registration **and never the email address**. That stops being true.
 - [ ] Widen the Play Data Safety purpose for the email address to include Account
       management.
@@ -142,7 +142,7 @@ through a third party fails SPF/DKIM alignment.
 
 ## 4. Google Play release 🧑
 
-Detail in §7.6–§7.7 and [COMPLIANCE.md](COMPLIANCE.md) §1, §5. Ordered by
+Detail in §7.6–§7.7 and [compliance.md](compliance.md) §1, §5. Ordered by
 lead time, not by effort: the first two items are measured in weeks and gate the rest.
 
 ### 4.1 Account and the testing track — start these first
@@ -187,7 +187,7 @@ lead time, not by effort: the first two items are measured in weeks and gate the
 
 ### 4.3 Console declarations
 
-- [ ] **Data safety form** — answers are pre-filled in COMPLIANCE.md §1. Must match what
+- [ ] **Data safety form** — answers are pre-filled in compliance.md §1. Must match what
       `/privacy` says, including whatever §3 changes about email.
 - [ ] **Account deletion URL.** Play requires apps with accounts to offer deletion
       *both* in the app and at a public web URL. In-app deletion exists
@@ -241,9 +241,9 @@ Each of these has a trigger; none is worth doing before it fires.
 
 | Item | Do it when |
 |---|---|
-| In-memory trigram index for the fuzzy matcher | `bestMatch` — not `place-names` — shows up as a burst in `wrangler tail`. Largely overtaken: the matcher's cold cost is now 1.27 ms because the per-name data is built at startup (SPEC.md §1.3), and an index would be built per isolate. D1-stored trigrams were evaluated and rejected |
-| Workers Paid ($5/mo, 30 s CPU) | A single irreducible operation exceeds the 10 ms *burst* ceiling, not before. Polygon building came close on 30.07.2026 — buffering the road network doubled its cost — and was solved by yielding between stages instead, worst cold burst 14 → 6 ms. SPEC §1.9 lists exactly what the paid plan would let us delete, and what stays regardless. Note the 30.07.2026 outage did **not** need it either: more total CPU does not raise a burst ceiling, and that burst was avoidable work |
-| Granting the wrangler token observability scope | Before the next incident. Without it, historical Worker logs cannot be queried at all and diagnosis costs one 15-minute cron cycle per data point (SPEC.md §3.8) |
+| In-memory trigram index for the fuzzy matcher | `bestMatch` — not `place-names` — shows up as a burst in `wrangler tail`. Largely overtaken: the matcher's cold cost is now 1.27 ms because the per-name data is built at startup (specification.md §1.3), and an index would be built per isolate. D1-stored trigrams were evaluated and rejected |
+| Workers Paid ($5/mo, 30 s CPU) | A single irreducible operation exceeds the 10 ms *burst* ceiling, not before. Polygon building came close on 30.07.2026 — buffering the road network doubled its cost — and was solved by yielding between stages instead, worst cold burst 14 → 6 ms. specification §1.9 lists exactly what the paid plan would let us delete, and what stays regardless. Note the 30.07.2026 outage did **not** need it either: more total CPU does not raise a burst ceiling, and that burst was avoidable work |
+| Granting the wrangler token observability scope | Before the next incident. Without it, historical Worker logs cannot be queried at all and diagnosis costs one 15-minute cron cycle per data point (specification.md §3.8) |
 | AI Gateway for request logs | Debugging an AI-quality problem that the current logs cannot explain |
 | Paid/self-hosted map tiles | Traffic grows enough to matter under the OSM tile usage policy |
 | Per-source polling changes | A source's publishing rhythm changes — intervals live in `src/ingestion/schedule.ts` |
@@ -253,7 +253,7 @@ Each of these has a trigger; none is worth doing before it fires.
 
 Everything else (code, secret generation, D1 creation, deploys) is handled in the repo;
 the items here need you because they involve accounts, payment identity, or decisions
-only the operator can make. Technical detail lives in [SPEC.md](SPEC.md) §3.
+only the operator can make. Technical detail lives in [specification.md](specification.md) §3.
 
 Legend: ✅ done · ⏳ waiting on you · 💤 not needed yet.
 
@@ -272,7 +272,7 @@ everything specced.
 Delivery goes through OneSignal rather than FCM directly: FCM has no multicast endpoint,
 so a broadcast cost one Worker subrequest *per device* and had to chain self-invocations
 to get past the 50-subrequest ceiling. OneSignal takes up to 2,000 users per call and
-fans out on its own infrastructure ([SPEC.md](SPEC.md) §1.6).
+fans out on its own infrastructure ([specification.md](specification.md) §1.6).
 
 Android still rides on FCM underneath, so the Firebase project stays — it just moves
 behind OneSignal instead of being called by us.
@@ -286,7 +286,7 @@ Worker secret and mirrored in local `.dev.vars`.
 - **Confirm the Android settings.** OneSignal dashboard → Settings → Push & In-App →
   Google Android: the Firebase service-account JSON must be uploaded, and the **Android
   package name** must match the app's `applicationId` (`com.cityshield.fcmtest` today —
-  see `PACKAGE_NAME` in [frontend/scripts/build.sh](frontend/scripts/build.sh)). Nothing
+  see `PACKAGE_NAME` in [frontend/scripts/build.sh](../frontend/scripts/build.sh)). Nothing
   in the code can detect a mismatch: devices subscribe successfully and then silently
   receive nothing.
 - **Rotate the REST key.** It was pasted into a chat transcript. It can only send pushes,
@@ -312,13 +312,13 @@ check). Until it is, the `deploy` job in CI is a no-op and deploys happen by han
 ### 7.5 ⏳ Email verification & password reset — provider decided, domain pending
 
 Both flows are built and tested, but **delivery is mocked**: the Worker composes each
-message and logs its link instead of sending it ([backend/src/core/mailer.ts](backend/src/core/mailer.ts)).
+message and logs its link instead of sending it ([backend/src/core/mailer.ts](../backend/src/core/mailer.ts)).
 Nobody can receive a verification or reset link until delivery is wired up.
 
 **Decided: send through OneSignal**, the same account that already delivers push. The
 reason is not the code — it is the paperwork. Any other provider (Resend, Brevo) is a
 *new* processor: its own DPA, its own row in `/privacy` in both languages, its own entry
-in COMPLIANCE.md §5. OneSignal is already all of those, so the change is an amendment
+in compliance.md §5. OneSignal is already all of those, so the change is an amendment
 rather than an addition.
 
 ⏳ **What is on you:**
@@ -340,7 +340,7 @@ rather than an addition.
 Then the work is one function (`deliver` in `mailer.ts`) — noting that an email address
 is a *separate subscription* on the OneSignal user, so it has to be attached through
 their Users API before a notification can target the email channel — plus paperwork:
-amend OneSignal's description in `/privacy` and COMPLIANCE.md §5 (both currently promise
+amend OneSignal's description in `/privacy` and compliance.md §5 (both currently promise
 it never receives an email address) and widen the Play Data Safety purpose for email to
 include Account management. The work items are §3.
 
@@ -374,14 +374,14 @@ include Account management. The work items are §3.
 
 ### 7.7 ⏳ Processor paperwork (before the release)
 
-Tracked with the reasoning in [COMPLIANCE.md](COMPLIANCE.md) §5; all are free and
+Tracked with the reasoning in [compliance.md](compliance.md) §5; all are free and
 self-service:
 
 - Accept the **Cloudflare DPA** and download a copy.
 - Accept the **OneSignal DPA**, and record which transfer mechanism applies (DPF or SCCs).
 - Accept **Google's Data Processing Terms** in the Firebase console (FCM is still the
   Android delivery channel beneath OneSignal).
-- Submit the **Play Data Safety form** using the filled-in answers in COMPLIANCE.md §1.
+- Submit the **Play Data Safety form** using the filled-in answers in compliance.md §1.
 
 ### 7.8 💤 Not needed from you
 
@@ -390,4 +390,4 @@ self-service:
   delivered from a gmail.com address through a third party.
 - AI Gateway ("cityshield", free, for AI request logs) — nice for debugging, not urgent.
 - No other accounts: Nominatim and Overpass need no registration — we just follow their
-  usage policies, which the code is built to respect ([SPEC.md](SPEC.md) §2.6).
+  usage policies, which the code is built to respect ([specification.md](specification.md) §2.6).

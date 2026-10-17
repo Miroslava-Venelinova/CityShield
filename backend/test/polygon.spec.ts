@@ -316,7 +316,7 @@ describe("degenerate blocks are rejected, not stored", () => {
     groupWaysByName(JSON.parse(env.TEST_FIXTURES[`overpass-${id}.json`]!));
 
   it("keeps every genuine block across the whole workable threshold range", async () => {
-    // Sweep, don't spot-check (SPEC.md §1.9 — the 200→25 m extension mistake).
+    // Sweep, don't spot-check (docs/specification.md §1.9 — the 200→25 m extension mistake).
     // Measured: the smallest genuine block is set1 at 20,600 m²/22 vertices; the
     // degenerate one was 4,000 m²/4. Every area threshold in 5,000–15,000 m²
     // and every vertex floor in 5–22 separates the two, and the shipped values

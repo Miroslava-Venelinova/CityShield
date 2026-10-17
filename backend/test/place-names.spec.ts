@@ -1,4 +1,4 @@
-// Kind-aware place-name matching (SPEC.md §1.3).
+// Kind-aware place-name matching (docs/specification.md §1.3).
 //
 // Every case here is a name the pipeline has actually produced, matched against
 // a fixture that reproduces the collision from seeds/regions.json — the district

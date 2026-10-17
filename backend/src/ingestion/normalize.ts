@@ -1,5 +1,5 @@
 // Deterministic guards over the AI parse, run between aiParse and polygon
-// building (SPEC.md §1.7's tail).
+// building (docs/specification.md §1.7's tail).
 //
 // Everything here answers a failure the review of 28.07.2026 caught in
 // production output, and every rule is decided from the source text plus the

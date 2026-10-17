@@ -72,7 +72,7 @@ to make it taller.
 
 **Worst burst**, next to the enclosed-area count, is the longest uninterrupted
 stretch of synchronous work in the run. The free plan caps *that* at 10 ms, not the total,
-which is why `buildBlockPolygon` yields between its stages (SPEC §1.9). It is measured in
+which is why `buildBlockPolygon` yields between its stages (specification §1.9). It is measured in
 this tool's Node process, so read it as a shape rather than as the platform's accounting —
 a cold Worker isolate costs several times more, and `wrangler tail`'s `cpuTime` is the truth.
 

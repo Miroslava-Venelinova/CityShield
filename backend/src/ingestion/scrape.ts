@@ -1,4 +1,4 @@
-// Port of scraping/scrape.py (SPEC.md §1.7). Selector logic is kept
+// Port of scraping/scrape.py (docs/specification.md §1.7). Selector logic is kept
 // near-identical; text extraction mirrors BeautifulSoup's
 // get_text(" ", strip=True) / get_text(strip=True) semantics.
 //
@@ -149,7 +149,7 @@ export async function fetchPage(
 }
 
 // ---------------------------------------------------------------------------
-// Keeping the parse inside the 10 ms CPU cap (SPEC.md §1.7)
+// Keeping the parse inside the 10 ms CPU cap (docs/specification.md §1.7)
 // ---------------------------------------------------------------------------
 //
 // The 10 ms bounds ONE uninterrupted synchronous stretch, and `cheerio.load()`

@@ -485,7 +485,7 @@ function renderResult() {
   const moved = markKnobs();
   // The free plan caps the *longest* burst at 10 ms, not their sum, so that is
   // what gets shown — flagged past 7 ms, since this is a warm Node process and
-  // a cold isolate costs several times more (SPEC §1.9).
+  // a cold isolate costs several times more (specification §1.9).
   const bursts = debug?.bursts || [];
   const worst = bursts.length ? Math.max(...bursts) : 0;
   const total = bursts.reduce((sum, ms) => sum + ms, 0);

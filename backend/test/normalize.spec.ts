@@ -1,4 +1,4 @@
-// Deterministic guards over the AI parse (guards A1-A14, SPEC.md §1.7).
+// Deterministic guards over the AI parse (guards A1-A14, docs/specification.md §1.7).
 //
 // Each block replays a parse the pipeline really stored, from the reviews of
 // 28.07.2026 and 08.08.2026, against the source text it came from. Pure

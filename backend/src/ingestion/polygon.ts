@@ -1,5 +1,5 @@
 // Port of processing/polygon.py via the Phase 0 JSTS spike
-// (spikes/polygon-jsts/pipeline.mjs), SPEC.md §1.9. Overpass fetch (I/O) is
+// (spikes/polygon-jsts/pipeline.mjs), docs/specification.md §1.9. Overpass fetch (I/O) is
 // separated from the JSTS geometry pipeline (CPU). Spike 3's CPU verdict is
 // baked in: 10 m ring sampling (halves cost, identical winners) and street
 // geometries clipped to a bbox around the shortest street (kills the
@@ -568,7 +568,7 @@ const MAX_SINGLE_STREET_COVERAGE = 0.7;
  * recomputed (and re-wrapped into JSTS Points) once per street per candidate
  * polygon, which multiplied the most CPU-heavy loop in the Worker by the street
  * count for no gain. This is the code the 10 ms free-plan budget is tightest
- * against (SPEC.md §1.9).
+ * against (docs/specification.md §1.9).
  *
  * The count is exact only when it has to be. Both things the caller asks of it
  * — "does this street bound the face at all" and "does it bound too much of

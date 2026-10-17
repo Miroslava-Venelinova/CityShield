@@ -13,9 +13,9 @@ official sources ──► scheduled() every 15 min ──► D1 ──► fetch
 
 This document specifies the system **as built**. It is the reference for how each
 part behaves and, more importantly, *why* — most of the non-obvious rules here
-exist because the obvious version broke something. [TODO.md](TODO.md) tracks what
+exist because the obvious version broke something. [todo.md](todo.md) tracks what
 is left before a Play Store release, and its §7 is the operator's
-account/credential checklist; [COMPLIANCE.md](COMPLIANCE.md) holds the GDPR
+account/credential checklist; [compliance.md](compliance.md) holds the GDPR
 paperwork record.
 
 - §1 — implementation specification (layout, data, API, alerts, ingestion, app)
@@ -853,7 +853,7 @@ source cannot starve the others.
 the AI/Overpass/Nominatim hops are all I/O. The budget exists so a tick finishes
 well inside the 15-minute cadence and the next tick never overlaps it (the cursor
 model assumes one writer per source). It was 180 s until 31.07.2026, when a tick
-came within 4 s of it (TODO.md §2) because `AI.run` now routinely exceeds its
+came within 4 s of it (todo.md §2) because `AI.run` now routinely exceeds its
 30 s cap and retries are serial; 5 min restores headroom without raising the
 per-tick message cap, and still leaves a 10-min gap to the next tick. Every source
 gets the deadline threaded in *and* is wrapped in `withTimeout` as a
@@ -1343,9 +1343,9 @@ toggles), Profile (account, push permission, location, Privacy & Data).
   `frontend/scripts/build.sh`), and release APKs are signed with the **debug
   keystore, which is committed to this repo** — so anyone holding the repo can
   build an update Android will install over a real one. Both are release
-  blockers; see [TODO.md](TODO.md) §5a.
+  blockers; see [todo.md](todo.md) §5a.
 
-Build and toolchain details: [frontend/SETUP.md](frontend/SETUP.md).
+Build and toolchain details: [frontend/SETUP.md](../frontend/SETUP.md).
 
 ### 1.12 Tests and CI
 
@@ -1376,7 +1376,7 @@ Both flows are built, tested and live in the app; **delivery is mocked** —
 `core/mailer.ts` composes each message in full and logs its link instead of
 sending it, so nobody can receive one in production. Making it real is a
 one-function change plus paperwork (§2.2); the decision it waits on is in
-[TODO.md](TODO.md) §7.5.
+[todo.md](todo.md) §7.5.
 
 - `auth_tokens` (migration 0006) holds only the **SHA-256** of each link token,
   scoped by `purpose`, single-use, cascading with the user. Issuing deletes the
@@ -1467,7 +1467,7 @@ Location is the sensitive item and is collected only through the explicit
 | **Google / Firebase (FCM)** | The Android delivery channel beneath OneSignal | Accept Google's **Data Processing Terms** in the Firebase console; list Google as a processor |
 | **OSM Foundation (Nominatim)** | ⚠️ The user's **precise coordinates** on `PUT /api/auth/location`, and street names during ingest | No DPA exists. Handled by: explicit disclosure and consent in the location flow; requests carrying no user identifier and originating from Cloudflare's IP, not the user's; a link to OSMF's privacy policy. **Documented decision: keep Nominatim and disclose.** A fully clean alternative is self-hosting or a commercial EU geocoder with a DPA |
 | **Overpass** (overpass-api.de) | Street names only | No personal data; fair-use compliance only |
-| **Mail provider** | Recipient address + message body | **None engaged** — delivery is mocked (§1.13). Before those flows go live: accept the DPA, confirm the processing location, add it to `/privacy` *and* COMPLIANCE.md, and widen the Play Data Safety purpose for email to include Account management |
+| **Mail provider** | Recipient address + message body | **None engaged** — delivery is mocked (§1.13). Before those flows go live: accept the DPA, confirm the processing location, add it to `/privacy` *and* compliance.md, and widen the Play Data Safety purpose for email to include Account management |
 
 ### 2.3 Data-subject rights
 
@@ -1514,7 +1514,7 @@ Location is the sensitive item and is collected only through the explicit
   `Host` to loopback, so no page open in a browser can POST to them.
 - Backups: D1 **Time Travel** gives 7-day point-in-time restore on the free plan.
 - **Breach plan (Art. 33/34):** 72-hour notification to the CPDP. The runbook
-  lives in [COMPLIANCE.md](COMPLIANCE.md) §4.
+  lives in [compliance.md](compliance.md) §4.
 
 ### 2.5 Privacy policy, terms and Play Data Safety
 
@@ -1527,12 +1527,12 @@ effects; no sale of data; no cookies. Controller contact:
 `cityshield.varna@gmail.com`.
 
 The **Google Play Data Safety** answers must stay consistent with it — the filled
-table is in COMPLIANCE.md §1. Changing one without the other is itself a Play
+table is in compliance.md §1. Changing one without the other is itself a Play
 policy violation.
 
 No DPO is required (Art. 37 thresholds not met) and no DPIA (no large-scale
 systematic monitoring); both conclusions are written up with reasoning in
-COMPLIANCE.md §2–3, as Art. 5(2) accountability expects.
+compliance.md §2–3, as Art. 5(2) accountability expects.
 
 ### 2.6 Non-GDPR legal items
 
@@ -1863,7 +1863,7 @@ parity checklist below passed on the Worker side; it remains in git history
 | Item | Status |
 |---|---|
 | Every §1.4 endpoint verified against the app's contract | Covered by the contract tests; app-side flows verified manually |
-| All sources ingest real messages end to end | Verified per source at build time; ViK and epro were both re-worked afterwards and are worth re-observing (see TODO.md) |
+| All sources ingest real messages end to end | Verified per source at build time; ViK and epro were both re-worked afterwards and are worth re-observing (see todo.md) |
 | A polygon alert notifies only in-polygon users | Tested (bbox + ray-cast targeting) |
 | A `city_wide=false` alert with no locations is stored, not broadcast | Tested |
 | A `city_wide` alert stops at the municipality (15 km), and unplaceable users stay in | Tested |

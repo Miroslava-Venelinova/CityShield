@@ -52,7 +52,7 @@ app.use(async (c, next) => {
   if (!c.res.headers.has("Cache-Control")) c.res.headers.set("Cache-Control", "no-store");
 });
 
-// Lazy startup guard: refuse to serve on missing/weak secrets (SPEC.md §1.4).
+// Lazy startup guard: refuse to serve on missing/weak secrets (docs/specification.md §1.4).
 app.use(async (c, next) => {
   assertConfig(c.env);
   await next();
@@ -65,7 +65,7 @@ app.use("/api/*", globalRateLimit);
 app.route("/api/auth", authRoutes);
 app.route("/api/alerts", alertRoutes);
 app.route("/api/preferences", preferenceRoutes);
-// Operational health (SPEC.md §3.8). Behind the ingest key rather than public:
+// Operational health (docs/specification.md §3.8). Behind the ingest key rather than public:
 // it reports cursors, tick outcomes and the ids of messages deliberately not
 // delivered — nothing personal, but nothing the public needs either. A header
 // is all an external uptime ping needs, so this still meets the goal of being

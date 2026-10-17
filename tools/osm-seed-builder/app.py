@@ -1051,7 +1051,7 @@ def apply_to_d1(remote: bool) -> dict:
 # had finished.
 #
 # The three levels come out of it the way the app now models a location
-# (settlement → area → street, SPEC.md §1.7):
+# (settlement → area → street, docs/specification.md §1.7):
 #
 #   * settlements — `place=city|town|village|hamlet` in the province.
 #   * districts   — extracted from INSIDE each settlement's own boundary, which
@@ -1278,7 +1278,7 @@ def resolve_district_rows(found: dict[str, list[dict]]) -> tuple[list[dict], lis
         Overpass instance on 10.08.2026: `admin_level 8` in Bulgaria is the
         **населено място**, not the община — `rel(13477567)` ("Варна", level 8)
         contains exactly one `place` settlement, Варна itself. (An earlier
-        comment here asserted the opposite and was wrong; §1.0 of ACCURACY.md
+        comment here asserted the opposite and was wrong; §1.0 of docs/accuracy.md
         was right.) The city's boundary is still *big* — it reaches Галата and
         Аспарухово — so it legitimately contains villa zones 8–12 km from the
         centre that sit 2.1–2.7 km from a village. Among boundary matches the

@@ -1,7 +1,7 @@
-// Privacy policy served by the Worker itself at /privacy (SPEC.md §1.10,
+// Privacy policy served by the Worker itself at /privacy (docs/specification.md §1.10,
 // content checklist §2.5). Linked from the app and the Play Store listing.
 // Controller contact below is cityshield.varna@gmail.com, confirmed by the
-// operator 2026-07-21; it must stay in sync with COMPLIANCE.md.
+// operator 2026-07-21; it must stay in sync with docs/compliance.md.
 
 import { Hono } from "hono";
 import type { AppEnv } from "./middleware";

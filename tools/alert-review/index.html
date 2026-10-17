@@ -894,7 +894,7 @@ function renderDetail(alert) {
       so nobody in that area is notified.</div>`;
   } else if (!alert.locations.length) {
     $("dLocations").innerHTML = '<div class="muted">No locations. The alert either went out '
-      + 'city-wide or was stored without notifying anyone (SPEC §1.5).</div>';
+      + 'city-wide or was stored without notifying anyone (specification §1.5).</div>';
   } else {
     $("dLocations").innerHTML = alert.locations.map((loc, index) => {
       const shape = mapShapes[index];

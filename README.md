@@ -11,9 +11,10 @@ notifications together with an interactive map of every active incident.
 The entire server side runs as a **single TypeScript Cloudflare Worker** on
 Cloudflare's free plan. A React Native app is the client.
 
-- **[SPEC.md](SPEC.md)** — the system specification: how every part works, and why.
-- **[TODO.md](TODO.md)** — what is left before a Play Store release, and the operator
-  setup checklist (§7).
+- **[docs/specification.md](docs/specification.md)** — the system specification: how every part works, and why.
+- **[docs/](docs/README.md)** — everything else: design decisions, troubleshooting,
+  runbook, incidents, findings, and what is left before a Play Store release
+  ([docs/todo.md](docs/todo.md)).
 
 ---
 
@@ -50,8 +51,8 @@ Workers-AI binding, and one push client.
                         ┌───────────────────────── backend/ (Cloudflare Worker) ──────────────────────────┐
                         │                                                                                 │
   official sources ───► │  scheduled() every 15 min                        fetch()  (Hono router)         │
-  (ViK, ERP Sever,      │   scrape (cheerio) → parse (Workers AI, JSON     ┌──────────────────────────┐   │
-   Veolia, VarnaTraffic)│   schema) → geocode (Nominatim) → build polygon  │ /api/auth  /api/alerts   │   │ ◄── React Native app
+  (ViK, ERP Sever,      │   scrape (HTMLRewriter) → parse (Workers AI,     ┌──────────────────────────┐   │
+   Veolia, VarnaTraffic)│   JSON schema) → geocode (Nominatim) → polygon   │ /api/auth  /api/alerts   │   │ ◄── React Native app
                         │   (Overpass + JSTS) → store → match users →      │ /api/preferences /privacy│   │      (frontend/)
                         │   notify (OneSignal)                             │                          │   │
                         │                        │                         └──────────────────────────┘   │
@@ -84,7 +85,7 @@ Workers-AI binding, and one push client.
 
 | Component | Technologies |
 |---|---|
-| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, Rate Limiting bindings, cheerio, JSTS, Zod, Nominatim & Overpass geocoding, OneSignal |
+| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, Rate Limiting bindings, HTMLRewriter, JSTS, Zod, Nominatim & Overpass geocoding, OneSignal |
 | Mobile app | React Native 0.85, React 19, React Navigation, Leaflet in a WebView (OpenStreetMap tiles), OneSignal |
 | Tooling | Wrangler, Vitest (`@cloudflare/vitest-pool-workers`), GitHub Actions |
 
@@ -94,7 +95,7 @@ Workers-AI binding, and one push client.
 CityShield/
 ├── backend/                  Cloudflare Worker — the entire server side
 │   ├── wrangler.jsonc        Bindings, cron triggers, vars
-│   ├── migrations/           D1 SQL migrations (0001–0014)
+│   ├── migrations/           D1 SQL migrations
 │   ├── seeds/                regions/streets seed data + generator
 │   ├── src/
 │   │   ├── index.ts          Exports { fetch, scheduled }
@@ -106,11 +107,13 @@ CityShield/
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
 ├── tools/
 │   ├── osm-seed-builder/     Local UI that builds the seed data from Overpass
+│   ├── alert-review/         Local UI for judging what the pipeline stored
+│   ├── polygon-tester/       Local UI that draws every stage of the block builder
 │   └── push-tester/          Local UI that fires a test push at one user or everyone
 ├── setup.bat                 Windows: install deps for frontend and/or backend
-├── SPEC.md                   System specification (architecture, contracts, GDPR, ops)
-├── TODO.md                   Remaining work before release + operator setup checklist
-└── COMPLIANCE.md             GDPR record (Play Data Safety, DPIA, breach runbook)
+├── docs/                     specification.md (how it all works) + decisions, troubleshooting,
+│                             runbook, incidents, TODO, GDPR record
+└── AGENTS.md                 Brief for coding agents (CLAUDE.md points here)
 ```
 
 ## Getting started
@@ -124,7 +127,7 @@ CityShield/
 | [Android Studio](https://developer.android.com/studio) (or a device) | Mobile app |
 | A [OneSignal](https://onesignal.com) app (free plan) | Push notifications |
 
-See [TODO.md](TODO.md) §7 for the exact accounts, secrets, and one-time provisioning
+See [docs/todo.md](docs/todo.md) §7 for the exact accounts, secrets, and one-time provisioning
 the operator needs to supply.
 
 On Windows, **`setup.bat`** in the repo root installs the npm packages for both
@@ -180,8 +183,7 @@ release APK against the deployed Worker and needs no arguments.
 
 ## Running the tests
 
-- **Backend** — from `backend/`: `npm test` (Vitest against a local D1 — 204 tests
-  across 19 files). Type-check with
+- **Backend** — from `backend/`: `npm test` (Vitest inside workerd against a local D1). Type-check with
   `npx tsc -p tsconfig.json && npx tsc -p test/tsconfig.json`.
 - **Mobile app** — from `frontend/`: `npm run lint` and `npm run typecheck`.
 
@@ -192,7 +194,7 @@ request, which also does a `wrangler deploy --dry-run` bundle-size check.
 ## API overview
 
 All routes are registered in [backend/src/api/app.ts](backend/src/api/app.ts); the
-full contract, including status codes and DTO shapes, is [SPEC.md](SPEC.md) §1.4.
+full contract, including status codes and DTO shapes, is [docs/specification.md](docs/specification.md) §1.4.
 
 | Route group | Responsibility |
 |---|---|
@@ -204,8 +206,8 @@ full contract, including status codes and DTO shapes, is [SPEC.md](SPEC.md) §1.
 ## Deployment
 
 The Worker deploys with Wrangler; TLS and scaling are handled by Cloudflare.
-Remote D1 and secrets must be provisioned first — see [TODO.md](TODO.md) §7 and
-[SPEC.md](SPEC.md) §3.3.
+Remote D1 and secrets must be provisioned first — see [docs/todo.md](docs/todo.md) §7 and
+[docs/specification.md](docs/specification.md) §3.3.
 
 Currently live at `https://cityshield.cityshield-varna.workers.dev` (D1 in `weur`,
 crons every 15 min + a daily cleanup).
@@ -220,21 +222,26 @@ npx wrangler deploy
 Pushes to `main` deploy automatically via GitHub Actions once the
 `CLOUDFLARE_API_TOKEN` repo secret is set. Development currently happens on the
 `cloudflare-migration` branch, and `main` still holds the retired pre-Cloudflare
-stack — merging it forward is a prerequisite for CI deploys ([TODO.md](TODO.md)).
+stack — merging it forward is a prerequisite for CI deploys ([docs/todo.md](docs/todo.md)).
 
 ## Further documentation
 
 | Document | Contents |
 |---|---|
-| [SPEC.md](SPEC.md) | System specification — architecture, data model, API contract, ingestion, GDPR, operations |
-| [TODO.md](TODO.md) | Remaining work before release; §7 is the operator setup — accounts, secrets, provisioning |
-| [COMPLIANCE.md](COMPLIANCE.md) | GDPR record — Play Data Safety answers, DPIA/DPO reasoning, breach runbook |
+| [docs/specification.md](docs/specification.md) | System specification — architecture, data model, API contract, ingestion, GDPR, operations |
+| [docs/README.md](docs/README.md) | Index of everything in `docs/` |
+| [docs/todo.md](docs/todo.md) | Remaining work before release; §7 is the operator setup — accounts, secrets, provisioning |
+| [docs/design-decisions.md](docs/design-decisions.md) | Why things are the way they are, and what was rejected |
+| [docs/troubleshooting.md](docs/troubleshooting.md) · [docs/runbook.md](docs/runbook.md) | Symptom → cause; step-by-step procedures |
+| [docs/compliance.md](docs/compliance.md) | GDPR record — Play Data Safety answers, DPIA/DPO reasoning, breach runbook |
 | [frontend/SETUP.md](frontend/SETUP.md) | Mobile app development environment |
 | [tools/osm-seed-builder/README.md](tools/osm-seed-builder/README.md) | Building the regions/streets reference data from OSM |
+| [tools/alert-review/README.md](tools/alert-review/README.md) | Judging stored alerts for accuracy |
+| [tools/polygon-tester/README.md](tools/polygon-tester/README.md) | Inspecting the block-polygon builder |
 | [tools/push-tester/README.md](tools/push-tester/README.md) | End-to-end push delivery testing |
 | [backend/spikes/RESULTS.md](backend/spikes/RESULTS.md) | Phase 0 de-risking spike findings |
 
 CityShield's pre-Cloudflare stack (Python ingestion + ASP.NET Core API +
-PostgreSQL/PostGIS + self-hosted Ollama) is described in [SPEC.md](SPEC.md) §4.
+PostgreSQL/PostGIS + self-hosted Ollama) is described in [docs/specification.md](docs/specification.md) §4.
 Its source was deleted from the working tree and remains in git history
 (`git log --all -- backend_deprecated/`, last present at commit `026f562`).

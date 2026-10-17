@@ -1,4 +1,4 @@
-// /api/auth/* — port of AuthController.cs + AuthService.cs (SPEC.md §1.4).
+// /api/auth/* — port of AuthController.cs + AuthService.cs (docs/specification.md §1.4).
 // Contract parity: exact routes, status codes, text bodies, camelCase DTOs.
 
 import { Hono } from "hono";
@@ -398,7 +398,7 @@ export const authRoutes = new Hono<AppEnv>()
       .map((p) => ({ category: p.category, isEnabled: p.is_enabled === 1 }));
 
     // No device section: push delivery moved to OneSignal, which holds the
-    // device registrations keyed by this user_id (see COMPLIANCE.md).
+    // device registrations keyed by this user_id (see docs/compliance.md).
     return c.json({
       profile: {
         userId: user.user_id,

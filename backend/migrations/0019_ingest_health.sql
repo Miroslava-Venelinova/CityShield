@@ -13,7 +13,7 @@
 -- while `completed_at` stands still is exactly a tick being killed mid-work.
 -- One SELECT, instead of a 15-minute `wrangler tail` vigil at one data point
 -- per cron — which matters more than usual here, because the observability
--- scopes needed to read historical logs are not granted (SPEC.md §3.8).
+-- scopes needed to read historical logs are not granted (docs/specification.md §3.8).
 
 CREATE TABLE ingest_health (
     cron          TEXT PRIMARY KEY,  -- the cron expression that fired

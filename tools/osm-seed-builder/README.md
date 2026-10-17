@@ -27,7 +27,7 @@ browser. Standard library only — no `pip install`. Python 3.11+.
 ## Sweep a province — one input, the whole seed
 
 The card at the top of the page takes a province name and nothing else. It
-produces the three levels the app targets by (SPEC.md §1.7):
+produces the three levels the app targets by (docs/specification.md §1.7):
 
 | Level | What it extracts | How it is tied |
 |---|---|---|
@@ -153,7 +153,7 @@ geometry to test a street against.
 It also would not help if there were: a boulevard crosses several districts, so
 "which district is this street in" has no single answer, and `streets.region_id`
 holds exactly one region. Targeting never asks the question either — the
-audience comes from the area and the street scope from the settlement (SPEC.md
+audience comes from the area and the street scope from the settlement (docs/specification.md
 §1.5).
 
 ## What the step-by-step flow does

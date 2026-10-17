@@ -127,7 +127,7 @@ describe("heating", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The DOM-free / narrowed parse paths (SPEC.md §1.7, the 10 ms CPU cap)
+// The DOM-free / narrowed parse paths (docs/specification.md §1.7, the 10 ms CPU cap)
 // ---------------------------------------------------------------------------
 //
 // vikParsePage and heatingParsePage no longer build a DOM, and the three

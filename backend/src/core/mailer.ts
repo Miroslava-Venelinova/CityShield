@@ -6,14 +6,14 @@
 // and in tests, but no user can receive a link in production.
 //
 // Why it stops here: Workers cannot open SMTP sockets, so delivery needs a
-// third-party HTTP API, and picking one is blocked on a decision we have not
-// made — see TODO.md "Phase 4b". The short version: sending as an @gmail.com
+// third-party HTTP API. The provider is decided (OneSignal, already a processor
+// for push) and waits on a domain — see docs/todo.md §3. Sending as an @gmail.com
 // address through any provider fails DMARC alignment and lands in spam, so the
 // real fix is a domain, and the provider choice follows from that.
 //
 // To make it real: implement `deliver` against the chosen provider, add its
 // credentials to Env, add it to the processor lists in api/privacy.ts and
-// COMPLIANCE.md, and delete this notice.
+// docs/compliance.md, and delete this notice.
 
 import type { Env } from "../env";
 

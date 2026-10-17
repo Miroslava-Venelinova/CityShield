@@ -242,7 +242,7 @@ through. *Truncated or garbled content* is a scraper finding — look at the sou
 
 **`city_wide` is not stored.** It decides targeting at ingest time and is then gone, so an alert
 with no locations is ambiguous here: either the model correctly said city-wide, or it produced
-nothing and the alert was stored without notifying anyone (SPEC §1.5, decision 2). The tool
+nothing and the alert was stored without notifying anyone (specification §1.5, decision 2). The tool
 shows the row, not the parse — the audience pane states both branches rather than picking one,
 and if you need to tell them apart, check `wrangler tail` output around that alert's
 `created_on_utc`.

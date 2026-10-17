@@ -1,4 +1,4 @@
-// Port of AlertService.cs (SPEC.md §1.5): store + enrich + match + notify.
+// Port of AlertService.cs (docs/specification.md §1.5): store + enrich + match + notify.
 // Preserves every behavioral guard — store before notify, the city_wide=false
 // store-only rule, the bus-line narrowing, the 1,000-char push-body cap.
 
@@ -257,7 +257,7 @@ function readLocation(location: Json): LocationSlots {
  * the two are meant to stay comparable: that simulator recomputed the 08.08.2026
  * review's reach numbers offline, weeks after the fact, against a 5-row users
  * table — and it could, only because the Worker itself had never said a word
- * about any of it. Every failure in ACCURACY.md terminates in an empty audience
+ * about any of it. Every failure in docs/accuracy.md terminates in an empty audience
  * and a pipeline that reports success.
  *
  * Built unconditionally (it is four fields and a string), logged only when the

@@ -57,7 +57,7 @@ export interface Env {
 
 /**
  * Deploy-time startup guards become lazy first-request checks in a Worker
- * (SPEC.md §1.4): refuse to serve if secrets are missing or weak.
+ * (docs/specification.md §1.4): refuse to serve if secrets are missing or weak.
  */
 export function assertConfig(env: Env): void {
   if (!env.JWT_KEY || env.JWT_KEY.length < 32)

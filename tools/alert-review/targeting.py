@@ -18,7 +18,7 @@ one to say what went wrong.
 Two things it cannot know, and says so rather than guessing:
 
 * **`city_wide` is not stored.** It decides targeting at ingest time and is
-  then gone (SPEC §1.5, decision 2), so an alert with no locations is genuinely
+  then gone (specification §1.5, decision 2), so an alert with no locations is genuinely
   ambiguous: either the model said city-wide and everyone inside 15 km was
   notified, or it produced nothing and the alert was stored without notifying
   anyone. Both branches are reported.

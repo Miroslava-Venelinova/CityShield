@@ -138,7 +138,7 @@ have **no** boundary relation are unaffected, because the `around:` fallback
 searches from the centre point the enumeration already resolved inside the
 province — the one place the sweep did carry its scope through.
 
-**The fix** ([app.py:187](tools/osm-seed-builder/app.py#L187)) keys each
+**The fix** ([app.py:187](../tools/osm-seed-builder/app.py#L187)) keys each
 per-settlement request on the boundary relation's **OSM element id**, taken from
 the enumeration, which already resolved it inside `area.p`. Identity, not a name;
 nothing can collide with it. A name resolving to more than one relation *inside*
@@ -776,7 +776,7 @@ When a location resolved to the **Варна settlement row** and no street surv
 targeting fell through to `getUserIdsByRegion`, which is `WHERE region_id = ?`.
 But a user's `region_id` comes from reverse geocoding most-specific-first —
 `suburb, neighbourhood, quarter, city_district, city, town, village`
-([geocoding.ts:271-273](backend/src/core/geocoding.ts#L271-L273)) — so anyone
+([geocoding.ts:271-273](../backend/src/core/geocoding.ts#L271-L273)) — so anyone
 genuinely inside the city resolves to their **district**, never to `Варна`. The
 settlement row matched only the residue whose reverse geocode hit no district we
 seed.

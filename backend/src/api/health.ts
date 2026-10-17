@@ -1,4 +1,4 @@
-// Operational health, readable without wrangler (SPEC.md §3.8).
+// Operational health, readable without wrangler (docs/specification.md §3.8).
 //
 // This exists because the two things an operator needs during an ingest outage
 // were both unreachable. The stalled-cursor alarm was a console.error, and an

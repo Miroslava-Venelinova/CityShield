@@ -1,4 +1,4 @@
-// AI output schemas (SPEC.md §1.8). Two layers per source, same trick as
+// AI output schemas (docs/specification.md §1.8). Two layers per source, same trick as
 // Pydantic's SkipJsonSchema: the JSON schema sent to Workers AI as the
 // constrained-decoding target, and the zod schema used as the post-parse
 // backstop. polygon_geojson / bus_lines are filled in programmatically and

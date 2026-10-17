@@ -1,4 +1,4 @@
--- Give a region the settlement it sits inside (SPEC.md §1.2).
+-- Give a region the settlement it sits inside (docs/specification.md §1.2).
 --
 -- `regions` has always been one flat table holding three different kinds of
 -- place at once: settlements (Варна, Тополи, Аврен), the districts inside them
