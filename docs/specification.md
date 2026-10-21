@@ -1368,7 +1368,7 @@ normalization; and targeting at scale.
 |---|---|
 | `worker` | `npm ci` → `tsc -p tsconfig.json && tsc -p test/tsconfig.json` → `npm test` → `wrangler deploy --dry-run` (build + 3 MB size check) |
 | `app` | `npm ci` → `npm run lint` → `npm run typecheck` |
-| `deploy` | On pushes to `main` only, gated on `needs: [worker]` and the `CLOUDFLARE_API_TOKEN` repo secret |
+| `deploy` | On pushes to `main` only, after `worker`: `npm ci` → `wrangler deploy` (lockfile version), authenticated by the `CLOUDFLARE_API_TOKEN` repo secret |
 
 ### 1.13 Email verification and password reset
 

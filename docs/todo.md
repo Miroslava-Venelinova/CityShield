@@ -27,11 +27,13 @@ of what only you can provide, and the work items point into it.
       in mind for next time: `getRegions` reads `region_aliases` (0013) and `insertAlert`
       writes `windows_json` (0012), so a Worker deployed ahead of its migrations fails
       every alert it handles.
-- [ ] **Merge `cloudflare-migration` into `main`.** `main` still holds the retired
-      pre-Cloudflare stack (50 commits behind), and CI's `deploy` job only runs on `main`,
-      so nothing auto-deploys until this happens.
+- [x] ~~**Merge `cloudflare-migration` into `main`.**~~ Done 21.10.2026 (fast-forward to
+      `073a0ab`); the branch is deleted and new work goes on its own branch off `main`.
+      The first `main` run exposed a second bug: `cloudflare/wrangler-action` installed
+      wrangler 3.90, which can't read `wrangler.jsonc` ("Missing entry-point") — the job
+      now runs the lockfile's wrangler instead.
 - [ ] 🧑 Create the `CLOUDFLARE_API_TOKEN` repo secret so that deploy job actually works —
-      status unverified (§7.3).
+      verified **missing** 21.10.2026 (§7.3).
 - [ ] 🧑 Rotate `ONESIGNAL_API_KEY`; it passed through a chat transcript (§7.2).
 
 ## 2. Notification accuracy — the remaining backend work
@@ -299,8 +301,8 @@ Worker secret and mirrored in local `.dev.vars`.
   Workers"** template, scoped to your account.
 - Add it to the GitHub repo as the secret `CLOUDFLARE_API_TOKEN`.
 
-Whether this was ever done is unverified (there is no `gh` CLI on the dev machine to
-check). Until it is, the `deploy` job in CI is a no-op and deploys happen by hand with
+Not done: on 21.10.2026 the repo had no Actions secrets at all. Until it is, the
+`deploy` job fails on every push to `main` and deploys happen by hand with
 `npx wrangler deploy`.
 
 ### 7.4 ✅ Privacy policy — decided

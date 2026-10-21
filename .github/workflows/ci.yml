@@ -49,10 +49,20 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [worker]
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
-      - uses: cloudflare/wrangler-action@v3
+      - uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          workingDirectory: backend
-          command: deploy
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      # The lockfile's wrangler, not cloudflare/wrangler-action: the action
+      # installs its own 3.x, which predates wrangler.jsonc and fails with
+      # "Missing entry-point".
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
