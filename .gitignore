@@ -9,6 +9,11 @@ fcm.json
 # Build/dev artefacts (node_modules, dist, .wrangler, .dev.vars, seed.sql) are
 # ignored by backend/.gitignore; spike caches by backend/spikes/.gitignore.
 
+# ── Dependencies and tool caches, at any depth ───────────
+# Includes the stray root node_modules/ that vitest drops its .vite/ results
+# cache into when it is run from the repo root.
+node_modules/
+
 # ── Editors ───────────────────────────────────────────────
 .vscode/
 
