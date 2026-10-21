@@ -6,6 +6,7 @@
 // Not every source runs on every tick — see schedule.ts for the per-source
 // polling intervals.
 
+import { markTickCompleted, markTickStarted, RETENTION_JOBS, runRetentionJob } from "../db/queries";
 import type { Env } from "../env";
 import { withTimeout } from "../shared/deadline";
 import { TICK_MINUTES, isDue } from "./schedule";
@@ -66,6 +67,46 @@ export async function runIngestion(env: Env): Promise<void> {
   }
 
   await warnOnStalledCursors(env);
+}
+
+/**
+ * One ingest cron tick, bracketed by the D1 heartbeat.
+ *
+ * The heartbeat is written to D1, not to the log stream: an `exceededCpu` kill
+ * discards the invocation's logs, so the one signal that a tick died is the one
+ * that must not live in them (migration 0019). `started_at` is committed before
+ * any parsing; `completed_at` only if ingestion returns normally — a tick that
+ * threw did not complete either, and must read as unfinished on /api/health
+ * just as a killed one does. Both are I/O, so neither adds meaningfully to the
+ * 10 ms CPU burst they report on.
+ *
+ * Never throws: each step reports its own failure, and a heartbeat write that
+ * fails must not stop the ingestion it brackets.
+ *
+ * `ingest` is injectable for tests; it defaults to runIngestion.
+ */
+export async function runIngestTick(
+  env: Env, cron: string, ingest: (env: Env) => Promise<void> = runIngestion,
+): Promise<void> {
+  try {
+    await markTickStarted(env, cron);
+  } catch (e) {
+    console.error(`[runner] Tick heartbeat (start) failed: ${e}`);
+  }
+
+  const startedAt = Date.now();
+  try {
+    await ingest(env);
+  } catch (e) {
+    console.error(`[runner] Ingestion failed; the tick is left unfinished: ${e}`);
+    return;
+  }
+
+  try {
+    await markTickCompleted(env, cron, Date.now() - startedAt);
+  } catch (e) {
+    console.error(`[runner] Tick heartbeat (end) failed: ${e}`);
+  }
 }
 
 /**
@@ -132,30 +173,13 @@ async function warnOnStalledCursors(env: Env): Promise<void> {
  */
 export async function runDailyCleanup(env: Env): Promise<void> {
   const cutoff = (days: number) => new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
-  const jobs: Array<{ label: string; sql: string; cutoffDays: number }> = [
-    { label: "old alert(s)", sql: "DELETE FROM alerts WHERE created_on_utc < ?", cutoffDays: 90 },
-    { label: "geocode cache row(s)", sql: "DELETE FROM geocode_cache WHERE resolved_at < ?", cutoffDays: 180 },
-    // Verification/reset links (migration 0006). They stop working at
-    // expires_at; the row is kept a day longer only so an "already used" click
-    // still lands on a sensible page rather than looking unknown.
-    { label: "expired auth token(s)", sql: "DELETE FROM auth_tokens WHERE expires_at < ?", cutoffDays: 1 },
-    // Spent and expired sessions (migration 0007). Rotated rows are kept a week
-    // so replay detection still recognises a leaked chain instead of treating
-    // it as an unknown token; past that, the family is long dead anyway.
-    { label: "expired refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE expires_at < ?", cutoffDays: 0 },
-    { label: "spent refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE used_at IS NOT NULL AND used_at < ?", cutoffDays: 7 },
-    // Pre-store attempt counters (migration 0018). A row for a message that is
-    // merely failing is transient — it is deleted the moment the message goes
-    // through. A row that was SKIPPED is the record of a message deliberately
-    // not delivered, so it is kept as long as the alerts it sits among.
-    { label: "stale ingest attempt(s)", sql: "DELETE FROM ingest_attempts WHERE skipped_at IS NULL AND last_at < ?", cutoffDays: 7 },
-    { label: "old skipped ingest(s)", sql: "DELETE FROM ingest_attempts WHERE skipped_at IS NOT NULL AND skipped_at < ?", cutoffDays: 90 },
-  ];
 
-  for (const job of jobs) {
+  // The jobs and their retention periods live beside the rest of the SQL
+  // (db/queries.ts RETENTION_JOBS).
+  for (const job of RETENTION_JOBS) {
     try {
-      const { meta } = await env.DB.prepare(job.sql).bind(cutoff(job.cutoffDays)).run();
-      console.log(`[cleanup] removed ${meta.changes} ${job.label}`);
+      const removed = await runRetentionJob(env, job, cutoff(job.cutoffDays));
+      console.log(`[cleanup] removed ${removed} ${job.label}`);
     } catch (e) {
       console.error(`[cleanup] failed to remove ${job.label}: ${e}`);
     }

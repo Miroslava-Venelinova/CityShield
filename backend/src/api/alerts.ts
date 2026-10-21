@@ -1,5 +1,5 @@
-// /api/alerts/* — port of AlertsController.cs. submit-data is kept for manual
-// test injection (send_test_alerts.py usage); Phase 3 scrapers call the same
+// /api/alerts/* (docs/specification.md §1.4). submit-data is kept for manual
+// test injection; the ingestion pipeline calls the same
 // storeAlert/sendUsersNotification functions directly.
 
 import { Hono } from "hono";

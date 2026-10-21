@@ -87,7 +87,11 @@ Every reach failure used to end in the same silence. The pattern now:
   placements and leave `crawl_state` alone ([runbook.md](runbook.md)).
 - "Local" describes where the code runs, not where the side effects go:
   local runs spend real AI neurons and send real pushes.
-- Work happens on `cloudflare-migration`. `main` holds the retired stack.
+- `main` is the only long-lived branch, and pushing it deploys. Each piece of
+  work gets its own branch off `main`, and merging back waits for the owner's
+  go-ahead. This rule dates from 21.10.2026: `main` had gone stale for months
+  while all real work lived on `cloudflare-migration`, which was then
+  fast-forwarded into `main` and deleted.
 
 ## Documentation
 

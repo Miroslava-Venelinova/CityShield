@@ -1,4 +1,4 @@
-// Port of NotificationPreferencesService.KnownCategories — adding a new
+// The alert categories, one per source. Adding a new
 // category here is the only schema-free change needed for a new alert source.
 // Insertion order is the order the preferences endpoint returns.
 
@@ -11,8 +11,7 @@ export const KNOWN_CATEGORIES = new Map<string, string>([
 
 // ── AI prompts ────────────────────────────────────────────────────────────────
 // The location-extraction rules started as a CHARACTER-FOR-CHARACTER copy of
-// backend/services/common.py (OUTAGE_AI_PROMPT) and varnatraffic_service.py
-// (§1.7). Two rounds of divergence since, each driven by production output
+// the retired Python scrapers' prompts (§1.7; in git history up to `026f562`). Two rounds of divergence since, each driven by production output
 // rather than by taste:
 //
 //  1. Times became a `schedule` object — a date range plus the clock windows

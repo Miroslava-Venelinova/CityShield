@@ -3,6 +3,7 @@
 
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { parseBusLines } from "../src/core/bus-lines";
 import { api, jsonInit, registerAndLogin } from "./helpers";
 
 describe("/api/preferences", () => {
@@ -72,5 +73,19 @@ describe("FK cascade (GDPR deletion relies on it)", () => {
       "SELECT 1 FROM user_notification_preferences WHERE user_id = ?",
     ).bind(user!.user_id).all();
     expect(prefs.results).toHaveLength(0);
+  });
+});
+
+describe("parseBusLines", () => {
+  // One reader for the column across GET /bus-lines, the GDPR export and the
+  // alert filter. A damaged row reads as no subscriptions, which the filter
+  // treats as "no filter": corruption must widen the audience, never empty it.
+  it("reads a stored list and degrades anything else to []", () => {
+    expect(parseBusLines('["31A","209B"]')).toEqual(["31A", "209B"]);
+    expect(parseBusLines('["31A", 7, null]')).toEqual(["31A"]);
+    expect(parseBusLines("not-json{")).toEqual([]);
+    expect(parseBusLines('{"31A": true}')).toEqual([]);
+    expect(parseBusLines(null)).toEqual([]);
+    expect(parseBusLines(undefined)).toEqual([]);
   });
 });

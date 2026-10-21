@@ -1,11 +1,13 @@
-// /api/auth/* — port of AuthController.cs + AuthService.cs (docs/specification.md §1.4).
-// Contract parity: exact routes, status codes, text bodies, camelCase DTOs.
+// /api/auth/* (docs/specification.md §1.4). The routes, status codes, text
+// bodies and camelCase DTOs are the app's contract — it was written against the
+// retired ASP.NET API, and this kept that contract exactly.
 
 import { Hono } from "hono";
 import { z } from "zod";
 import {
   issueToken, consumeToken, RESET_TTL_MINUTES, VERIFY_TTL_MINUTES,
 } from "../core/auth-tokens";
+import { parseBusLines } from "../core/bus-lines";
 import { bestMatch, SIMILARITY_THRESHOLD } from "../core/fuzzy";
 import { reverseGeocode } from "../core/geocoding";
 import { signToken } from "../core/jwt";
@@ -24,7 +26,7 @@ import type { AppEnv } from "./middleware";
 import { requireAuth } from "./middleware";
 import { clientIp, isOverLimit, perUserRateLimit, tooManyRequests } from "./rate-limit";
 
-// Mirrors RegisterRequest.cs data annotations.
+// The registration bounds the app validates against.
 const registerSchema = z.object({
   email: z.string().min(5).max(50).email(),
   password: z.string().min(8).max(50),
@@ -46,7 +48,7 @@ const loginSchema = z.object({
 /** Budget for the one outbound Nominatim call behind PUT /location. */
 const LOCATION_BUDGET_MS = 10_000;
 
-// Mirrors UpdateLocationRequest.cs [Range] annotations.
+// Any real coordinate; whether it is near Varna is not checked here.
 const locationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
@@ -388,12 +390,6 @@ export const authRoutes = new Hono<AppEnv>()
     const user = await q.getUserById(c.env, c.get("userId"));
     if (!user) return c.text("User does not exist", 404);
 
-    let subscribedBusLines: string[] = [];
-    try {
-      const parsed = JSON.parse(user.subscribed_bus_lines);
-      if (Array.isArray(parsed)) subscribedBusLines = parsed;
-    } catch { /* corrupt JSON → empty list */ }
-
     const preferences = (await q.getPreferenceRows(c.env, user.user_id))
       .map((p) => ({ category: p.category, isEnabled: p.is_enabled === 1 }));
 
@@ -409,7 +405,7 @@ export const authRoutes = new Hono<AppEnv>()
         regionName: user.region_name,
         streetName: user.street_name,
         receivesAllAlerts: user.receives_all_alerts === 1,
-        subscribedBusLines,
+        subscribedBusLines: parseBusLines(user.subscribed_bus_lines),
         createdOnUTC: user.created_on_utc,
         updatedOnUTC: user.updated_on_utc,
       },
@@ -435,8 +431,8 @@ export const authRoutes = new Hono<AppEnv>()
     const user = await q.getUserById(c.env, c.get("userId"));
     if (!user) return c.text("User does not exist", 404);
 
-    // Reverse-geocode, then fuzzy-match region (and street) — port of
-    // AuthService.UpdateLocationAsync. The coordinates are saved either way, and
+    // Reverse-geocode, then fuzzy-match region (and street). The coordinates
+    // are saved either way, and
     // /me reports hasLocation off those.
     const address = await reverseGeocode(c.env, latitude, longitude, Date.now() + LOCATION_BUDGET_MS);
 

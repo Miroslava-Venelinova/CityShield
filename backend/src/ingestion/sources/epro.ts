@@ -1,5 +1,5 @@
 // ERP Sever / Energo-Pro (erpsever.bg) — planned power interruptions via the
-// JSON XHR endpoint its map uses. Port of epro_service.py. Entries carry no
+// JSON XHR endpoint its map uses. Entries carry no
 // stable id → SHA-256 content hash (24 hex chars). Seen-ids are persisted
 // per-message on success so a mid-run abort never re-broadcasts (§1.7).
 //

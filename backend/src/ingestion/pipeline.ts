@@ -1,12 +1,13 @@
-// Port of services/common.py's shared tail (docs/specification.md §1.7):
-// AI parse → validate → polygons → ingest. The old HTTP POST to the ASP.NET
-// API becomes a direct call into alert-service.ts, under the same
-// store-first / notification-failure-never-fails rule.
+// The tail every outage source shares (docs/specification.md §1.7):
+// AI parse → validate → polygons → ingest, as a direct call into
+// alert-service.ts under the store-first / notification-failure-never-fails
+// rule.
 
 import {
   type AlertPayload, incrementPushAttempts, isHedged, markAlertNotified,
-  sendUsersNotification, settlementScope, storeAlert,
+  sendUsersNotification, storeAlert,
 } from "../core/alert-service";
+import { settlementScope } from "../core/locations";
 import { getRecentAlertsForDedup, getRegions, getStreets } from "../db/queries";
 import type { Env } from "../env";
 import { OUTAGE_AI_PROMPT } from "../shared/constants";
@@ -174,7 +175,7 @@ export async function processOutageMessage(
 
   // For every location marked is_polygon, build a GeoJSON polygon from its
   // street list. Polygon failures leave polygon_geojson unset but record WHY —
-  // never fail the message over a polygon (port of build_polygons).
+  // never fail the message over a polygon.
   for (const location of processed.locations) {
     if (!location.is_polygon) continue;
     // A polygon is an enhancement; out of budget just means no polygon, and

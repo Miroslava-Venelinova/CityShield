@@ -220,9 +220,8 @@ npx wrangler deploy
 ```
 
 Pushes to `main` deploy automatically via GitHub Actions once the
-`CLOUDFLARE_API_TOKEN` repo secret is set. Development currently happens on the
-`cloudflare-migration` branch, and `main` still holds the retired pre-Cloudflare
-stack — merging it forward is a prerequisite for CI deploys ([docs/todo.md](docs/todo.md)).
+`CLOUDFLARE_API_TOKEN` repo secret is set. Work happens on feature branches off
+`main`, so merging into `main` is the deploy step.
 
 ## Further documentation
 

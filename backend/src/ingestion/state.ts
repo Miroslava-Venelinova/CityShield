@@ -1,6 +1,7 @@
-// crawl_state repository on D1 — port of data/postgres/state_repository.py.
-// Two shapes: a numeric cursor (vik, heating) and a seen-id set (vt, epro;
-// JSON array capped at MAX_SEEN_IDS).
+// Crawl state: what each source has already processed. The SQL is in
+// db/queries.ts; this module owns what a failed read MEANS. Two shapes: a
+// numeric cursor (vik, heating) and a seen-id set (vt, epro; JSON array capped
+// at MAX_SEEN_IDS).
 //
 // Read failures return null, distinct from "no row yet" (0 / []). The
 // distinction is load-bearing: a lost cursor read that degrades to 0, or a lost
@@ -10,14 +11,15 @@
 // tick instead, since the next tick costs at most five minutes of latency.
 
 import type { Env } from "../env";
-import { bumpIngestAttempt, clearIngestAttempts, markIngestSkipped } from "../db/queries";
+import {
+  bumpIngestAttempt, clearIngestAttempts, crawlStateExists, getCrawlCursor, getCrawlSeenIdsJson,
+  getCrawlUpdatedAt, markIngestSkipped, upsertCrawlCursor, upsertCrawlSeenIds,
+} from "../db/queries";
 
 // Sources only ever compare against ids still visible on the listing page,
 // so old ids can be dropped; keeping the newest few hundred stops the array
 // growing forever.
 export const MAX_SEEN_IDS = 500;
-
-const nowIso = () => new Date().toISOString();
 
 /**
  * Whether a source has any stored state. First run ever → false, and sources
@@ -27,9 +29,7 @@ const nowIso = () => new Date().toISOString();
  */
 export async function hasStateRow(env: Env, source: string): Promise<boolean> {
   try {
-    const row = await env.DB.prepare("SELECT 1 FROM crawl_state WHERE source = ?")
-      .bind(source).first();
-    return row !== null;
+    return await crawlStateExists(env, source);
   } catch (e) {
     console.error(`[state] hasStateRow(${source}) failed: ${e}`);
     return true; // fail safe: don't re-bootstrap (and re-skip) on a DB hiccup
@@ -39,13 +39,12 @@ export async function hasStateRow(env: Env, source: string): Promise<boolean> {
 /** Cursor value, 0 when there is no row yet, or null when the read failed. */
 export async function getLastId(env: Env, source: string): Promise<number | null> {
   try {
-    const row = await env.DB.prepare("SELECT last_id FROM crawl_state WHERE source = ?")
-      .bind(source).first<{ last_id: number }>();
-    if (!row) {
+    const lastId = await getCrawlCursor(env, source);
+    if (lastId === null) {
       console.warn(`[state] ${source} state row not found — defaulting to 0.`);
       return 0;
     }
-    return row.last_id;
+    return lastId;
   } catch (e) {
     console.error(`[state] getLastId(${source}) failed: ${e}`);
     return null;
@@ -59,9 +58,7 @@ export async function getLastId(env: Env, source: string): Promise<number | null
  */
 export async function getLastIdUpdatedAt(env: Env, source: string): Promise<string | null> {
   try {
-    const row = await env.DB.prepare("SELECT updated_at FROM crawl_state WHERE source = ?")
-      .bind(source).first<{ updated_at: string | null }>();
-    return row?.updated_at ?? null;
+    return await getCrawlUpdatedAt(env, source);
   } catch (e) {
     console.error(`[state] getLastIdUpdatedAt(${source}) failed: ${e}`);
     return null;
@@ -70,10 +67,7 @@ export async function getLastIdUpdatedAt(env: Env, source: string): Promise<stri
 
 export async function writeLastId(env: Env, source: string, lastId: number): Promise<void> {
   try {
-    await env.DB.prepare(
-      `INSERT INTO crawl_state (source, last_id, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(source) DO UPDATE SET last_id = excluded.last_id, updated_at = excluded.updated_at`,
-    ).bind(source, lastId, nowIso()).run();
+    await upsertCrawlCursor(env, source, lastId);
   } catch (e) {
     console.error(`[state] writeLastId(${source}) failed: ${e}`);
   }
@@ -82,13 +76,12 @@ export async function writeLastId(env: Env, source: string, lastId: number): Pro
 /** Seen ids, [] when there is no row yet, or null when the read failed. */
 export async function getSeenIds(env: Env, source: string): Promise<string[] | null> {
   try {
-    const row = await env.DB.prepare("SELECT seen_ids FROM crawl_state WHERE source = ?")
-      .bind(source).first<{ seen_ids: string }>();
-    if (!row) {
+    const json = await getCrawlSeenIdsJson(env, source);
+    if (json === null) {
       console.warn(`[state] ${source} state row not found — defaulting to [].`);
       return [];
     }
-    const parsed = JSON.parse(row.seen_ids);
+    const parsed = JSON.parse(json);
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
   } catch (e) {
     console.error(`[state] getSeenIds(${source}) failed: ${e}`);
@@ -123,10 +116,7 @@ export async function addSeenIds(env: Env, source: string, ids: string[]): Promi
     }
     const merged = mergeSeenIds(existing, ids);
     if (merged.length === existing.length && merged.every((v, i) => v === existing[i])) return;
-    await env.DB.prepare(
-      `INSERT INTO crawl_state (source, seen_ids, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(source) DO UPDATE SET seen_ids = excluded.seen_ids, updated_at = excluded.updated_at`,
-    ).bind(source, JSON.stringify(merged), nowIso()).run();
+    await upsertCrawlSeenIds(env, source, merged);
   } catch (e) {
     console.error(`[state] addSeenIds(${source}) failed: ${e}`);
   }

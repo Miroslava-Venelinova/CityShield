@@ -1,5 +1,5 @@
 // Veolia Energy Varna (energy-varna.bg) — id-listing crawler with
-// base-URL-relative node links, port of heating_service.py.
+// base-URL-relative node links.
 
 import type { Env } from "../../env";
 import { heatingParseMessage, heatingParsePage } from "../scrape";

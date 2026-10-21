@@ -39,7 +39,7 @@ function secretsMatch(a: string, b: string): boolean {
   return crypto.subtle.timingSafeEqual(left as BufferSource, right as BufferSource);
 }
 
-/** X-Api-Key gate for machine-to-machine ingest endpoints (used from Phase 2). */
+/** X-Api-Key gate for the operator endpoints: /api/health, submit-data, test-push. */
 export const requireIngestKey: MiddlewareHandler<AppEnv> = async (c, next) => {
   const key = c.req.header("X-Api-Key");
   if (!key || !secretsMatch(key, c.env.INGEST_API_KEY)) return c.body(null, 401);

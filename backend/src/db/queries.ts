@@ -656,3 +656,181 @@ export async function getRecentAlertsForDedup(
   }>();
   return results;
 }
+
+// ── Crawl state (ingestion/state.ts owns the failure semantics) ─────────────
+
+export async function crawlStateExists(env: Env, source: string): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT 1 FROM crawl_state WHERE source = ?")
+    .bind(source).first();
+  return row !== null;
+}
+
+/** The numeric cursor (vik, heating), or null when the source has no row. */
+export async function getCrawlCursor(env: Env, source: string): Promise<number | null> {
+  const row = await env.DB.prepare("SELECT last_id FROM crawl_state WHERE source = ?")
+    .bind(source).first<{ last_id: number }>();
+  return row?.last_id ?? null;
+}
+
+export async function getCrawlUpdatedAt(env: Env, source: string): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT updated_at FROM crawl_state WHERE source = ?")
+    .bind(source).first<{ updated_at: string | null }>();
+  return row?.updated_at ?? null;
+}
+
+export async function upsertCrawlCursor(env: Env, source: string, lastId: number): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO crawl_state (source, last_id, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(source) DO UPDATE SET last_id = excluded.last_id, updated_at = excluded.updated_at`,
+  ).bind(source, lastId, nowIso()).run();
+}
+
+/** The seen-id set (vt, epro) as its stored JSON text, or null when the source has no row. */
+export async function getCrawlSeenIdsJson(env: Env, source: string): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT seen_ids FROM crawl_state WHERE source = ?")
+    .bind(source).first<{ seen_ids: string }>();
+  return row?.seen_ids ?? null;
+}
+
+export async function upsertCrawlSeenIds(env: Env, source: string, seenIds: string[]): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO crawl_state (source, seen_ids, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(source) DO UPDATE SET seen_ids = excluded.seen_ids, updated_at = excluded.updated_at`,
+  ).bind(source, JSON.stringify(seenIds), nowIso()).run();
+}
+
+// ── Email link tokens (migration 0006; core/auth-tokens.ts) ─────────────────
+
+/**
+ * Store a link token's hash, dropping any earlier one of the same purpose in the
+ * same batch — so "resend" retires the older link.
+ */
+export async function replaceAuthToken(
+  env: Env, userId: string, purpose: string, tokenHash: string, expiresIso: string,
+): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?")
+      .bind(userId, purpose),
+    env.DB.prepare(
+      `INSERT INTO auth_tokens (token_hash, user_id, purpose, expires_at, used_at, created_at)
+       VALUES (?, ?, ?, ?, NULL, ?)`,
+    ).bind(tokenHash, userId, purpose, expiresIso, nowIso()),
+  ]);
+}
+
+/**
+ * Redeem a link token: one conditional UPDATE, so of two concurrent clicks only
+ * the one whose UPDATE matches gets the user id back.
+ */
+export async function claimAuthToken(
+  env: Env, tokenHash: string, purpose: string,
+): Promise<string | null> {
+  const now = nowIso();
+  const claimed = await env.DB.prepare(
+    `UPDATE auth_tokens SET used_at = ?
+     WHERE token_hash = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?
+     RETURNING user_id`,
+  ).bind(now, tokenHash, purpose, now).first<{ user_id: string }>();
+  return claimed?.user_id ?? null;
+}
+
+// ── Refresh tokens (migration 0007; core/refresh-tokens.ts) ─────────────────
+
+export async function insertRefreshToken(
+  env: Env, tokenHash: string, userId: string, familyId: string, expiresIso: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO refresh_tokens (token_hash, user_id, family_id, expires_at, used_at, created_at)
+     VALUES (?, ?, ?, ?, NULL, ?)`,
+  ).bind(tokenHash, userId, familyId, expiresIso, nowIso()).run();
+}
+
+/** Spend a live refresh token. Atomic for the same reason claimAuthToken is. */
+export function claimRefreshToken(
+  env: Env, tokenHash: string,
+): Promise<{ user_id: string; family_id: string } | null> {
+  const now = nowIso();
+  return env.DB.prepare(
+    `UPDATE refresh_tokens SET used_at = ?
+     WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+     RETURNING user_id, family_id`,
+  ).bind(now, tokenHash, now).first<{ user_id: string; family_id: string }>();
+}
+
+/** The family of a token that was already spent, or null — the replay check. */
+export async function getSpentRefreshFamily(env: Env, tokenHash: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT family_id FROM refresh_tokens WHERE token_hash = ? AND used_at IS NOT NULL",
+  ).bind(tokenHash).first<{ family_id: string }>();
+  return row?.family_id ?? null;
+}
+
+export async function deleteRefreshFamily(env: Env, familyId: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM refresh_tokens WHERE family_id = ?").bind(familyId).run();
+}
+
+export async function deleteRefreshToken(env: Env, tokenHash: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM refresh_tokens WHERE token_hash = ?").bind(tokenHash).run();
+}
+
+export async function deleteUserRefreshTokens(env: Env, userId: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM refresh_tokens WHERE user_id = ?").bind(userId).run();
+}
+
+// ── Geocode cache (core/geocoding.ts) ───────────────────────────────────────
+
+/**
+ * A cached forward geocode: undefined when the query was never looked up, a row
+ * with NULL coordinates when it was and Nominatim had no answer (misses are
+ * cached too).
+ */
+export async function getCachedGeocode(
+  env: Env, query: string,
+): Promise<{ lat: number | null; lng: number | null } | undefined> {
+  const row = await env.DB.prepare("SELECT lat, lng FROM geocode_cache WHERE query = ?")
+    .bind(query).first<{ lat: number | null; lng: number | null }>();
+  return row ?? undefined;
+}
+
+export async function putCachedGeocode(
+  env: Env, query: string, point: { lat: number; lng: number } | null,
+): Promise<void> {
+  await env.DB.prepare(
+    "INSERT OR REPLACE INTO geocode_cache (query, lat, lng, resolved_at) VALUES (?, ?, ?, ?)",
+  ).bind(query, point?.lat ?? null, point?.lng ?? null, nowIso()).run();
+}
+
+// ── Retention (daily cleanup cron, §1.10) ───────────────────────────────────
+
+export interface RetentionJob {
+  label: string;
+  /** Rows older than this many days, by the column the statement compares. */
+  cutoffDays: number;
+  sql: string;
+}
+
+export const RETENTION_JOBS: readonly RetentionJob[] = [
+  { label: "old alert(s)", sql: "DELETE FROM alerts WHERE created_on_utc < ?", cutoffDays: 90 },
+  { label: "geocode cache row(s)", sql: "DELETE FROM geocode_cache WHERE resolved_at < ?", cutoffDays: 180 },
+  // Verification/reset links (migration 0006). They stop working at
+  // expires_at; the row is kept a day longer only so an "already used" click
+  // still lands on a sensible page rather than looking unknown.
+  { label: "expired auth token(s)", sql: "DELETE FROM auth_tokens WHERE expires_at < ?", cutoffDays: 1 },
+  // Spent and expired sessions (migration 0007). Rotated rows are kept a week
+  // so replay detection still recognises a leaked chain instead of treating
+  // it as an unknown token; past that, the family is long dead anyway.
+  { label: "expired refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE expires_at < ?", cutoffDays: 0 },
+  { label: "spent refresh token(s)", sql: "DELETE FROM refresh_tokens WHERE used_at IS NOT NULL AND used_at < ?", cutoffDays: 7 },
+  // Pre-store attempt counters (migration 0018). A row for a message that is
+  // merely failing is transient — it is deleted the moment the message goes
+  // through. A row that was SKIPPED is the record of a message deliberately
+  // not delivered, so it is kept as long as the alerts it sits among.
+  { label: "stale ingest attempt(s)", sql: "DELETE FROM ingest_attempts WHERE skipped_at IS NULL AND last_at < ?", cutoffDays: 7 },
+  { label: "old skipped ingest(s)", sql: "DELETE FROM ingest_attempts WHERE skipped_at IS NOT NULL AND skipped_at < ?", cutoffDays: 90 },
+];
+
+/** Run one retention job against `cutoffIso`; returns the rows removed. */
+export async function runRetentionJob(env: Env, job: RetentionJob, cutoffIso: string): Promise<number> {
+  const { meta } = await env.DB.prepare(job.sql).bind(cutoffIso).run();
+  return meta.changes;
+}

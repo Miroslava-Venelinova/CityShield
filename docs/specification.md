@@ -71,9 +71,10 @@ CityShield/
 │   │   ├── index.ts            exports { fetch, scheduled }
 │   │   ├── env.ts              Env interface + assertConfig
 │   │   ├── api/                Hono routes, middleware, rate limiting, /privacy
-│   │   ├── core/               alert service, fuzzy, place-names, geo, geocoding,
-│   │   │                       onesignal, jwt, password, auth-tokens,
-│   │   │                       refresh-tokens, mailer, bus-lines
+│   │   ├── core/               alert service, locations, enrichment, fuzzy,
+│   │   │                       place-names, geo, geocoding, onesignal, jwt,
+│   │   │                       password, auth-tokens, refresh-tokens, mailer,
+│   │   │                       bus-lines
 │   │   ├── db/queries.ts       every prepared statement, in one place
 │   │   ├── ingestion/          runner, schedule, pipeline, normalize, ai,
 │   │   │                       polygon, scrape, state, sources/
@@ -121,7 +122,7 @@ design — nothing is correct only because a cache is warm:
 | Cache | TTL / bound | Purpose |
 |---|---|---|
 | `regions` / `streets` rows | 6 h, single-flight | Fuzzy matching runs on nearly every alert path (§1.3) |
-| Overpass responses | 50 entries, keyed by sorted street list | Polygon rebuilds of the same block (§1.9) |
+| Overpass responses | 50 entries, keyed by settlement + sorted street list | Polygon rebuilds of the same block (§1.9). The settlement is in the key because keying on street names alone served one town's geometry for another's |
 | Nominatim slot chain | — | Serializes outbound geocodes ≥1,100 ms apart (§1.5) |
 
 ### 1.2 Data model (D1)
@@ -537,7 +538,11 @@ its absence (tests, direct `app.request` calls), so a best-effort side task —
 sending mail, warming the feed cache — can never 500 the endpoint that scheduled
 it.
 
-### 1.5 Alert service (`core/alert-service.ts`)
+### 1.5 Alert service (`core/alert-service.ts`, `core/locations.ts`, `core/enrichment.ts`)
+
+Targeting, notifying and storage are `alert-service.ts`. The location model they
+share (the stored DTO, reading a location in either shape, settlement scoping) is
+`locations.ts`, and giving each stored location a coordinate is `enrichment.ts`.
 
 **The unseeded `м-т` names are not seedable — checked 31.08.2026.** The obvious
 remedy for the locality misses (`м-т Ваялар`, `м-т "Малко Ю"` and ten others that
@@ -1754,7 +1759,9 @@ DNS rebinding.
   destroys.** The stalled-cursor warning above is a `console.error`, and on the
   three dead ticks of 28.08.2026 it was written into a log stream the kill threw
   away. So the tick also writes `ingest_health.started_at` **before any parsing**
-  and `completed_at` only if it reaches the end (migration 0019). A committed D1
+  and `completed_at` only if ingestion returns normally (migration 0019;
+  `runIngestTick` in `ingestion/runner.ts`) — a tick whose ingestion threw is
+  left unfinished exactly as a killed one is. A committed D1
   write is I/O and costs essentially no CPU against the cap it reports on.
   `started_at` advancing while `completed_at` stands still *is* the `exceededCpu`
   signature, and it is a `SELECT` rather than a 15-minute `wrangler tail` vigil —

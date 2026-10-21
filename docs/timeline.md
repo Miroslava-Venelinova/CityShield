@@ -84,6 +84,9 @@ up in [incidents.md](incidents.md).
 - **01.09–16.10**: no commits.
 - **17.10**: docs reorganised into `docs/`. `SPEC.md` moves to
   `docs/specification.md`; section numbers are unchanged.
+- **21.10**: `cloudflare-migration` is fast-forwarded into `main` (`073a0ab`)
+  and every other branch is deleted. CI now deploys from `main`, and new
+  work starts on its own branch.
 
 ## Where the deployment stands (last known, 31.08.2026)
 
@@ -91,5 +94,5 @@ up in [incidents.md](incidents.md).
 - Crons: `*/15 * * * *` (ingest) and `30 3 * * *` (cleanup).
 - The app is **unreleased**. The remote D1 is a test bed with fewer than five
   real test accounts.
-- `main` still holds the retired pre-Cloudflare stack. Nothing deploys from CI
-  until `cloudflare-migration` is merged ([todo.md](todo.md) §1).
+- `main` is the only branch and pushing it deploys. Feature work goes on its
+  own branch ([working-practices.md](working-practices.md)).

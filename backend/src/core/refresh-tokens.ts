@@ -21,6 +21,7 @@
 //    legitimate device and a thief. There is no way to tell which is calling,
 //    so the family dies and that device signs in again.
 
+import * as q from "../db/queries";
 import type { Env } from "../env";
 import { hashToken } from "./auth-tokens";
 
@@ -50,14 +51,8 @@ async function insert(
   env: Env, userId: string, familyId: string,
 ): Promise<string> {
   const token = base64url(crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
-  const now = new Date();
-  const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 24 * 3600_000);
-
-  await env.DB.prepare(
-    `INSERT INTO refresh_tokens (token_hash, user_id, family_id, expires_at, used_at, created_at)
-     VALUES (?, ?, ?, ?, NULL, ?)`,
-  ).bind(await hashToken(token), userId, familyId, expires.toISOString(), now.toISOString()).run();
-
+  const expires = new Date(Date.now() + REFRESH_TTL_DAYS * 24 * 3600_000);
+  await q.insertRefreshToken(env, await hashToken(token), userId, familyId, expires.toISOString());
   return token;
 }
 
@@ -83,18 +78,13 @@ export interface Rotation {
  */
 export async function rotateRefreshToken(env: Env, token: string): Promise<Rotation | null> {
   const hash = await hashToken(token);
-  const now = new Date().toISOString();
 
   // Claim and read in one round trip. Two concurrent refreshes from the same
   // device — easy to trigger, since a screen that fans out three API calls
   // 401s three times at once — race here, and exactly one wins. The loser gets
   // null and retries with the token the winner stored, rather than both
   // rotating and leaving one of them holding a spent token.
-  const claimed = await env.DB.prepare(
-    `UPDATE refresh_tokens SET used_at = ?
-     WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
-     RETURNING user_id, family_id`,
-  ).bind(now, hash, now).first<{ user_id: string; family_id: string }>();
+  const claimed = await q.claimRefreshToken(env, hash);
 
   if (!claimed) {
     await revokeIfReplayed(env, hash);
@@ -118,19 +108,16 @@ export async function rotateRefreshToken(env: Env, token: string): Promise<Rotat
  * everywhere.
  */
 async function revokeIfReplayed(env: Env, hash: string): Promise<void> {
-  const row = await env.DB.prepare(
-    "SELECT family_id FROM refresh_tokens WHERE token_hash = ? AND used_at IS NOT NULL",
-  ).bind(hash).first<{ family_id: string }>();
-  if (!row) return;
+  const familyId = await q.getSpentRefreshFamily(env, hash);
+  if (familyId === null) return;
 
   console.warn("Refresh token replayed — revoking the device's session family.");
-  await env.DB.prepare("DELETE FROM refresh_tokens WHERE family_id = ?").bind(row.family_id).run();
+  await q.deleteRefreshFamily(env, familyId);
 }
 
 /** Sign out one device. Unknown tokens are a no-op — logout never errors. */
 export async function revokeRefreshToken(env: Env, token: string): Promise<void> {
-  await env.DB.prepare("DELETE FROM refresh_tokens WHERE token_hash = ?")
-    .bind(await hashToken(token)).run();
+  await q.deleteRefreshToken(env, await hashToken(token));
 }
 
 /**
@@ -139,5 +126,5 @@ export async function revokeRefreshToken(env: Env, token: string): Promise<void>
  * sessions behind would defeat that.
  */
 export async function revokeAllRefreshTokens(env: Env, userId: string): Promise<void> {
-  await env.DB.prepare("DELETE FROM refresh_tokens WHERE user_id = ?").bind(userId).run();
+  await q.deleteUserRefreshTokens(env, userId);
 }

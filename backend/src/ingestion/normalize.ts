@@ -577,8 +577,8 @@ function mergeDuplicates(locations: Location[]): Location[] {
   const byKey = new Map<string, Location>();
   for (const location of locations) {
     if (location.is_polygon) { merged.push(location); continue; }
-    const key = `${cleanName(location.settlement ?? "").toLowerCase()} `
-      + `${cleanName(location.area ?? "").toLowerCase()} `
+    const key = `${cleanName(location.settlement ?? "").toLowerCase()}\0`
+      + `${cleanName(location.area ?? "").toLowerCase()}\0`
       + `${location.region_wide === true}`;
     const existing = byKey.get(key);
     if (!existing) {

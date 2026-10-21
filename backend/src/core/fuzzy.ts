@@ -5,7 +5,7 @@
 
 /** pg_trgm's default `%` operator threshold — used for region/street matching. */
 export const SIMILARITY_THRESHOLD = 0.3;
-/** `similarity_threshold` used by polygon street resolution (Phase 3). */
+/** The stricter threshold polygon street resolution uses (§1.9). */
 export const POLYGON_RESOLVE_THRESHOLD = 0.4;
 
 const WORD_SPLIT = /[^\p{L}\p{N}]+/u;

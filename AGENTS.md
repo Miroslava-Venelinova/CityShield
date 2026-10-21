@@ -31,8 +31,9 @@ backend/            the Worker — the entire server side
   seeds/            regions/streets/aliases.json + generate-seed.mjs
   src/index.ts      exports { fetch, scheduled }; scheduled dispatches on event.cron
   src/api/          Hono routes, middleware, rate limiting, /privacy
-  src/core/         alert-service, fuzzy, place-names, geo, geocoding, onesignal,
-                    jwt, password, auth-tokens, refresh-tokens, mailer, bus-lines
+  src/core/         alert-service (+ locations, enrichment), fuzzy, place-names,
+                    geo, geocoding, onesignal, jwt, password, auth-tokens,
+                    refresh-tokens, mailer, bus-lines
   src/db/queries.ts every prepared statement, in one place
   src/ingestion/    runner, schedule, pipeline, normalize, ai, polygon, scrape,
                     state, sources/
@@ -142,5 +143,8 @@ Moved to [docs/troubleshooting.md](docs/troubleshooting.md) and
   routine via `npm run db:reseed:remote`, but never clear `crawl_state`. Local dev
   spends real AI neurons and sends real pushes.
 
-Work happens on `cloudflare-migration`; `main` still holds the retired
-pre-Cloudflare stack.
+**Branches.** `main` is the only long-lived branch, and **pushing it deploys**
+(CI runs `wrangler deploy`). New work starts on its own branch off an
+up-to-date `main` (`git checkout -b <type>/<topic>`); merging back is a deploy,
+so it waits for the owner's go-ahead. There is no `gh` CLI here: "merge" means
+fast-forwarding `main` locally and pushing it.

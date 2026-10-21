@@ -32,8 +32,9 @@ curl -H "X-Api-Key: $INGEST_API_KEY" \
 
 ### No new alerts are arriving
 1. Call `GET /api/health`. If `started_at` advances while `completed_at`
-   does not, ticks are being **killed** (`exceededCpu`). Go to the next
-   section.
+   does not, ticks are being **killed** (`exceededCpu`), or ingestion is
+   throwing. A thrown tick keeps its logs (`[runner] Ingestion failed` in
+   `wrangler tail`); a killed one has none. For a kill, go to the next section.
 2. If the heartbeat is fine, check cursors:
    `SELECT source, last_id, updated_at FROM crawl_state`. Then fetch
    `last_id + 1` from the source by hand. If the page exists and parses, the

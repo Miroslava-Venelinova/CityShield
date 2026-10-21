@@ -1,6 +1,6 @@
-// Port of scraping/scrape.py (docs/specification.md §1.7). Selector logic is kept
-// near-identical; text extraction mirrors BeautifulSoup's
-// get_text(" ", strip=True) / get_text(strip=True) semantics.
+// Fetching and parsing the source pages (docs/specification.md §1.7). Text
+// extraction mirrors BeautifulSoup's get_text(" ", strip=True) /
+// get_text(strip=True) semantics, which the original Python scrapers used.
 //
 // Originally built on cheerio. It no longer is, anywhere — see the CPU-cap
 // note below. cheerio remains a devDependency, where the tests keep the

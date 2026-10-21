@@ -1,4 +1,4 @@
-// Port of processing/polygon.py via the Phase 0 JSTS spike
+// Block polygons, grown out of the Phase 0 JSTS spike
 // (spikes/polygon-jsts/pipeline.mjs), docs/specification.md §1.9. Overpass fetch (I/O) is
 // separated from the JSTS geometry pipeline (CPU). Spike 3's CPU verdict is
 // baked in: 10 m ring sampling (halves cost, identical winners) and street
@@ -317,7 +317,7 @@ function nearSettlement(byName: WaysByName, scope: PolygonScope): WaysByName {
 export async function fetchStreetWays(
   env: Env, streetNames: string[], scope: PolygonScope, deadline?: number,
 ): Promise<WaysByName> {
-  const cacheKey = `${scope.name} ${[...streetNames].sort().join("|")}`;
+  const cacheKey = `${scope.name}\0${[...streetNames].sort().join("|")}`;
   const cached = overpassCache.get(cacheKey);
   if (cached) return cached;
 
@@ -1049,8 +1049,7 @@ export async function buildBlockPolygon(
 
 /**
  * Resolve raw street names against the streets table and build the block
- * polygon. Any failure → a null polygon with a reason, never throws (port of
- * build_polygons' catch-all).
+ * polygon. Any failure → a null polygon with a reason, never throws.
  *
  * `scope` is the settlement the location was written in, and threading it here
  * is what the 08.08.2026 review's four ★ failures turned out to be. This used to

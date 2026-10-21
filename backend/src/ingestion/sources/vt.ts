@@ -1,4 +1,4 @@
-// VarnaTraffic (varnatraffic.com) — port of varnatraffic_service.py.
+// VarnaTraffic (varnatraffic.com).
 // Accordion messages → LLM bus-line extraction → city-wide "vt" alert
 // narrowed by the API to subscribed users. null bus_lines = irrelevant;
 // ["0"] = route change with no line identified (full vt audience).

@@ -1,4 +1,4 @@
-// Port of BusLineCatalog.cs — the Varna public-transport lines users can
+// The Varna public-transport lines users can
 // subscribe to, in the canonical format the VT scraper's AI prompt produces
 // ("number + uppercase Latin letter", e.g. "31A", "209B" for "209 Бърз").
 // Source: varnatraffic.com line list.
@@ -26,4 +26,18 @@ export function normalizeBusLine(line: string | null | undefined): string | null
 
 export function isKnownBusLine(line: string): boolean {
   return LINE_SET.has(line);
+}
+
+/**
+ * A user's stored `subscribed_bus_lines` column as a list. Corrupt JSON or a
+ * non-array reads as no subscriptions, which every caller treats as "no
+ * filter" — a damaged row must not silence a user's alerts.
+ */
+export function parseBusLines(json: string | null | undefined): string[] {
+  try {
+    const parsed = JSON.parse(json ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }

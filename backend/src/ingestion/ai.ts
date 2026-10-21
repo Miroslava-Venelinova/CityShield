@@ -1,6 +1,5 @@
-// Workers AI wrapper (docs/specification.md §1.8) — port of ai_parser.py minus the debug
-// disk cache. Returns null on any failure so a source skips the message and
-// retries next tick (identical contract to the Python version).
+// Workers AI wrapper (docs/specification.md §1.8). Returns null on any failure
+// so a source skips the message and retries next tick.
 
 import type { Env } from "../env";
 import { expired, sleepWithin, withTimeout } from "../shared/deadline";

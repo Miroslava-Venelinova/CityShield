@@ -12,6 +12,7 @@
 // a busy minute could put an arbitrary number of reverse lookups on the wire
 // while forward lookups politely queued behind each other.
 
+import { getCachedGeocode, putCachedGeocode } from "../db/queries";
 import type { Env } from "../env";
 import { abortIn, msLeft } from "../shared/deadline";
 
@@ -174,8 +175,7 @@ export async function geocode(env: Env, query: string, deadline?: number): Promi
   if (!query.trim()) return null;
 
   try {
-    const cached = await env.DB.prepare("SELECT lat, lng FROM geocode_cache WHERE query = ?")
-      .bind(query).first<{ lat: number | null; lng: number | null }>();
+    const cached = await getCachedGeocode(env, query);
     if (cached) return cached.lat !== null && cached.lng !== null
       ? { lat: cached.lat, lng: cached.lng }
       : null;
@@ -208,9 +208,7 @@ export async function geocode(env: Env, query: string, deadline?: number): Promi
       }
     }
 
-    await env.DB.prepare(
-      "INSERT OR REPLACE INTO geocode_cache (query, lat, lng, resolved_at) VALUES (?, ?, ?, ?)",
-    ).bind(query, point?.lat ?? null, point?.lng ?? null, new Date().toISOString()).run();
+    await putCachedGeocode(env, query, point);
 
     return point;
   } catch (e) {
@@ -266,8 +264,8 @@ export async function reverseGeocode(
     }
     return {
       ok: true,
-      // Same preference order as NominatimGeocodingService.cs, but every
-      // level is kept so the caller can fall back down the list.
+      // Most specific level first, and every level is kept so the caller can
+      // fall back down the list.
       // `locality` sits with the other sub-settlement levels because the seed now
       // carries them: the province sweep's DISTRICT_PLACES gained `locality` so
       // that м-т (местност) names get a `regions` row at all, and ~90 of them do.

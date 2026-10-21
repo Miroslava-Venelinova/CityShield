@@ -1,9 +1,9 @@
-// /api/preferences/* — port of NotificationPreferencesController.cs +
-// NotificationPreferencesService.cs. Categories default to enabled (opt-out).
+// /api/preferences/* (docs/specification.md §1.4). Categories default to
+// enabled (opt-out).
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { BUS_LINES, isKnownBusLine, normalizeBusLine } from "../core/bus-lines";
+import { BUS_LINES, isKnownBusLine, normalizeBusLine, parseBusLines } from "../core/bus-lines";
 import * as q from "../db/queries";
 import { KNOWN_CATEGORIES } from "../shared/constants";
 import type { AppEnv } from "./middleware";
@@ -40,11 +40,7 @@ export const preferenceRoutes = new Hono<AppEnv>()
   // Must be registered before PUT /:category so "bus-lines" isn't captured.
   .get("/bus-lines", async (c) => {
     const user = await q.getUserById(c.env, c.get("userId"));
-    let selected: string[] = [];
-    try {
-      const parsed = JSON.parse(user?.subscribed_bus_lines ?? "[]");
-      if (Array.isArray(parsed)) selected = parsed.filter((x) => typeof x === "string");
-    } catch { /* corrupt JSON → empty selection */ }
+    const selected = parseBusLines(user?.subscribed_bus_lines);
     return c.json({ available: [...BUS_LINES], selected });
   })
 

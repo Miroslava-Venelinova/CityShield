@@ -11,6 +11,7 @@
 //  - Redemption is a single conditional UPDATE. Two clicks on the same link
 //    race, and only the one whose UPDATE reports a change wins.
 
+import { claimAuthToken, replaceAuthToken } from "../db/queries";
 import type { Env } from "../env";
 
 export type TokenPurpose = "verify_email" | "reset_password";
@@ -46,18 +47,8 @@ export async function issueToken(
   env: Env, userId: string, purpose: TokenPurpose, ttlMinutes: number,
 ): Promise<string> {
   const token = base64url(crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
-  const now = new Date();
-  const expires = new Date(now.getTime() + ttlMinutes * 60_000);
-
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?")
-      .bind(userId, purpose),
-    env.DB.prepare(
-      `INSERT INTO auth_tokens (token_hash, user_id, purpose, expires_at, used_at, created_at)
-       VALUES (?, ?, ?, ?, NULL, ?)`,
-    ).bind(await hashToken(token), userId, purpose, expires.toISOString(), now.toISOString()),
-  ]);
-
+  const expires = new Date(Date.now() + ttlMinutes * 60_000);
+  await replaceAuthToken(env, userId, purpose, await hashToken(token), expires.toISOString());
   return token;
 }
 
@@ -71,16 +62,7 @@ export async function issueToken(
 export async function consumeToken(
   env: Env, token: string, purpose: TokenPurpose,
 ): Promise<string | null> {
-  const hash = await hashToken(token);
-  const now = new Date().toISOString();
-
   // Claim and read in one round trip. `RETURNING` makes the claim atomic: a
   // second concurrent redemption matches no row and gets nothing back.
-  const claimed = await env.DB.prepare(
-    `UPDATE auth_tokens SET used_at = ?
-     WHERE token_hash = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?
-     RETURNING user_id`,
-  ).bind(now, hash, purpose, now).first<{ user_id: string }>();
-
-  return claimed?.user_id ?? null;
+  return claimAuthToken(env, await hashToken(token), purpose);
 }

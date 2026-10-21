@@ -1,6 +1,6 @@
-// Shared crawler for id-numbered listing sources (vik, heating) — port of
-// common.py crawl_id_listing with the §1.7 cron-budget additions: a deadline
-// guard and a per-tick message cap. Cursor semantics are preserved verbatim:
+// Shared crawler for id-numbered listing sources (vik, heating), with the §1.7
+// cron-budget limits: a deadline guard and a per-tick message cap. Cursor
+// semantics:
 // process oldest-first, advance last_id only past successes, a failed message
 // blocks newer ones (a retried run must not re-notify), a persistently
 // failing message ages off the listing.

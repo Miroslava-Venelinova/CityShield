@@ -75,8 +75,8 @@ app.route("/api/health", healthRoutes);
 
 app.route("/privacy", privacyRoutes);
 
-// Uniform 500 without stack traces — parity with the production exception
-// handler in Program.cs.
+// Uniform 500 without stack traces: an error's text can carry SQL or
+// internals, and the app only needs to know the call failed.
 app.onError((err, c) => {
   console.error(`Unhandled error on ${c.req.method} ${c.req.path}: ${err}`);
   return c.json({ error: "An unexpected error occurred." }, 500);
