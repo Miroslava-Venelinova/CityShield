@@ -8,6 +8,7 @@ diagnose something live, start with
 
 | Date | What broke | Duration | Found by |
 |---|---|---|---|
+| ~09.2026–26.10.2026 | Polygons: 1 of 47 built, Overpass down | ~2 months | The 26.10 polygon review |
 | 28.08–31.08.2026 | All ingestion: CPU kill in `cheerio.load()` | ~21 h, then fixed 31.08 | A person looking |
 | ~13.08–31.08.2026 | heating ingestion only, silently | ~18 days | Found while fixing the 28.08 outage |
 | 02.08–10.08.2026 | Seed: 420 streets from other provinces; с. Припек deleted | 8 days | The 08.08 alert review |
@@ -24,6 +25,33 @@ there is a heartbeat (`GET /api/health`), but nothing pings it yet
 ([open-questions.md](open-questions.md)).
 
 ---
+
+## 09–10.2026: polygons stop being built (Overpass)
+
+**Symptom.** 1 of 32 polygons built in September and 0 of 15 in October;
+every other block alert went out as a pin. Nothing alerted: each failure was
+recorded correctly as `polygon_failed` with its reason, and nobody was reading
+them.
+
+**Cause.** 51 of the 54 failures since August read `Overpass HTTP 521` (a few
+`504` and one timeout). The endpoint failover added in August had nothing to
+fail over to — `OVERPASS_FALLBACK_URL` was never set, because the self-hosted
+instance is not reachable from the edge. On 26.10 the public mirrors measured
+21–33 s when they answered at all, against a 15 s budget.
+
+**Fix** (26.10, branch `feat/street-geometry-d1`). The geometry is seeded: the
+province sweep stores every way of every seeded street, `street_ways` holds
+it in D1 (migration 0020), and the builder makes one D1 read. Rebuilt from the
+stored geometry, the same 48 street sets reach the same 48 verdicts the live
+query did; 30 of the alerts that failed on Overpass would have built a ring.
+
+**Lessons.**
+- A dependency the feature cannot work without is not "best-effort" just
+  because the code degrades gracefully. Graceful degradation is what hid this
+  for two months.
+- Recording the reason (`polygon_failed`, from the 08.2026 incident below) made
+  the diagnosis one `SELECT`. Something still has to read it — see
+  [open-questions.md](open-questions.md).
 
 ## 28.08.2026: ingest dies again at `exceededCpu` (cheerio)
 

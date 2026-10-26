@@ -8,10 +8,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "seed:generate": "node seeds/generate-seed.mjs",
-    "db:local": "wrangler d1 migrations apply cityshield-db --local && node seeds/generate-seed.mjs && wrangler d1 execute cityshield-db --local --file=seeds/seed.sql",
-    "db:remote": "wrangler d1 migrations apply cityshield-db --remote && node seeds/generate-seed.mjs && wrangler d1 execute cityshield-db --remote --file=seeds/seed.sql",
-    "db:reseed:local": "wrangler d1 migrations apply cityshield-db --local && node seeds/generate-seed.mjs && wrangler d1 execute cityshield-db --local --file=seeds/reseed-pre.sql && wrangler d1 execute cityshield-db --local --file=seeds/seed.sql && wrangler d1 execute cityshield-db --local --file=seeds/reseed-post.sql",
-    "db:reseed:remote": "wrangler d1 migrations apply cityshield-db --remote && node seeds/generate-seed.mjs && wrangler d1 execute cityshield-db --remote --file=seeds/reseed-pre.sql && wrangler d1 execute cityshield-db --remote --file=seeds/seed.sql && wrangler d1 execute cityshield-db --remote --file=seeds/reseed-post.sql"
+    "db:local": "node seeds/apply.mjs --local",
+    "db:remote": "node seeds/apply.mjs --remote",
+    "db:reseed:local": "node seeds/apply.mjs --local --reseed",
+    "db:reseed:remote": "node seeds/apply.mjs --remote --reseed"
   },
   "dependencies": {
     "hono": "^4.8.0",

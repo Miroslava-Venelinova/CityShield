@@ -110,7 +110,7 @@ public utility announcements, not personal data; kept for 90 days.</p>
 (the service is API-only).</p>
 
 <p>Map data © OpenStreetMap contributors. Geocoding by Nominatim, street
-geometry via Overpass API.</p>
+geometry from OpenStreetMap, stored with our reference data.</p>
 </div>
 
 </body>

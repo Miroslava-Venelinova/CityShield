@@ -136,6 +136,7 @@
         <div><span id="sweepSettlements">0</span><small>settlements</small></div>
         <div><span id="sweepDistricts">0</span><small>districts</small></div>
         <div><span id="sweepStreets">0</span><small>streets</small></div>
+        <div><span id="sweepWays">0</span><small>street ways (geometry)</small></div>
       </div>
       <div id="sweepSkipped" class="muted hide" style="font-size:12px;margin-top:10px"></div>
     </div>
@@ -456,7 +457,17 @@ function storeLines(store, compare) {
       : "";
     return `<div><strong>${target}</strong>: ${s.total} entries, ` +
       `<span class="${s.with_coords === s.total ? "ok" : "warn"}">${s.with_coords} with coordinates</span>${extra}</div>${breakdown}`;
-  }).join("");
+  }).join("") + waysLine(store);
+}
+
+// The polygon builder reads street geometry from D1 and nowhere else, so a
+// street with no ways here is a street no block can be drawn along.
+function waysLine(store) {
+  const w = store.street_ways;
+  if (!w) return "";
+  const streets = store.targets.streets?.total ?? 0;
+  return `<div><strong>street_ways</strong>: ${w.ways} ways for ` +
+    `<span class="${w.streets >= streets ? "ok" : "warn"}">${w.streets} of ${streets} streets</span></div>`;
 }
 
 async function refreshStatus() {
@@ -534,6 +545,7 @@ function renderSweep(s) {
   $("sweepSettlements").textContent = s.settlements ?? 0;
   $("sweepDistricts").textContent = s.districts ?? 0;
   $("sweepStreets").textContent = s.streets ?? 0;
+  $("sweepWays").textContent = s.ways ?? 0;
 
   const skipped = s.skipped || [];
   const dropped = s.dropped || [];
@@ -581,7 +593,7 @@ async function pollSweep() {
   } else {
     message(
       `Sweep finished: ${s.settlements} settlements, ${s.districts} districts, ` +
-      `${s.streets} streets merged into output/.`, "ok");
+      `${s.streets} streets and ${s.ways ?? 0} street ways merged into output/.`, "ok");
     // The counts below the fold are stale the moment the sweep writes, and the
     // next step reads them.
     if (s.seeds) renderSeedStatus(s.seeds);
@@ -943,11 +955,15 @@ async function promote() {
   const button = $("promoteBtn");
   busy(button, true, "Merging…");
   try {
-    const { reports } = await api("/api/promote", {
+    const { reports, ways } = await api("/api/promote", {
       overwrite: $("promoteOverwrite").checked,
     });
     $("mergeCard").classList.remove("hide");
-    $("mergeReport").innerHTML = reports.map((r) => `
+    $("mergeReport").innerHTML = (ways
+      ? `<div class="msg"><strong>${ways.path}</strong>: geometry for ${ways.settlements} ` +
+        `settlement(s) replaced — ${ways.streets} streets, ${ways.ways} ways` +
+        `${ways.removed ? `, ${ways.removed} street(s) no longer in OSM dropped` : ""}.</div>`
+      : "") + reports.map((r) => `
       <div class="msg"><strong>${r.file}</strong> now holds ${r.total} entries
       (${r.without_coords} still without coordinates).</div>
       <div class="stat">

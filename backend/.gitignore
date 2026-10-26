@@ -2,4 +2,5 @@ node_modules/
 .wrangler/
 .dev.vars
 seeds/seed.sql
+seeds/seed.ways.*.sql
 dist/

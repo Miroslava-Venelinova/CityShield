@@ -114,7 +114,7 @@
       <p class="sub">
         Runs the Worker's own <code>buildBlockPolygon</code> — bundled straight out of
         <code>backend/src</code>, never reimplemented — and draws every stage of it:
-        the ways Overpass returned, what the clip window kept, the road bands the blocks are
+        each street's stored ways, what the clip window kept, the road bands the blocks are
         cut from, and each enclosed area with the share of its boundary every street accounts for.
         Knobs override the constants ingestion defaults to, so a threshold can be argued about
         against geometry rather than against a rerun test suite.
@@ -150,14 +150,14 @@
           <button id="btnFit" class="ghost">Fit</button>
         </div>
 
-        <label for="fetchName">Fetch fresh ways from Overpass <span class="muted">— save as</span></label>
+        <label for="fetchName">Load these streets' ways from the seed <span class="muted">— save as</span></label>
         <div class="row tight">
           <input id="fetchName" placeholder="levski-2" spellcheck="false">
-          <button id="btnFetch" class="ghost" style="flex:0 0 96px">Fetch</button>
+          <button id="btnFetch" class="ghost" style="flex:0 0 96px">Load</button>
         </div>
         <p class="hint">
-          One request, cached to disk; every build afterwards reads the file. Overpass rate-limits,
-          so re-fetching the same streets to try another threshold is the one thing to avoid.
+          The geometry ingestion reads (<code>backend/seeds/street_ways.json</code>, loaded into D1),
+          through the Worker's own loader, saved as a document every build afterwards reads.
         </p>
       </div>
 
@@ -355,17 +355,17 @@ function renderSources(selected) {
   pick.innerHTML = config.sources.map((s) =>
     `<option value="${esc(s.id)}">${s.kind === "fixture" ? "fixture" : "cached"} · ${esc(s.name)}
       — ${s.size_kb} KB, ${esc(s.saved)}</option>`).join("")
-    || '<option value="">nothing fetched yet</option>';
+    || '<option value="">nothing loaded yet</option>';
   if (want && config.sources.some((s) => s.id === want)) pick.value = want;
   showSourceHint();
 }
 
 function showSourceHint() {
   const source = config.sources.find((s) => s.id === $("source").value);
-  $("sourceHint").innerHTML = !source ? "Fetch a set of ways below to get started."
+  $("sourceHint").innerHTML = !source ? "Load a set of ways below to get started."
     : source.kind === "fixture"
       ? `<code>${esc(source.path)}</code> — a checked-in fixture; the test suite runs on this one.`
-      : `<code>${esc(source.path)}</code> — a cached fetch. Promote it to a fixture to keep it.`;
+      : `<code>${esc(source.path)}</code> — a loaded document. Promote it to a fixture to keep it.`;
 }
 
 function renderPresets() {
@@ -395,7 +395,7 @@ async function build() {
   if (busy) return;
   const streets = $("streets").value;
   if (!streets.trim()) return message("Type some street names first.", "warn");
-  if (!$("source").value) return message("No ways to build from — fetch some first.", "warn");
+  if (!$("source").value) return message("No ways to build from — load some first.", "warn");
 
   setBusy(true, "Building…");
   try {
@@ -419,9 +419,9 @@ async function fetchWays() {
   if (busy) return;
   const name = $("fetchName").value.trim();
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
-    return message("Give the fetch a name: lowercase letters, digits and hyphens.", "warn");
+    return message("Give the document a name: lowercase letters, digits and hyphens.", "warn");
 
-  setBusy(true, "Asking Overpass for these streets — one request, then it is cached…");
+  setBusy(true, "Loading these streets' stored ways…");
   let fetched = null;
   try {
     fetched = await call("/api/fetch", {
@@ -553,7 +553,7 @@ function renderStreets() {
   $("streetTable").innerHTML = `
     ${missed.length ? `<p class="msg warn">Unresolved, so not fetched or drawn:
       ${missed.map((r) => `<code>${esc(r.raw)}</code>`).join(", ")} —
-      no seeded street matched. Overpass matches names exactly, so these could only return nothing.</p>` : ""}
+      no seeded street in Варна matched, so they have no stored geometry to load.</p>` : ""}
     <table>
       <tr><th></th><th>Street</th><th class="num">Ways</th><th class="num">Points</th>
           <th class="num">Kept</th><th>Extent</th></tr>
@@ -561,9 +561,9 @@ function renderStreets() {
         const detail = perStreet.get(s.name);
         const kept = detail ? detail.kept.length : 0;
         const dropped = detail ? detail.dropped.length : 0;
-        // A street that spans kilometres is the province-wide Overpass area
-        // showing up: the query matches every administrative Варна, so a common
-        // name arrives with fragments from other settlements attached.
+        // A street that spans kilometres is worth a look: the stored ways are
+        // filed per settlement, so this is either a genuinely long road or a
+        // document saved before migration 0020 from a province-wide query.
         const wide = s.spanKm && Math.max(s.spanKm.x, s.spanKm.y) > 5;
         return `<tr class="pick ${focus && focus.kind === "street" && focus.index === i ? "on" : ""}"
                     data-street="${i}">
@@ -581,9 +581,9 @@ function renderStreets() {
     </table>
     <p class="hint">
       <strong>Kept</strong> is how many of a street's fragments survived the clip window;
-      <code>−n</code> is how many were dropped. An extent measured in kilometres is the
-      province-wide Overpass area: the query matches every administrative <em>Варна</em>, so a
-      common street name arrives with same-named stretches from other settlements attached.
+      <code>−n</code> is how many were dropped. An extent measured in kilometres is a long road,
+      or a document fetched live before the geometry was stored, when a common street name could
+      arrive with same-named stretches from other settlements attached.
     </p>`;
 
   $("streetTable").querySelectorAll("[data-street]").forEach((row) =>
@@ -925,10 +925,10 @@ async function init() {
   renderPresets();
   renderLayers();
   $("resolveHint").innerHTML = config.seeded
-    ? `Same matcher and threshold ingestion uses, against <code>${esc(config.seed_path)}</code>.
-       Turn it off to type OSM names directly.`
+    ? `Same matcher, settlement scope and threshold ingestion uses, against
+       <code>${esc(config.seed_path)}</code>. Turn it off to type seeded names verbatim.`
     : `<span class="warn">No street seed at <code>${esc(config.seed_path)}</code></span> —
-       names go to Overpass exactly as typed.`;
+       names are used exactly as typed, and only fixtures can be built from.`;
   if (!config.seeded) $("resolve").checked = false;
   message("");
 }

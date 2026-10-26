@@ -25,17 +25,21 @@ This is where that argument happens.
 
 ## It is not a reimplementation
 
-`entry.ts` re-exports `buildBlockPolygon`, `fetchStreetWays`, `groupWaysByName` and `bestMatch`
+`entry.ts` re-exports `buildBlockPolygon`, `loadStreetWays`, `groupWaysByName` and `matchStreet`
 straight out of `backend/src`; esbuild bundles it; `run.mjs` calls them. There is no second copy
-of the geometry, the fuzzy matcher or the Overpass query, so a polygon you judge here is the
-polygon ingestion would have built from the same ways and the same knobs.
+of the geometry, the matcher or the geometry read, so a polygon you judge here is the polygon
+ingestion would have built from the same ways and the same knobs.
 
 The bundle is rebuilt automatically whenever anything under `backend/src` changes, so editing a
 constant in `polygon.ts` and pressing **Build** already runs the new code. The UI says
 `Rebuilt the Worker bundle` when that happens.
 
-One thing the Worker does that this deliberately does not: resolve names against D1. It uses
-`tools/osm-seed-builder/output/streets.json`, the same data the seed writes into the table.
+One thing the Worker does that this deliberately does not: read D1. It reads
+`backend/seeds/streets.json` and `street_ways.json` — the files `generate-seed.mjs` loads into
+the `streets` and `street_ways` tables — and hands `loadStreetWays` a stand-in for the D1 binding
+that answers its one query from them. Before 26.10.2026 it resolved with an unscoped `bestMatch`
+against the seed tool's `output/`, while ingestion had used the settlement-scoped `matchStreet`
+since August; a name could resolve differently here than in production.
 
 CPU it does report, but only as a shape — see **worst burst** below. A setting that looks fine
 in Node can still be too slow on a cold isolate; `wrangler tail`'s `cpuTime` settles that.
@@ -43,17 +47,18 @@ in Node can still be too slow on a cold isolate; `wrangler tail`'s `cpuTime` set
 ## The loop
 
 1. **Street names** — paste them as the alert lists them, one per line. *Resolve against the
-   street seed* runs `bestMatch` at `POLYGON_RESOLVE_THRESHOLD`, exactly as
+   street seed* runs `matchStreet` scoped to Варна at `POLYGON_RESOLVE_THRESHOLD`, exactly as
    `buildPolygonForStreets` does, so `ул. Йордан Йовков` finds `Йордан Йовков`. Names that
-   resolve to nothing are dropped and called out — Overpass matches `name` exactly, so they
-   could only ever have returned nothing.
+   resolve to nothing are dropped and called out — stored geometry is keyed by street row, so
+   they have none.
 2. **Ways** — either a checked-in fixture from `backend/test/fixtures/` (what the test suite
-   runs on) or something this tool fetched. **Fetch** goes to Overpass once and writes the
-   response to `cache/`; every build afterwards reads the file. Overpass rate-limits, so
-   re-fetching the same streets to try another threshold is the one thing to avoid.
+   runs on) or something this tool loaded. **Load** reads the streets' stored geometry — what
+   ingestion reads — through the Worker's own `loadStreetWays` (spelling variants folded) and
+   writes it to `cache/` in the fixtures' Overpass shape; every build afterwards reads the file.
+   No network: refreshing the geometry itself is a seed sweep (`docs/runbook.md`).
 3. **Build** (<kbd>b</kbd>, or <kbd>Ctrl</kbd>+<kbd>Enter</kbd> from the street box).
 4. **Read the map**, move a knob, build again.
-5. **To fixture** copies a cached fetch into `backend/test/fixtures/overpass-<name>.json`, where
+5. **To fixture** copies a loaded document into `backend/test/fixtures/overpass-<name>.json`, where
    `test/polygon.spec.ts` can reach it. That is how a bad polygon becomes a regression test.
 
 ## What the map shows
@@ -61,7 +66,7 @@ in Node can still be too slow on a cold isolate; `wrangler tail`'s `cpuTime` set
 | Layer | |
 |---|---|
 | **Road bands** | Each centreline widened by the road half-width and unioned. The blocks are this shape's *holes*, which is why a dual carriageway can no longer produce one. |
-| **Street centrelines** | What Overpass returned and the clip kept, one colour per street, matching the table. |
+| **Street centrelines** | The stored ways the clip kept, one colour per street, matching the table. |
 | **Clipped-off fragments** | Grey dashed: returned but dropped as too far away. Usually a same-named street in another settlement. |
 | **Clip window** | The box everything is clipped to — the shortest street's extent grown to reach every other street, plus the margin. |
 | **Enclosed areas** | Every hole in the road network, coloured by verdict: green won, amber lost the sort, red was bounded too heavily by one street, grey was bounded by fewer than two. |
@@ -103,16 +108,14 @@ Worker ships** — when a setting turns out to be right, edit `polygon.ts` and r
 
 ## The street table
 
-`Ways` and `Points` are what Overpass returned per name; `Kept` is how many fragments survived
+`Ways` and `Points` are what the document holds per name; `Kept` is how many fragments survived
 the clip, with `−n` for the dropped ones.
 
-**`Extent` is the one to watch.** It is flagged amber past 5 km, because the Overpass query scopes
-itself with `area["name"="Варна"]["boundary"="administrative"]` and nothing pins the admin
-level — so it matches the *province*, not the city, and a common street name arrives with
-same-named stretches from settlements up to 25 km away. `Железни врата` comes back spanning
-11 × 26 km, `Преслав` 39 × 10 km. The clip window is a band-aid over that, not a feature, and
-which fragment happens to be "shortest" decides where the clip centres. Focus a street to see it:
-the map fits its dropped fragments too, which is what makes the spread obvious.
+**`Extent`** is flagged amber past 5 km. Stored geometry is filed per settlement, so from a
+**Load** this is a genuinely long road. Older documents fetched live from Overpass could arrive
+with same-named stretches from other settlements — the query's area matched the province —
+which is what the flag was for: `Железни врата` spanned 11 × 26 km, `Преслав` 39 × 10 km.
+Focus a street to see it: the map fits its dropped fragments too.
 
 ## Presets
 
@@ -130,18 +133,17 @@ run.mjs         one job in, one JSON document out; a fresh process per run
 app.py          the server: bundles, runs Node, holds the cache and the presets
 index.html      the UI and the hand-rolled map
 presets.json    tracked: the five fitted cases
-cache/          gitignored: fetched Overpass responses
+cache/          gitignored: loaded way documents (Overpass `out geom` shape)
 .build/         gitignored: the esbuild bundle
 ```
 
-A fresh process per run is deliberate: the module-scope Overpass cache and the fuzzy matcher's
-gram tables are rebuilt each time, so a run can never be influenced by the previous one's state.
+A fresh process per run is deliberate: the fuzzy matcher's gram tables are rebuilt each time,
+so a run can never be influenced by the previous one's state.
 It costs ~200 ms and buys the ability to trust a comparison between two runs.
 
 ## Why the loopback guards
 
 Same trust model as `tools/alert-review` and `tools/osm-seed-builder`: the Host header is pinned
-to loopback and every call carries the printed token. This process runs Node and can reach
-Overpass on request, so no other page in your browser gets to drive it. Street names travel to
-Overpass only when you press **Fetch**; the browser fetches map tiles, and nothing else leaves
-the machine.
+to loopback and every call carries the printed token. This process runs Node over the repo,
+so no other page in your browser gets to drive it. Nothing it does leaves the machine; the
+browser fetches map tiles.

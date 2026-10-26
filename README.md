@@ -53,7 +53,7 @@ Workers-AI binding, and one push client.
   official sources ───► │  scheduled() every 15 min                        fetch()  (Hono router)         │
   (ViK, ERP Sever,      │   scrape (HTMLRewriter) → parse (Workers AI,     ┌──────────────────────────┐   │
    Veolia, VarnaTraffic)│   JSON schema) → geocode (Nominatim) → polygon   │ /api/auth  /api/alerts   │   │ ◄── React Native app
-                        │   (Overpass + JSTS) → store → match users →      │ /api/preferences /privacy│   │      (frontend/)
+                        │   (D1 geometry + JSTS) → store → match users →   │ /api/preferences /privacy│   │      (frontend/)
                         │   notify (OneSignal)                             │                          │   │
                         │                        │                         └──────────────────────────┘   │
                         │                        └──────────────► Cloudflare D1 (SQLite) ◄────────────────┘
@@ -64,8 +64,8 @@ Workers-AI binding, and one push client.
 - **Ingestion** (`backend/src/ingestion/`) — the `scheduled` handler runs every 15
   minutes (plus a daily cleanup). One module per source scrapes new announcements,
   Workers AI parses them into structured data in JSON-schema mode, Nominatim
-  geocodes them, and an Overpass + [JSTS](https://github.com/bjornharrtell/jsts)
-  pipeline turns the affected streets into a polygon. Crawl state lives in D1, and
+  geocodes them, and a [JSTS](https://github.com/bjornharrtell/jsts) pipeline turns
+  the affected streets into a polygon, from OSM street geometry seeded into D1. Crawl state lives in D1, and
   the cursor semantics guarantee an alert is delayed rather than lost or duplicated.
 - **API** (`backend/src/api/`) — a [Hono](https://hono.dev) router handling JWT
   auth with rotating refresh-token sessions, user location, alert retrieval for the
@@ -85,7 +85,7 @@ Workers-AI binding, and one push client.
 
 | Component | Technologies |
 |---|---|
-| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, Rate Limiting bindings, HTMLRewriter, JSTS, Zod, Nominatim & Overpass geocoding, OneSignal |
+| Backend | Cloudflare Workers, TypeScript, Hono, D1 (SQLite), Workers AI (`@cf/qwen/qwen3-30b-a3b-fp8`, JSON-schema mode), Cron Triggers, Rate Limiting bindings, HTMLRewriter, JSTS, Zod, Nominatim geocoding, OSM street geometry (seeded via Overpass), OneSignal |
 | Mobile app | React Native 0.85, React 19, React Navigation, Leaflet in a WebView (OpenStreetMap tiles), OneSignal |
 | Tooling | Wrangler, Vitest (`@cloudflare/vitest-pool-workers`), GitHub Actions |
 
@@ -106,7 +106,7 @@ CityShield/
 │   └── spikes/               Phase 0 de-risking spikes + RESULTS.md
 ├── frontend/                 React Native Android app (see frontend/SETUP.md)
 ├── tools/
-│   ├── osm-seed-builder/     Local UI that builds the seed data from Overpass
+│   ├── osm-seed-builder/     Local UI that builds the seed data and street geometry from Overpass
 │   ├── alert-review/         Local UI for judging what the pipeline stored
 │   ├── polygon-tester/       Local UI that draws every stage of the block builder
 │   └── push-tester/          Local UI that fires a test push at one user or everyone

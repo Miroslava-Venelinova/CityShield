@@ -211,3 +211,73 @@ describe("seed.sql regions, keyed by (name, settlement)", () => {
     expect(parent!.settlement_id).toBeNull();
   });
 });
+
+/**
+ * Mirrors insertStreetWays() in seeds/generate-seed.mjs (migration 0020).
+ *
+ * Ways are keyed to their street by NAME — street ids differ between local and
+ * remote D1, exactly as region ids do — and the street to its settlement the
+ * same way, pinned to the settlement-class row.
+ */
+const ways = (name: string, settlementName: string, lines: number[][][]) =>
+  env.DB.exec(
+    `INSERT INTO street_ways (street_id, coords) ` +
+    `SELECT s.id, w.column1 FROM (VALUES ` +
+    lines.map((l) => `('${JSON.stringify(l)}')`).join(",") +
+    `) AS w JOIN streets s ON s.street_name = '${name.replace(/'/g, "''")}' ` +
+    `JOIN regions r ON r.id = s.region_id ` +
+    `AND r.region_name = '${settlementName.replace(/'/g, "''")}' AND r.settlement_id IS NULL;`);
+
+const waysOf = (name: string, settlementName: string) =>
+  env.DB.prepare(
+    `SELECT w.coords FROM street_ways w JOIN streets s ON s.id = w.street_id
+       JOIN regions r ON r.id = s.region_id
+      WHERE s.street_name = ? AND r.region_name = ?`)
+    .bind(name, settlementName).all<{ coords: string }>().then((r) => r.results);
+
+describe("seed street ways", () => {
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM street_ways").run();
+    await apply([["ул. Тича", "Варна", 43.2166, 27.9166], ["ул. Тича", "Аврен", 43.1138, 27.6658]]);
+  });
+
+  // The whole point of keying by settlement: a name that repeats across towns
+  // must not hand one town's road to the other's block.
+  it("files ways under the named settlement's street, not a like-named one elsewhere", async () => {
+    await ways("ул. Тича", "Аврен", [[[27.66, 43.11], [27.67, 43.12]]]);
+
+    expect(await waysOf("ул. Тича", "Аврен")).toHaveLength(1);
+    expect(await waysOf("ул. Тича", "Варна")).toHaveLength(0);
+    expect(JSON.parse((await waysOf("ул. Тича", "Аврен"))[0]!.coords)).toEqual(
+      [[27.66, 43.11], [27.67, 43.12]]);
+  });
+
+  // Without `AND r.settlement_id IS NULL`, a district named like a settlement
+  // (legal since migration 0017) would be a second match for the region lookup.
+  it("never files ways under a district that shares the settlement's name", async () => {
+    await district("Аврен", "Варна", 43.21, 27.91);
+    await ways("ул. Тича", "Аврен", [[[27.66, 43.11], [27.67, 43.12]]]);
+
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM street_ways").first<{ n: number }>())!.n)
+      .toBe(1);
+  });
+
+  // The generated file opens with DELETE FROM street_ways, which is what keeps
+  // re-applying it from doubling every way.
+  it("is idempotent when applied the way the generated file applies it", async () => {
+    for (let i = 0; i < 2; i++) {
+      await env.DB.exec("DELETE FROM street_ways;");
+      await ways("ул. Тича", "Варна", [[[27.91, 43.21], [27.92, 43.22]], [[27.92, 43.22], [27.93, 43.23]]]);
+    }
+    expect(await waysOf("ул. Тича", "Варна")).toHaveLength(2);
+  });
+
+  // A reseed deletes every street (seeds/reseed-pre.sql); a way must not be
+  // able to outlive its street, nor block the delete.
+  it("goes with its street when the street is deleted", async () => {
+    await ways("ул. Тича", "Варна", [[[27.91, 43.21], [27.92, 43.22]]]);
+    await env.DB.prepare("DELETE FROM streets").run();
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM street_ways").first<{ n: number }>())!.n)
+      .toBe(0);
+  });
+});

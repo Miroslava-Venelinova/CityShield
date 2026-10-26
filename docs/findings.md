@@ -77,6 +77,45 @@ but no user could ever be registered in one.
   The builder's real success rate is about 80%, against an observed 50%.
 - The self-hosted instance binds to `127.0.0.1`, which a Worker on the edge
   cannot reach. Using it from production would need a Cloudflare Tunnel.
+- **The Worker no longer calls Overpass** (26.10.2026, migration 0020). Before
+  that, 51 of the 54 polygon failures since August were Overpass errors —
+  `521` almost throughout September and October, never the "at capacity" page
+  a home connection got. 1 of 32 polygons built in September, 0 of 15 in
+  October.
+- **The mirrors are no substitute** (26.10.2026, 15:59 UTC, the production
+  query for a four-street block, from a home connection): `overpass-api.de` and
+  `lz4.` answered `502` "at capacity" in 0.3 s on one run and 89 ways in 33 s on
+  the next; `maps.mail.ru` 89 ways in 21 s both times; `z.overpass-api.de`,
+  `overpass.kumi.systems` and `overpass.private.coffee` timed out at 40 s;
+  `overpass.openstreetmap.ru` refused the connection. The builder's budget was
+  15 s. What a Worker sees was not measured: `wrangler dev --remote` could not
+  create a preview session on the account.
+
+### Stored geometry reproduces the live query
+Measured 26.10.2026 over the 48 distinct street sets of the 08–10.2026 polygon
+alerts, rebuilding each from `street_ways` and from the old live query against
+the same local Overpass data:
+- The ways are **byte-identical**: the same ways, the same coordinates at 7
+  decimals, in the same order within each street. Rounding to 6 decimals
+  (~0.1 m) looked harmless and moved block areas by up to 0.24%.
+- **Every verdict matches**: the same 28 sets build, the same 20 fail, for the
+  same reasons.
+- Areas match exactly when the streets arrive in the same order, and differ by
+  up to 0.3% otherwise: `buildBlockPolygon` is order-sensitive in the last
+  digits (one block: 93,458 vs 93,474 m² for the same ways in two street
+  orders). Never a different verdict, but it is why `getStreetWays` orders its
+  read.
+- The geometry query must take **every** `highway` class, not the seed's street
+  filter: the builder was fitted against `["highway"]`, and filtering drops
+  link ramps that close real corners (Пеячевич meets Варненчик through a
+  `primary_link` named `Акад. Курчатов`).
+
+### Local D1 cannot take a file much over 1 MB
+`wrangler d1 execute --local --file` on the 1.6 MB of street ways hung for five
+minutes, printed `HashIndex detected hash table inconsistency` from workerd and
+failed with `Body Timeout Error` (wrangler 4.36). The same statements in two
+halves of 0.9 and 0.7 MB applied in 2 s each, and the existing 0.85 MB
+`seed.sql` in 3 s. Hence the ≤700 KB `seed.ways.<n>.sql` chunks.
 
 ## Nominatim
 
@@ -195,7 +234,10 @@ Each looked like a fix and was not.
 | Tried or proposed | Why it does not work |
 |---|---|
 | Seed the twelve missing `м-т` names | Neither OSM nor Nominatim has them (above) |
-| Space out glued prefixes in the seed (`ул.Никола` → `ул. Никола`) | The stored string is the Overpass key, so the edit would match zero ways. `parseName` already handles the glued form |
+| Space out glued prefixes in the seed (`ул.Никола` → `ул. Никола`) | The stored string is the OSM name the sweep files its geometry under, so the edit would orphan the street's ways. `parseName` already handles the glued form |
+| Add a second public Overpass mirror as failover | Measured 26.10.2026: the mirrors that answered took 21–33 s against a 15 s budget, and what a Worker would see from them is unknown. The geometry is stored in D1 instead (§1.9) |
+| Self-host Overpass for production | It needs a machine on around the clock, plus a tunnel to reach it from the edge. The geometry changes on the scale of years; seeding it costs nothing at runtime |
+| Store street geometry at 6 decimals | Moved block areas by up to 0.24% against the live query the builder was fitted on. 7 is what Overpass returns |
 | `DELETE FROM geocode_cache` after a rule change | Cached answers pass through the same checks. Nominatim would return the identical row, at the cost of a throttle slot |
 | Learn OSM spelling variants by similarity | The variants score lower than genuinely different places |
 | Make cheerio cheaper by slicing its input, or warming it | The cold cost is a fixed floor |

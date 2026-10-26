@@ -127,9 +127,21 @@ well inside the 15-minute cadence, and two ticks never write one cursor at
 once. **Ref:** §1.7.
 
 ### A polygon is an enhancement
-Building is skipped when less than 6 s of budget remain, and any exception
+Building is skipped when less than 1 s of budget remain, and any exception
 during building yields a pin instead. A polygon failure never fails a
 message. **Ref:** §1.7, §1.9.
+
+### Street geometry is seeded, never fetched at ingest time
+The polygon builder reads `street_ways` from D1 (migration 0020) and makes no
+external call. Asking the public Overpass API mid-tick made a shared free
+service the availability of the feature: 1 of 32 polygons built in 09.2026 and
+0 of 15 in 10.2026, every other alert falling back to a pin. The mirrors
+measured 21–33 s against a 15 s budget, and self-hosting needs a machine on
+around the clock. Street geometry changes on the scale of years, so the
+province sweep stores it with the street names. Do not reintroduce a live
+fetch as a "fallback": a stored street without ways is a sweep gap, and the
+fix is a re-sweep ([runbook](runbook.md#refresh-street-geometry)).
+**Ref:** §1.9, [findings.md](findings.md#stored-geometry-reproduces-the-live-query).
 
 ---
 
@@ -142,7 +154,8 @@ street settlements, because autoincrement ids differ between the local and
 remote databases. **Ref:** §1.2.
 
 ### Seed names are stored exactly as OSM has them
-The stored name goes into the Overpass regex. Rewriting
+The stored name is what the sweep files the street's geometry under (it used
+to go into the Overpass regex). Rewriting
 `ул.Никола Вапцаров` to `ул. Никола Вапцаров` would match zero ways.
 `parseName` already reads glued prefixes. **Rejected:** "normalising" the
 seed (accuracy F4's proposed edit, which was not made). The one legitimate

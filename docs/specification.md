@@ -82,7 +82,7 @@ CityShield/
 │   ├── test/                   vitest suite (22 files, 359 tests) + fixtures
 │   └── spikes/                 Phase 0 de-risking spikes + RESULTS.md
 ├── frontend/                   React Native Android app
-├── tools/osm-seed-builder/     local UI that builds reference data from Overpass
+├── tools/osm-seed-builder/     local UI that builds reference data (and street geometry) from Overpass
 ├── tools/push-tester/          local UI that fires a test push
 ├── tools/alert-review/         local UI for judging what the pipeline stored
 ├── tools/polygon-tester/       local UI that draws what the block builder cut
@@ -122,12 +122,11 @@ design — nothing is correct only because a cache is warm:
 | Cache | TTL / bound | Purpose |
 |---|---|---|
 | `regions` / `streets` rows | 6 h, single-flight | Fuzzy matching runs on nearly every alert path (§1.3) |
-| Overpass responses | 50 entries, keyed by settlement + sorted street list | Polygon rebuilds of the same block (§1.9). The settlement is in the key because keying on street names alone served one town's geometry for another's |
 | Nominatim slot chain | — | Serializes outbound geocodes ≥1,100 ms apart (§1.5) |
 
 ### 1.2 Data model (D1)
 
-SQLite, migrations `0001`–`0015`. Current shape:
+SQLite, migrations `0001`–`0020`. Current shape:
 
 ```sql
 regions ( id INTEGER PK, region_name TEXT UNIQUE, lat REAL, lng REAL )
@@ -135,6 +134,8 @@ streets ( id INTEGER PK, street_name TEXT, lat REAL, lng REAL,
           region_id INTEGER NOT NULL REFERENCES regions(id),   -- its settlement
           UNIQUE(street_name, region_id) )
 region_aliases ( alias TEXT PK, region_id → regions ON DELETE CASCADE )  -- §1.3
+street_ways ( id INTEGER PK, street_id → streets ON DELETE CASCADE,
+              coords TEXT )        -- JSON [[lon, lat], …], one OSM way — §1.9
 
 users (
   user_id TEXT PK,                 -- uuid v4; also the OneSignal external_id
@@ -185,6 +186,7 @@ filter on the alert fan-out path costs a full table scan **per alert**:
 | `ux_alerts_source_ref` (partial, `source_ref IS NOT NULL`) | Store idempotency; manual injections carry NULL and never collide |
 | `ix_alerts_created`, `ix_alerts_category` | The 48-hour feed window |
 | `ix_auth_tokens_*`, `ix_refresh_tokens_*` | Issue/redeem/revoke plus the daily expiry sweep |
+| `ix_street_ways_street` | The polygon builder's geometry read (§1.9) — rows examined equal the block's ways |
 
 **Conventions.** UUID strings for ids; ISO-8601 UTC (`…Z`) text for timestamps,
 which sorts lexicographically — the alert index depends on that. JSON arrays are
@@ -216,6 +218,9 @@ for the fan-out filter to examine.
 | 0015 | `streets.region_id` — a street belongs to a settlement; uniqueness moves to `(street_name, region_id)` |
 | 0016 | `regions.settlement_id` — a district names the settlement it sits in |
 | 0017 | `regions` uniqueness moves to `(region_name, COALESCE(settlement_id, 0))` — a district name repeats across settlements |
+| 0018 | `ingest_attempts` — the pre-store attempt cap (§1.7) |
+| 0019 | `ingest_health` — the tick heartbeat (§3.8) |
+| 0020 | `street_ways` — stored street geometry, so the polygon builder never calls Overpass (§1.9) |
 
 **A street belongs to a settlement** (migration 0015). `streets` was Varna-only
 and `street_name` was globally `UNIQUE`, which cost two things. Every village
@@ -855,7 +860,7 @@ source cannot starve the others.
 
 **Time budget.** `DEADLINE_MS = 300_000` (5 min). The plan originally assumed a
 30 s wall-clock cap on sub-hourly crons; that is wrong — only CPU is capped, and
-the AI/Overpass/Nominatim hops are all I/O. The budget exists so a tick finishes
+the AI/Nominatim hops are all I/O. The budget exists so a tick finishes
 well inside the 15-minute cadence and the next tick never overlaps it (the cursor
 model assumes one writer per source). It was 180 s until 31.07.2026, when a tick
 came within 4 s of it (todo.md §2) because `AI.run` now routinely exceeds its
@@ -1006,8 +1011,9 @@ pinned to the Sofia calendar day, and every field is coerced or rejected here �
 malformed value degrades to "no time", never to a wrong window. Times carry no
 offset on purpose: the audience is in Bulgaria, so
 `new Date("2026-07-27T08:00:00")` parses correctly in device-local time.
-- Polygon building is skipped when under **6 s** of budget remain — a polygon is
-  an enhancement, storing and notifying is not.
+- Polygon building is skipped when under **1 s** of budget remain — a polygon is
+  an enhancement, storing and notifying is not. (It was 6 s while the geometry
+  came from a live Overpass round trip; it is now one D1 read, §1.9.)
 - `ingestAlert` returns true only once the alert is stored **and** its push has
   landed or is owed to nobody. A failed send holds the cursor so the next tick
   re-drives the message (the re-store is a no-op via `source_ref`, and
@@ -1145,22 +1151,40 @@ any failure — the source then skips the message and retries next tick.
 
 ### 1.9 Polygon builder (`ingestion/polygon.ts`)
 
-**Overpass endpoint failover.** Six of the eight polygon failures in the 08.2026
-review were `Overpass HTTP 521`/`504` — the public endpoint being down, not our
-geometry. The builder is deterministic and correct: the identical four-street set
-failed on 08-18 and built a byte-identical 66-point ring twice on 08-20, so its
-true success rate is ~80% against an observed 50%. A 521 means the origin is
-down, so retrying the *same* host cannot help — the existing pause-and-retry is
-tuned for 429 rate-limiting. `overpassQuery` now walks a list of endpoints,
-moving on immediately for any origin-down status (502/503/504/520–524) or a
-connection failure, and keeping the pause-and-retry only for the rate-limit case.
+**Street geometry is stored, not fetched** (migration 0020). The builder used to
+ask the public Overpass API for every block's ways in the middle of an ingest
+tick. That made a shared free service the availability of the whole feature:
 
-`OVERPASS_FALLBACK_URL` is optional and currently **unset**, for a concrete
-reason: the self-hosted instance in `tools/osm-seed-builder/overpass` binds
-`127.0.0.1:12345`, and a Worker runs on Cloudflare's edge — it cannot reach
-loopback. Making it the primary needs it published first (a Cloudflare Tunnel is
-the least-effort route); the failover is already built, so that is a config
-change and nothing else. See the comment in `wrangler.jsonc`.
+- The 08.2026 review: six of eight failures were `Overpass HTTP 521`/`504`, with
+  the builder itself deterministic (one four-street set failed on 08-18 and built
+  a byte-identical ring twice on 08-20). An endpoint failover was added, but no
+  second endpoint was ever configured — the self-hosted instance binds loopback,
+  which a Worker on Cloudflare's edge cannot reach.
+- 09–10.2026: **1 of 32** polygons built in September and **0 of 15** in October.
+  51 of the 54 failures since August were Overpass errors (521 almost
+  throughout), and every one of those alerts went out as a pin instead of a ring.
+- 26.10.2026, the mirrors measured with the production query: `overpass-api.de`
+  answered "at capacity" or took 33 s, `maps.mail.ru` 21 s, `kumi.systems` and
+  `private.coffee` timed out at 40 s, `openstreetmap.ru` refused the connection —
+  against a 15 s budget per call. Self-hosting means a machine on around the
+  clock, which this project does not have.
+
+Street geometry changes on the scale of years, so it is now **seeded** like the
+street names themselves. The province sweep in `tools/osm-seed-builder` keeps
+every way of every seeded street (`seeds/street_ways.json`, one compact line per
+street), `generate-seed.mjs` loads it into `street_ways` keyed to its street row
+by name, and at runtime the builder makes **one indexed D1 read** — no
+subrequest, no failover, no timeout. Measured against the live query it
+replaced, over all 48 distinct street sets of the 08–10.2026 polygon alerts: the
+same ways in the same per-street order with the same coordinates, and **every
+verdict identical**. Block areas agree exactly when the streets arrive in the
+same order and within 0.3% otherwise — the JSTS union is order-sensitive in the
+last digits, which is why the read is ordered (`getStreetWays`).
+
+The cost is freshness: a polygon is drawn from OSM as of the last sweep. A street
+OSM renames or adds since then has no stored way, and the failure reason says so
+(`no stored geometry for: …`); the fix is a re-sweep, not code
+([runbook](runbook.md#refresh-street-geometry)).
 
 **Rejecting degenerate blocks.** A failed build is loud; a degenerate one is
 silent, and silently under-reaches everyone in the real block. Alert `15a862fb`
@@ -1207,41 +1231,37 @@ separated:
    whole *written* names against whole *stored* names, so a stored kind prefix
    decided the winner: `ул. Никола Вапцаров` resolved to Горица's
    `ул.Никола Вапцаров` (0.80 literal) over Варна's bare `Никола Вапцаров`
-   (0.58) — and the resolved *name* is what goes to Overpass, where the glued
-   form matches **zero** ways inside Варна and the bare one matches eleven.
+   (0.58) — and the resolved *name* was what the geometry was fetched under, where
+   the glued form matched **zero** ways inside Варна and the bare one eleven.
    Three of the 08.08.2026 review's four ★ polygon failures are exactly this.
-2. **Fetch geometries** with one Overpass QL query, scoped to the settlement:
-   `area["name"="<settlement>"]["boundary"="administrative"]["admin_level"="8"]`
-   → `way(area.a)["highway"]["name"~"^(…)$"]` → `out geom`, then **every returned
-   way further than 12 km from the settlement centroid is dropped**.
-   Level 8 is Bulgaria's населено място — measured, not assumed: `rel(13477567)`
-   ("Варна", level 8) contains exactly one `place` settlement, the city. (The repo
-   previously carried two contradictory records of this; the seed tool's "it is
-   the община" was the wrong one.) Pinning it removes the province from the union
-   but **not** a same-named settlement in another province — there are two level-8
-   `Бяла` — and most villages have no boundary relation at any level, so the
-   distance filter and an `around:12000` fallback both remain.
+2. **Read the stored geometry** (`loadStreetWays`): one query,
+   `street_ways WHERE street_id IN (…) ORDER BY street_id, id`, for the resolved
+   rows. The rows *are* the scope — the sweep filed each way under the settlement
+   whose own boundary (or, for the 13 with none, a 2.5 km radius) it was found in,
+   so the admin-level pin, the 12 km reach filter and the `around:12000` fallback
+   the live query needed are gone, and so is its module cache. What is stored
+   matches what the builder was fitted against: every `highway` class under a
+   seeded name (link ramps and pedestrian stretches included — the Пеячевич/
+   Варненчик corner is a `primary_link`), at the 7 decimals Overpass returns.
    A small curated map folds OSM **spelling variants** of one street under the
-   name it resolved to before the geometry is grouped: `бул. Януш Хуняди` carries
-   a single 118 m way in Варна while the rest of the same boulevard continues as
-   `бул. Янош Хунияди`. Curated rather than computed because it is measured to be
-   unlearnable — the two spellings score 0.389 on their cores, below the 0.667 of
-   `Младост 1`/`Младост 2`, so no threshold separates a transliteration from two
-   different numbered places.
-   Names are escaped twice — regex metacharacters (a real seeded name is
-   `Боровец-юг 9-та (бул. Тих кът)`) and the double quote, which would otherwise
-   close the Overpass string literal. Responses are cached in module memory (50
-   entries) keyed by **settlement plus** the sorted street list — keying on the
-   names alone served one town's geometry for another's. A **descriptive
-   User-Agent is mandatory**: `overpass-api.de` answers a browser UA with 406.
+   name it resolved to: `бул. Януш Хуняди` carries a single 118 m way in Варна
+   while the rest of the same boulevard continues as `бул. Янош Хунияди`. Both
+   are seeded street rows of the settlement; the variant's ways are read with the
+   canonical row's and folded under its name. Curated rather than computed
+   because it is measured to be unlearnable — the two spellings score 0.389 on
+   their cores, below the 0.667 of `Младост 1`/`Младост 2`, so no threshold
+   separates a transliteration from two different numbered places.
+   A resolved street with no stored way is named in the failure reason
+   (`no stored geometry for: …`) — a gap in the sweep, not a geometry fault.
 3. **Project** to a local metric frame (equirectangular:
    `x = (lon−lon₀)·111320·cos(lat₀)`, `y = (lat−lat₀)·111320`).
 4. **Clip** to a window around the block: the shortest street's extent, grown to
    reach each other street's nearest fragment, plus a **500 m** margin. The
    shortest street is the most local of the set; growing to the others is what
-   stops an edge being amputated when the block is wider than the margin. It is
-   also a band-aid over the Overpass query above, which pins no admin level and
-   so matches the *province* — `Преслав` comes back spanning 39 × 10 km.
+   stops an edge being amputated when the block is wider than the margin. It was
+   also the band-aid over the live query's province-wide area (`Преслав` came
+   back spanning 39 × 10 km); stored geometry is filed per settlement, so that
+   half of its job no longer arises.
 5. **JSTS pipeline:** per-street `LineMerger` → extend both ends by **200 m**
    along the end-segment direction → widen each into a **12 m half-width** road
    band (`BufferOp`) → union the bands. The blocks are the **holes** of that
@@ -1295,9 +1315,9 @@ makes every mitigation above optional rather than free to delete:
 - Keep regardless: 10 m sampling, the one-pass sample reuse, and the envelope
   check. They cost nothing in clarity and spike 3 measured 87 ms at 5 m sampling
   on a boulevard-heavy set — still worth avoiding on any plan.
-- Keep, but for a different reason: the clip window is correctness, not CPU. It
-  is what keeps a same-named street 25 km away out of the geometry, and it stays
-  until the Overpass query pins an admin level.
+- Keep, but for a different reason: the clip window is correctness, not CPU. A
+  boulevard bounding a block runs kilometres past it, and the window is what
+  keeps the candidate faces about the block rather than about the whole road.
 - `warmJstsPipeline` becomes pointless and should go — it buys a few ms against
   a budget that is no longer scarce, at the cost of a function that exists only
   to run dead code.
@@ -1434,8 +1454,10 @@ Live operational risks worth keeping in view:
   the municipality's outlying towns. Both were found by inspection, not by an
   alarm. A source that returns 200 and nothing useful is the failure mode to
   watch for (§3.8).
-- **Shared free services.** Overpass and Nominatim rate-limit and shed load; both
-  are treated as best-effort, and both degrade to "no polygon"/"no pin".
+- **Shared free services.** Nominatim rate-limits and sheds load; it is treated
+  as best-effort and degrades to "no pin". Overpass was the other one until it
+  took polygons down for two months (§1.9); it is no longer called at runtime,
+  only by the seed sweep on a developer machine.
 - **Cron schedule drift.** The Cloudflare schedules API has reported schedules
   that do not match what actually fires; verify with `wrangler tail` (§3.8).
 
@@ -1471,7 +1493,7 @@ Location is the sensitive item and is collected only through the explicit
 | **OneSignal** (US) | `user_id` as external id, device push registration, notification content | Accept OneSignal's **DPA**, record its transfer mechanism (DPF or SCCs), list it in the policy. Never receives location, email or preferences |
 | **Google / Firebase (FCM)** | The Android delivery channel beneath OneSignal | Accept Google's **Data Processing Terms** in the Firebase console; list Google as a processor |
 | **OSM Foundation (Nominatim)** | ⚠️ The user's **precise coordinates** on `PUT /api/auth/location`, and street names during ingest | No DPA exists. Handled by: explicit disclosure and consent in the location flow; requests carrying no user identifier and originating from Cloudflare's IP, not the user's; a link to OSMF's privacy policy. **Documented decision: keep Nominatim and disclose.** A fully clean alternative is self-hosting or a commercial EU geocoder with a DPA |
-| **Overpass** (overpass-api.de) | Street names only | No personal data; fair-use compliance only |
+| **Overpass** (seed sweep only, from a developer machine) | Nothing from this service — it is asked for OSM street geometry when the seed is rebuilt, never by the Worker (§1.9) | No personal data; fair-use compliance only |
 | **Mail provider** | Recipient address + message body | **None engaged** — delivery is mocked (§1.13). Before those flows go live: accept the DPA, confirm the processing location, add it to `/privacy` *and* compliance.md, and widen the Play Data Safety purpose for email to include Account management |
 
 ### 2.3 Data-subject rights
@@ -1543,7 +1565,8 @@ compliance.md §2–3, as Art. 5(2) accountability expects.
 
 - **OSM attribution (ODbL):** the Leaflet map must show "© OpenStreetMap
   contributors" — verify it survives WebView changes — and the About screen
-  credits Nominatim and Overpass. Mind the OSM **tile usage policy**: if traffic
+  credits Nominatim and Overpass (the street geometry is OSM data, fetched through
+  Overpass at seed time). Mind the OSM **tile usage policy**: if traffic
   grows, move to a provider with a free tier (Carto, Stadia, MapTiler) rather than
   hammering osm.org.
 - **Nominatim usage policy:** ≤1 req/s, descriptive User-Agent, caching — all
@@ -1642,7 +1665,8 @@ every request must carry a per-run token and `Host` is pinned to loopback agains
 DNS rebinding.
 
 - **`tools/osm-seed-builder`** (`python tools/osm-seed-builder/app.py`) builds the
-  `regions`/`streets` reference data from Overpass. It works inside its own
+  `regions`/`streets` reference data — and, from a province sweep, the
+  `street_ways` geometry the polygon builder reads (§1.9) — from Overpass. It works inside its own
   gitignored `output/` directory and applies to D1 from there; `backend/seeds/`
   changes only when you press its dedicated merge button. It calls the backend's
   own `generate-seed.mjs`, so the upsert semantics pinned by the test suite are
@@ -1668,6 +1692,22 @@ DNS rebinding.
   kind word (`Площад`, which reached the seed and can never match anything) is
   dropped. `backend/seeds/verify.mjs` re-checks the distance rules over the
   checked-in JSON and `test/seeds.spec.ts` fails the build if either breaks.
+  **The sweep also stores street geometry** (§1.9): a second request per
+  settlement over the same container, `out tags geom` for every `highway` way
+  with a name — a separate round trip because Overpass cannot answer `center`
+  and `geom` in one `out`, and any `highway` class rather than the street filter
+  because the builder was fitted against that. Ways are kept for names with a
+  street row in that settlement — this sweep's, or one either seed store already
+  holds (older extractions seeded `*_link` names the current filter skips) — and
+  land in `output/street_ways.json`, replaced per settlement on every sweep so a
+  way OSM deleted disappears. The merge button carries them to `backend/seeds/`;
+  `generate-seed.mjs` writes them beside `seed.sql` as `seed.ways.<n>.sql`
+  chunks of ≤700 KB, because local D1 stalls on one file much over 1 MB, and
+  `seeds/apply.mjs` applies migrations, `seed.sql` and the chunks in order (it
+  is what `npm run db:*` and the tool's apply step call). Варна province:
+  5,652 ways for 2,542 of 2,565 streets, 1.2 MB; the 23 without geometry lie
+  outside Варна's boundary, so the live query never found them either.
+  `verify.mjs` holds the ways to the same 15 km rule, per point.
   `locality` is in `DISTRICT_PLACES` because `м-т` (местност) is what OSM tags
   that way; it added ~90 rows, and `core/geocoding.ts` had to learn the same level
   or those rows could be matched by an alert and never carry a user.
@@ -1724,7 +1764,9 @@ DNS rebinding.
   the place matcher (§1.3): every rule in those two exists because a review run
   named the alert it got wrong.
 - **`tools/polygon-tester`** (`python tools/polygon-tester/app.py`) runs the block
-  builder of §1.9 and draws every stage of it: the ways Overpass returned, what
+  builder of §1.9 and draws every stage of it: the stored ways of each street
+  (loaded from `backend/seeds/street_ways.json` through the Worker's own
+  `loadStreetWays`, names resolved with the same scoped `matchStreet`), what
   the clip window kept, the road bands the blocks are cut from, and each enclosed
   area with the share of its boundary every street accounts for. It imports
   `buildBlockPolygon` out of `backend/src` through esbuild rather than

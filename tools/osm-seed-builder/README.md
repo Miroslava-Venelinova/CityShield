@@ -1,16 +1,18 @@
 # OSM seed builder
 
-A local UI for building the `regions` and `streets` reference data from
-OpenStreetMap via Overpass, so those tables stop being hand-maintained.
+A local UI for building the `regions` and `streets` reference data — and the
+street geometry the polygon builder draws blocks from — from OpenStreetMap via
+Overpass, so those tables stop being hand-maintained.
 
 The tool works entirely inside its own `output/` directory:
 
 ```
-output/regions.json   ← extractions are merged here
+output/regions.json        ← extractions are merged here
 output/streets.json
-output/seed.sql       ← generated from those two
-                      ↓ applied to D1
-                      ↘ merged into backend/seeds/ only when you press step 4
+output/street_ways.json    ← street geometry, from a province sweep only
+output/seed.sql            ← generated from those (+ seed.ways.<n>.sql chunks)
+                           ↓ applied to D1
+                           ↘ merged into backend/seeds/ only when you press step 4
 ```
 
 `output/` is gitignored, so extracting and applying is free of consequence for
@@ -140,6 +142,35 @@ What none of this catches is a swept district colliding with an existing region
 that means something else *inside the same settlement* — two different places,
 one name, one parent. That is the one case the (name, settlement) key cannot tell
 apart either. Read the `regions.json` diff before promoting.
+
+### Street geometry
+
+The Worker never calls Overpass (docs/specification.md §1.9): the polygon builder
+reads each street's ways from the `street_ways` table, and this sweep is where
+they come from. Per settlement, after the streets, it makes one more request over
+the same container — the boundary relation, or the radius for a settlement with
+none — asking for `out tags geom` on every `highway` way with a name.
+
+- **Any `highway` class, not the street filter below.** The builder was fitted
+  against Overpass answering `["highway"]` for a name, so a boulevard's `*_link`
+  ramps and pedestrian stretches are part of the street it draws. Filtering them
+  changes which blocks close.
+- **Only names with a street row in that settlement** are kept — the ones this
+  sweep found, plus any either store already files there (older extractions
+  seeded names the current filter skips). A way whose name has no row could never
+  be read back.
+- **7 decimals**, which is what Overpass returns; 6 moved block areas by up to
+  0.24% against the live query.
+- **Replaced per settlement** on every sweep, in `output/` and again on promote,
+  so a way OSM deleted disappears instead of lingering.
+
+`street_ways.json` is one compact JSON line per street (1.2 MB for Варна
+province, 5,652 ways), so a re-sweep's diff reads as "these streets changed".
+`generate-seed.mjs` writes it beside `seed.sql` as `seed.ways.<n>.sql` chunks of at
+most 700 KB — local D1 stalls on a single file much over 1 MB — and the apply step
+runs `backend/seeds/apply.mjs`, which applies migrations, `seed.sql` and the
+chunks in order. To refresh geometry alone, see docs/runbook.md, "Refresh street
+geometry".
 
 ### Why streets are not tied to districts
 

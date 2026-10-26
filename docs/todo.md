@@ -106,6 +106,33 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       Do not just raise the timeout — that makes starvation more likely, not less.
       Measure first: whether this is a transient Workers AI condition or the new normal
       decides between a faster/smaller model, fewer attempts, and one message per tick.
+- [ ] **Polygon correctness — from the 26.10.2026 review** of every polygon alert since
+      08.2026, each rebuilt and checked on a map. Ordered by harm; each needs a
+      regression fixture, and the thresholds a swept range (AGENTS.md):
+      - **A polygon from a plain street list.** `174acef1` (Игнатиево) names 14 streets
+        and no block; the model set `is_polygon` anyway, and the stored ring covers the
+        town centre while the listed streets lie outside it. Ring targeting is
+        exclusive, so the affected streets were not told. `ce7a7450` ("по ул. Девня от …
+        до …", one street's stretch) would build a 13 ha area. Fix: clear `is_polygon`
+        when the message has no block cue — only once the cue check is widened (next).
+      - **Block cues missed.** `POLYGON_CUE` misses `мужду`/`мезду` (typos) and
+        `заключени м/у`; `9fb5c04f` was never attempted and would have built a correct
+        ring.
+      - **One face of a split block.** When a listed street runs through the block
+        (Подвис's cross-piece), the builder keeps one face and drops the rest —
+        `abb57457` lost ~40% (6.7 ha). Merge adjacent faces bounded only by listed
+        streets.
+      - **OSM name variants:** `Царевец`/`бул. Царевец`, `бул. Ген. Колев`/`бул. Генерал
+        Колев`, three Курчатов spellings, two Басанович — four blocks close once folded.
+        `CLIP_MARGIN_M` 500 → 750 is needed by one of them; 750–3000 changed no other case.
+      - **A named street that stops short of its corner** (Пеячевич ends ~300 m before
+        Варненчик): six blocks close with a 250–300 m extension, but a global extension
+        past 250 m erodes real blocks (`7475f9f0` 6.5 → 4.9 ha). Extend only ends that do
+        not already meet a listed street.
+      - **`ул. Капитан Райчо`** does not resolve to `Кап. Райчо Николов` (3 alerts) — an
+        alias.
+      - **`fce7f285`** would build a face north of Кюстенджа reaching across бул. Левски,
+        closed only by extension stubs.
 
 ## 3. Email delivery — via OneSignal, once the domain is bought
 
@@ -557,7 +584,7 @@ release.
 | Workers AI (`AI_MODEL`, qwen3-30b) | 3 attempts on the one model, then the message waits for the next tick (and is skipped after 5 strikes). Already timing out routinely (§2) | Fall back to a second, smaller model on timeout rather than retrying the same one |
 | The four source websites | A layout change makes the parser find nothing — which looks exactly like a quiet day. No alert | Warn when a source returns zero items or a parse error for longer than its normal quiet spell (per source, like the 6 h cursor check in `runner.ts`) |
 | Nominatim (`NOMINATIM_URL`) | `geocode` returns `null`; transient failures are not cached. No second provider | Acceptable for launch. Add a second geocoder only if failures show up in logs |
-| Overpass (`OVERPASS_URL`) | Failover exists in `polygon.ts`, but `OVERPASS_FALLBACK_URL` is **not set** in `wrangler.jsonc` | Set it (another public Overpass instance, or the self-hosted one) |
+| Overpass | **No longer a runtime dependency** (26.10.2026): the polygon builder reads stored geometry from D1 (spec §1.9). Only the seed sweep calls it, locally | Nothing at runtime. Stored geometry ages: re-sweep when a polygon fails with `no stored geometry for` ([runbook](runbook.md#refresh-street-geometry)) |
 | OSM tiles (`tile.openstreetmap.org`) | No fallback. Separately, the OSM tile usage policy requires apps to identify themselves; a WebView loading inline HTML may send no usable `Referer` and get blocked tiles | Test the maps on a **release** build on a real device. Plan a tile provider for when usage grows (that one is a new processor: §8.2, compliance.md §5) |
 | unpkg.com (Leaflet) | Maps are blank if unpkg is down or blocked | Bundle Leaflet into the APK (also fixes a §8.2 privacy item) |
 | OneSignal | Send failures hold the cursor and retry (`MAX_PUSH_ATTEMPTS = 3`) | Fine as one provider |

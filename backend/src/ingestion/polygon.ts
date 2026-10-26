@@ -1,6 +1,7 @@
 // Block polygons, grown out of the Phase 0 JSTS spike
-// (spikes/polygon-jsts/pipeline.mjs), docs/specification.md §1.9. Overpass fetch (I/O) is
-// separated from the JSTS geometry pipeline (CPU). Spike 3's CPU verdict is
+// (spikes/polygon-jsts/pipeline.mjs), docs/specification.md §1.9. Reading the stored
+// street geometry (I/O, one D1 query) is separated from the JSTS geometry
+// pipeline (CPU). Spike 3's CPU verdict is
 // baked in: 10 m ring sampling (halves cost, identical winners) and street
 // geometries clipped to a bbox around the shortest street (kills the
 // boulevard blow-up on city-spanning street sets).
@@ -13,10 +14,9 @@ import UnaryUnionOp from "jsts/org/locationtech/jts/operation/union/UnaryUnionOp
 import DistanceOp from "jsts/org/locationtech/jts/operation/distance/DistanceOp.js";
 import { POLYGON_RESOLVE_THRESHOLD } from "../core/fuzzy";
 import { matchStreet } from "../core/place-names";
-import { distanceKm } from "../core/geo";
-import { getStreets } from "../db/queries";
+import { getStreets, getStreetWays, type NamedRow } from "../db/queries";
 import type { Env } from "../env";
-import { abortIn, expired, sleepWithin, yieldBurst } from "../shared/deadline";
+import { yieldBurst } from "../shared/deadline";
 
 const factory = new GeometryFactory();
 
@@ -80,102 +80,30 @@ const ROAD_HALF_WIDTH_M = 12;
  */
 const TOUCH_SLACK_M = 1.5;
 
-// ── Overpass fetch (replaces ox.features_from_place) ─────────────────────────
-
-// Spike 1: browser UA gets a 406 from overpass-api.de — a descriptive UA is
-// required and is also what their usage policy asks for.
-const OVERPASS_HEADERS = {
-  "User-Agent": "CityShieldAPI/1.0 (cityshield.varna@gmail.com)",
-  "Content-Type": "application/x-www-form-urlencoded",
-};
+// ── Street geometry (stored in D1; replaces the Overpass fetch) ──────────────
 
 export type WaysByName = Map<string, [number, number][][]>; // street → lines of [lon, lat]
 
-// Module-memory cache keyed by settlement + sorted street list (replaces
-// ox.settings.use_cache). The settlement is part of the key because it is now
-// part of the query: two settlements naming the same three streets are two
-// different sets of ways, and keying on the names alone would serve one town's
-// geometry for the other's block.
-const overpassCache = new Map<string, WaysByName>();
-const OVERPASS_CACHE_MAX = 50;
-
 /**
- * The settlement a polygon is being built in — its name, for the Overpass area,
- * and its centroid, for everything the area cannot bound.
+ * The settlement a polygon is being built in. Its row id is the whole scope:
+ * the street lookup only considers that settlement's rows, and the geometry is
+ * read by the ids it picks.
  */
 export interface PolygonScope {
+  id: number;
   name: string;
-  lat: number | null;
-  lng: number | null;
 }
 
 /**
- * How far from a settlement's centroid a way may lie and still be one of its
- * streets.
- *
- * The backstop for the Overpass scope bug, and the thing that finally closes it.
- * `area["name"="Варна"]["boundary"="administrative"]` unions EVERY
- * administrative area of that name, including the province, so a query for one
- * street name came back with geometry spanning 26 km (`Железни врата`), 23 km
- * (`Русе`) and 38 km (`Преслав`) — fragments from towns all over област Варна,
- * which then decided where CLIP_MARGIN_M centred its window.
- *
- * Pinning `admin_level` is now done — measured against the local Overpass
- * instance on 10.08.2026, level 8 in Bulgaria is the **населено място**:
- * `rel(13477567)` ("Варна", level 8) contains exactly one `place` settlement,
- * the city itself. (The repo previously carried two contradictory records of
- * this; the seed tool's "it is the община" was the wrong one.) That removes the
- * province from the union outright.
- *
- * It is NOT sufficient on its own, which is why this constant still exists.
- * Level 8 relations repeat by name across provinces exactly as the seed sweep
- * found — there are two `Бяла`, two `Левски`, four `Горица` — so a pinned query
- * still unions a town 185 km away. And most villages have no boundary relation
- * at any level, so they need the `around:` fallback regardless. A distance from
- * a centroid we already hold covers both, and bounds the damage the same way
- * for a city and for a hamlet.
- *
- * 12 km is Varna-sized: the city's own 1,333 seeded streets have a 95th
- * percentile of 10.7 km from its centroid. The province is 69 km across and the
- * nearest same-named intruder measured (Старо Оряхово) is 35 km out, so this
- * separates them with room to spare. It is deliberately not tighter — the clip
- * window downstream does the precise work, and this only has to keep another
- * town out of the input.
+ * An Overpass `out geom` response. Nothing at runtime asks Overpass any more,
+ * but the test fixtures and tools/polygon-tester's documents are stored in this
+ * shape, and groupWaysByName is how they become ways.
  */
-const SETTLEMENT_STREET_REACH_KM = 12;
-
-/**
- * OSM's admin_level for a Bulgarian settlement (населено място).
- *
- * Measured, not assumed: `rel(13477567)` is the level-8 relation named "Варна",
- * and it contains exactly one `place` settlement — the city. Same value the seed
- * sweep uses, and the two are meant to agree.
- */
-const SETTLEMENT_ADMIN_LEVEL = "8";
-
-/**
- * Make a street name safe to drop inside `["name"~"^(…)$"]`.
- *
- * Two layers, both required. The regex metacharacters would otherwise make
- * "Боровец-юг 9-та (бул. Тих кът)" — a real seeded name — match on its
- * parenthesised group instead of literally. The double quote is the one that
- * matters more: it closes the Overpass QL string literal, so a name containing
- * one turns the rest of the query into syntax errors (or, with enough care,
- * something else entirely). No seeded name carries one today, but Bulgarian
- * street names are routinely written with quotes — ул. "Отец Паисий" — so a
- * reseed is one dataset away from producing them.
- */
-function escapeOverpassRegex(name: string): string {
-  return name
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/"/g, '\\"');
-}
-
 export interface OverpassResponse {
   elements?: Array<{ type: string; tags?: { name?: string }; geometry?: Array<{ lon: number; lat: number }> }>;
 }
 
-/** Group returned way geometries by street name → arrays of [lon, lat] lines. */
+/** Group way geometries by street name → arrays of [lon, lat] lines. */
 export function groupWaysByName(data: OverpassResponse): WaysByName {
   const byName: WaysByName = new Map();
   for (const el of data.elements ?? []) {
@@ -184,88 +112,6 @@ export function groupWaysByName(data: OverpassResponse): WaysByName {
     byName.get(el.tags.name)!.push(el.geometry.map((pt) => [pt.lon, pt.lat]));
   }
   return byName;
-}
-
-/** Test hook: drop the module-scope Overpass cache. */
-export function clearOverpassCache(): void {
-  overpassCache.clear();
-}
-
-// Server-side and client-side caps. The old pair (25 s server / 30 s client,
-// plus a 15 s pause before the single retry) added up to 75 s — more than twice
-// the cron's entire wall clock, so a slow Overpass guaranteed a mid-flight kill.
-const OVERPASS_QUERY_TIMEOUT_S = 12;
-const OVERPASS_FETCH_TIMEOUT_MS = 15_000;
-const OVERPASS_RETRY_PAUSE_MS = 5_000;
-
-/**
- * Statuses where trying the SAME endpoint again is pointless.
- *
- * A 521/522/523 is Cloudflare in front of Overpass saying the origin is down or
- * unreachable; a 502/503/504 says much the same. Six of the eight polygon
- * failures in the 08.2026 review were `Overpass HTTP 521`/`504` — the public
- * endpoint being down, not our geometry. Proof that the builder itself is fine:
- * the identical four-street set failed on 08-18 and built a byte-identical
- * 66-point ring twice on 08-20. Against a dead origin the right retry is a
- * different *endpoint*, not a second attempt at the same one; the existing
- * pause-and-retry is tuned for 429 rate-limiting and cannot help here.
- */
-const ORIGIN_DOWN_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
-
-/** Endpoints in preference order — the fallback only when one is configured. */
-function overpassEndpoints(env: Env): string[] {
-  const endpoints = [env.OVERPASS_URL];
-  if (env.OVERPASS_FALLBACK_URL && env.OVERPASS_FALLBACK_URL !== env.OVERPASS_URL)
-    endpoints.push(env.OVERPASS_FALLBACK_URL);
-  return endpoints;
-}
-
-/** POST one Overpass query, with the single budgeted retry and endpoint failover. */
-async function overpassQuery(
-  env: Env, query: string, deadline?: number,
-): Promise<OverpassResponse> {
-  const endpoints = overpassEndpoints(env);
-  let lastError: Error | undefined;
-
-  for (const [index, endpoint] of endpoints.entries()) {
-    for (let attempt = 1; ; attempt++) {
-      if (expired(deadline, 1_000)) {
-        throw lastError ?? new Error("No time budget left for Overpass");
-      }
-      let res: Response;
-      try {
-        res = await fetch(endpoint, {
-          method: "POST",
-          headers: OVERPASS_HEADERS,
-          body: "data=" + encodeURIComponent(query),
-          signal: abortIn(OVERPASS_FETCH_TIMEOUT_MS, deadline),
-        });
-      } catch (e) {
-        // A refused connection or a timeout is the same story as a 521: this
-        // endpoint is not answering, so move to the next one.
-        lastError = e instanceof Error ? e : new Error(String(e));
-        break;
-      }
-      if (res.ok) {
-        if (index > 0) console.warn(`[polygon] Overpass served by fallback endpoint ${endpoint}.`);
-        return await res.json();
-      }
-
-      lastError = new Error(
-        `Overpass HTTP ${res.status} from ${endpoint}: ${(await res.text()).slice(0, 200)}`);
-
-      // The origin is down — another attempt here buys nothing, so go straight
-      // to the next endpoint and keep the budget for it.
-      if (ORIGIN_DOWN_STATUS.has(res.status)) break;
-
-      // Otherwise it is most likely 429: Overpass rate-limits aggressive
-      // retries, and a retry needs a real pause for a slot to free up. One
-      // retry, and only if it fits the budget — a polygon is an enhancement,
-      // never worth losing the message over.
-      if (attempt === 2 || !(await sleepWithin(OVERPASS_RETRY_PAUSE_MS, deadline))) break;
-    }
-  }
-  throw lastError ?? new Error("Overpass produced no response");
 }
 
 /**
@@ -288,89 +134,58 @@ async function overpassQuery(
  * merges two genuinely different numbered places first. There is no separating
  * value, so the mapping has to be written down.
  *
- * Applies to the Overpass fetch ONLY. The extra names are queried and their ways
- * folded under the canonical one, so everything downstream still sees one street
- * — which matters, because `buildBlockPolygon` counts distinct streets to decide
- * whether a face is a block.
+ * Applies to the geometry read ONLY. Each variant is a street row of its own in
+ * the same settlement; its ways are read alongside and folded under the
+ * canonical name, so everything downstream still sees one street — which
+ * matters, because `buildBlockPolygon` counts distinct streets to decide whether
+ * a face is a block.
  */
 const OSM_NAME_VARIANTS: Record<string, readonly string[]> = {
   "бул. Януш Хуняди": ["бул. Янош Хунияди"],
 };
 
-/** Drop ways whose geometry sits outside the settlement — see SETTLEMENT_STREET_REACH_KM. */
-function nearSettlement(byName: WaysByName, scope: PolygonScope): WaysByName {
-  if (scope.lat === null || scope.lng === null) return byName;
-  const near: WaysByName = new Map();
-  for (const [name, lines] of byName) {
-    // A way counts as this settlement's when any part of it is inside the reach:
-    // a boulevard genuinely runs out of town, and clipping it here would cost the
-    // block one of its sides. Testing the first vertex alone is enough at this
-    // grain — the intruders are whole towns 35–185 km away, not overhanging ends.
-    const kept = lines.filter((line) => line.length > 0
-      && distanceKm(line[0]![1], line[0]![0], scope.lat!, scope.lng!)
-        <= SETTLEMENT_STREET_REACH_KM);
-    if (kept.length > 0) near.set(name, kept);
-  }
-  return near;
-}
-
-export async function fetchStreetWays(
-  env: Env, streetNames: string[], scope: PolygonScope, deadline?: number,
+/**
+ * The stored ways of the resolved streets, keyed by street name (§1.9).
+ *
+ * Read from D1 (migration 0020), never from Overpass. The public endpoint the
+ * builder used to call mid-tick answered 521 for two months — 1 of 32 polygons
+ * built in 09.2026, 0 of 15 in 10.2026 — and the mirrors measured no better
+ * (21–33 s against a 15 s budget, when they answered at all). Street geometry
+ * changes on the scale of years, so the province sweep stores it with the
+ * street rows instead (tools/osm-seed-builder → seeds/street_ways.json).
+ *
+ * That also retires the scoping machinery the live query needed — the admin
+ * level pin, the 12 km reach filter, the `around:` fallback for villages with no
+ * boundary. The sweep filed each way under the settlement it was found in, and
+ * `resolved` are rows of exactly this settlement, so their ids are the scope.
+ *
+ * A street with no stored way is simply absent from the result: the sweep found
+ * no geometry under that name (see buildPolygonForStreets for how it is named).
+ */
+export async function loadStreetWays(
+  env: Env, resolved: readonly NamedRow[], streets: readonly NamedRow[], scopeId: number,
 ): Promise<WaysByName> {
-  const cacheKey = `${scope.name}\0${[...streetNames].sort().join("|")}`;
-  const cached = overpassCache.get(cacheKey);
-  if (cached) return cached;
-
-  // Every name to ASK Overpass for, and which resolved street each answers for.
-  // A street with no variants is just itself.
-  const canonicalOf = new Map<string, string>();
-  for (const name of streetNames) {
-    canonicalOf.set(name, name);
-    for (const variant of OSM_NAME_VARIANTS[name] ?? []) canonicalOf.set(variant, name);
-  }
-  const pattern = [...canonicalOf.keys()].map(escapeOverpassRegex).join("|");
-  const ways = `["highway"]["name"~"^(${pattern})$"]`;
-
-  /** Fold each variant's ways under the street they belong to. */
-  const fold = (byName: WaysByName): WaysByName => {
-    const folded: WaysByName = new Map();
-    for (const [name, lines] of byName) {
-      const key = canonicalOf.get(name) ?? name;
-      const into = folded.get(key);
-      if (into) into.push(...lines);
-      else folded.set(key, [...lines]);
+  // Which street every row read answers for. A row with no variants is itself.
+  const canonicalOf = new Map<number, string>();
+  for (const row of resolved) {
+    canonicalOf.set(row.id, row.name);
+    const variants = OSM_NAME_VARIANTS[row.name];
+    if (!variants) continue;
+    for (const other of streets) {
+      if (other.region_id === scopeId && variants.includes(other.name)) {
+        canonicalOf.set(other.id, row.name);
+      }
     }
-    return folded;
-  };
-
-  // The settlement's own administrative area, when OSM has one — pinned to
-  // `SETTLEMENT_ADMIN_LEVEL`, which keeps the province out of the union. It
-  // cannot keep a same-named settlement in another province out (there are two
-  // level-8 `Бяла`), so `nearSettlement` still has the last word.
-  const areaQuery =
-    `[out:json][timeout:${OVERPASS_QUERY_TIMEOUT_S}];` +
-    `area["name"="${escapeOverpassRegex(scope.name)}"]["boundary"="administrative"]` +
-    `["admin_level"="${SETTLEMENT_ADMIN_LEVEL}"]->.a;` +
-    `way(area.a)${ways};` +
-    `out geom;`;
-
-  let byName = fold(nearSettlement(groupWaysByName(
-    await overpassQuery(env, areaQuery, deadline)), scope));
-
-  // Most villages are a bare `place` node with no boundary relation at all, so
-  // the area lookup above matches nothing and returns nothing. A radius around
-  // the centroid is the only container available for them — the same fallback,
-  // and the same reasoning, as the seed sweep's `around:` path.
-  if (byName.size === 0 && scope.lat !== null && scope.lng !== null) {
-    const aroundQuery =
-      `[out:json][timeout:${OVERPASS_QUERY_TIMEOUT_S}];` +
-      `way(around:${Math.round(SETTLEMENT_STREET_REACH_KM * 1000)},${scope.lat},${scope.lng})` +
-      `${ways};out geom;`;
-    byName = fold(groupWaysByName(await overpassQuery(env, aroundQuery, deadline)));
   }
 
-  if (overpassCache.size >= OVERPASS_CACHE_MAX) overpassCache.clear();
-  overpassCache.set(cacheKey, byName);
+  const byName: WaysByName = new Map();
+  for (const way of await getStreetWays(env, [...canonicalOf.keys()])) {
+    const name = canonicalOf.get(way.street_id)!;
+    const lines = byName.get(name);
+    const line = JSON.parse(way.coords) as [number, number][];
+    if (lines) lines.push(line);
+    else byName.set(name, [line]);
+  }
   return byName;
 }
 
@@ -794,9 +609,10 @@ export async function buildBlockPolygon(
   }
 
   // CPU mitigation (spike 3): drop ways far from the block before
-  // merge/extend/union, so a city-spanning boulevard — or, thanks to the
-  // province-wide Overpass area, a same-named street in another town entirely —
-  // does not multiply the work downstream.
+  // merge/extend/union, so a city-spanning boulevard does not multiply the work
+  // downstream. (It was also the backstop against the live Overpass query's
+  // province-wide area serving a same-named street from another town; stored
+  // geometry is filed per settlement, so that half no longer arises.)
   //
   // The window is anchored on the shortest street, which is the most local of
   // the set and so the most reliable pointer at the block. It used to *be* that
@@ -1062,32 +878,32 @@ export async function buildBlockPolygon(
  * Both halves of that were load-bearing. Comparing whole names makes a stored
  * kind prefix decide the winner, so "ул. Никола Вапцаров" resolved to Горица's
  * "ул.Никола Вапцаров" (0.8 on the literal spelling) over Варна's bare "Никола
- * Вапцаров" (0.58) — and that resolved NAME is what gets sent to Overpass, where
- * "ул.Никола Вапцаров" matches zero ways inside Варна and the bare form matches
- * eleven. Alert 9e9d7a9e had three sides of a four-sided block and could not
- * close a ring; d29913c5 had three of seven, 15af34ef two of four.
+ * Вапцаров" (0.58) — and that resolved NAME is what the geometry was then
+ * fetched under, where "ул.Никола Вапцаров" matched zero ways inside Варна and
+ * the bare form eleven. Alert 9e9d7a9e had three sides of a four-sided block and
+ * could not close a ring; d29913c5 had three of seven, 15af34ef two of four.
  *
  * `matchStreet` fixes both at once: it compares parsed cores, so the prefix stops
  * voting, and it refuses rows outside the settlement, so a town 185 km away is
- * not a candidate at all.
+ * not a candidate at all. The rows it returns are what the stored geometry is
+ * read by, so the scope carries through to the ways.
  */
 export async function buildPolygonForStreets(
-  env: Env, rawStreetNames: string[], scope: PolygonScope & { id: number },
-  deadline?: number,
+  env: Env, rawStreetNames: string[], scope: PolygonScope,
 ): Promise<BlockPolygonResult> {
   try {
     const streets = await getStreets(env);
-    const resolved: string[] = [];
+    const resolved: NamedRow[] = [];
     const unresolved: string[] = [];
     for (const raw of rawStreetNames) {
       const match = matchStreet(raw, streets, scope.id, POLYGON_RESOLVE_THRESHOLD);
       if (!match) unresolved.push(raw);
-      else if (!resolved.includes(match.name)) resolved.push(match.name);
+      else if (!resolved.some((row) => row.id === match.id)) resolved.push(match);
     }
     if (resolved.length < 3) {
       // Which names failed, not just how many: "ул. Звзда" is a source typo for
       // Звезда and wants a region_aliases row, where a name that resolves fine
-      // but finds no OSM way is a different problem entirely.
+      // but has no stored way is a different problem entirely (see below).
       const reason = `only ${resolved.length}/${rawStreetNames.length} street names `
         + `resolved in ${scope.name}`
         + (unresolved.length > 0 ? ` (no match: ${unresolved.join(", ")})` : "");
@@ -1095,10 +911,19 @@ export async function buildPolygonForStreets(
       return { polygon: null, reason };
     }
 
-    const ways = await fetchStreetWays(env, resolved, scope, deadline);
-    const result = await buildBlockPolygon(ways, resolved);
+    const names = resolved.map((row) => row.name);
+    const ways = await loadStreetWays(env, resolved, streets, scope.id);
+    const result = await buildBlockPolygon(ways, names);
     if (!result.polygon) {
-      console.warn(`[polygon] no polygon in ${scope.name} for [${resolved.join(", ")}]: ${result.reason}`);
+      // A resolved street with no stored way points at the seed, not at the
+      // geometry: the sweep found nothing under that name in this settlement
+      // (outside its boundary, or a name OSM has since changed). Named, because
+      // "only 2 streets found" alone reads as a geometry failure.
+      const missing = names.filter((name) => !ways.has(name));
+      const reason = result.reason
+        + (missing.length > 0 ? ` (no stored geometry for: ${missing.join(", ")})` : "");
+      console.warn(`[polygon] no polygon in ${scope.name} for [${names.join(", ")}]: ${reason}`);
+      return { ...result, reason };
     }
     return result;
   } catch (e) {

@@ -17,8 +17,9 @@
 
 import { describe, expect, it } from "vitest";
 import regions from "../seeds/regions.json";
+import streetWays from "../seeds/street_ways.json";
 import streets from "../seeds/streets.json";
-import { MAX_SEED_DISTANCE_KM, verifySeeds } from "../seeds/verify.mjs";
+import { MAX_SEED_DISTANCE_KM, verifySeeds, verifyStreetWays } from "../seeds/verify.mjs";
 import { parseName, placeClass } from "../src/core/place-names";
 
 describe("seed data", () => {
@@ -26,6 +27,15 @@ describe("seed data", () => {
     const problems = verifySeeds(regions, streets);
     // Named, not counted: a bare count tells you a re-seed regressed and nothing
     // about which settlement to look at.
+    expect(problems.map((p) => p.message)).toEqual([]);
+  });
+
+  // The polygon builder trusts this filing completely (migration 0020): the live
+  // Overpass query it replaced carried its own 12 km distance filter, and the
+  // stored ways carry none. A way filed under the wrong town would quietly drag
+  // the clip window there.
+  it(`keeps every stored way within ${MAX_SEED_DISTANCE_KM} km of its street's settlement`, () => {
+    const problems = verifyStreetWays(regions, streets, streetWays);
     expect(problems.map((p) => p.message)).toEqual([]);
   });
 

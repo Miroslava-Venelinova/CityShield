@@ -31,8 +31,11 @@ SELECT u.user_id                AS user_id,
 UPDATE users SET region_id = NULL, street_id = NULL;
 
 DELETE FROM region_aliases;
+-- The cascade from streets would take these anyway (migration 0020); deleting
+-- them first just keeps the order readable as children before parents.
+DELETE FROM street_ways;
 DELETE FROM streets;
 DELETE FROM regions;
 
 -- Restart the id sequences so a reseeded database numbers like a fresh one.
-DELETE FROM sqlite_sequence WHERE name IN ('regions', 'streets');
+DELETE FROM sqlite_sequence WHERE name IN ('regions', 'streets', 'street_ways');

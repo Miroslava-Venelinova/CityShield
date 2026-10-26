@@ -18,9 +18,11 @@ import { aiParse } from "./ai";
 import { normalizeParse } from "./normalize";
 import { buildPolygonForStreets } from "./polygon";
 
-// Overpass round-trip plus the JSTS pipeline; below this there is no point
-// starting, and the remaining budget is better spent storing the alert.
-const POLYGON_MIN_BUDGET_MS = 6_000;
+// One D1 read of the stored street geometry plus the JSTS pipeline — tens of
+// milliseconds of wall clock. Sized for that with room to spare; below it the
+// remaining budget is better spent storing the alert. (It was 6 s while the
+// geometry came from a live Overpass round trip, §1.9.)
+const POLYGON_MIN_BUDGET_MS = 1_000;
 
 // A push that fails on every tick would otherwise pin the cursor until the
 // message ages off its source — a long block on a low-volume listing. After
@@ -187,9 +189,9 @@ export async function processOutageMessage(
     }
     // The settlement is what both halves of the polygon path were missing: the
     // street resolution had no scope, so it picked rows from other towns, and the
-    // Overpass query was hardcoded to Варна, so it asked the wrong place about
-    // them. Resolved to a row here because polygon.ts needs its centroid, not
-    // just its name — see SETTLEMENT_STREET_REACH_KM.
+    // geometry query was hardcoded to Варна, so it asked the wrong place about
+    // them. Resolved to a row here because its id is the scope: the street
+    // lookup is limited to it, and the stored ways are read by the rows it picks.
     const scope = settlementScope(location.settlement, location.area, await getRegions(env));
     if (scope === null) {
       const reason = `no seeded settlement for "${location.settlement ?? location.area ?? "?"}"`;
@@ -197,7 +199,7 @@ export async function processOutageMessage(
       location.polygon_failure = reason;
       continue;
     }
-    const result = await buildPolygonForStreets(env, location.streets, scope, deadline);
+    const result = await buildPolygonForStreets(env, location.streets, scope);
     location.polygon_geojson = result.polygon ?? undefined;
     if (!result.polygon) location.polygon_failure = result.reason ?? "unknown";
   }

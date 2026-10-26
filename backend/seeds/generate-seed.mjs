@@ -1,4 +1,5 @@
-// streets.json / regions.json → seeds/seed.sql (docs/specification.md §1.2).
+// streets.json / regions.json (+ optional aliases.json, street_ways.json)
+// → seeds/seed.sql (docs/specification.md §1.2, street geometry §1.9).
 //
 // Entries are either a bare name (the original hand-maintained form) or
 // { name, lat, lng } as written by tools/osm-seed-builder. Both are accepted so
@@ -23,8 +24,8 @@
 //
 //   node seeds/generate-seed.mjs --in ../tools/osm-seed-builder/output
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -248,9 +249,150 @@ function insertDistricts(entries) {
   ).join("\n");
 }
 
+/**
+ * Street geometry, as `[{ settlement, name, ways: [[[lon, lat], …], …] }]`
+ * (migration 0020). Optional, like aliases.json: a seed directory written before
+ * the sweep kept geometry has none, and then nothing about street_ways is
+ * emitted at all — not even the DELETE, so applying an old seed cannot wipe
+ * geometry a newer one put there.
+ *
+ * Entries whose street is not in streets.json are counted and left out: the
+ * INSERT below would select no street for them anyway, silently.
+ */
+function loadStreetWays(streetEntries) {
+  let data;
+  try {
+    data = JSON.parse(readFileSync(join(inDir, "street_ways.json"), "utf8"));
+  } catch (e) {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  }
+  if (!Array.isArray(data)) throw new Error("street_ways.json: expected a JSON array");
+
+  const known = new Set(streetEntries.map((e) => `${e.settlement}\0${e.name}`));
+  const entries = [];
+  let orphans = 0;
+  for (const item of data) {
+    const name = (item?.name ?? "").trim();
+    const settlement = (item?.settlement ?? "").trim() || DEFAULT_SETTLEMENT;
+    const ways = (item?.ways ?? []).filter((w) => Array.isArray(w) && w.length >= 2);
+    if (!name || ways.length === 0) continue;
+    if (!known.has(`${settlement}\0${name}`)) {
+      orphans++;
+      continue;
+    }
+    entries.push({ name, settlement, ways });
+  }
+  entries.sort((a, b) => a.settlement.localeCompare(b.settlement) || a.name.localeCompare(b.name));
+  return { entries, orphans };
+}
+
+/**
+ * D1 refuses a single SQL statement over 100 KB. A street's ways are batched
+ * into one statement up to this size — Сливница's 84 ways fit in one — and a
+ * longer street simply gets more than one.
+ */
+const MAX_STATEMENT_BYTES = 90_000;
+
+/**
+ * Street ways, keyed to their street by NAME for the same reason insertStreets
+ * keys streets to their settlement by name: ids are autoincrement and differ
+ * between the local and the remote database.
+ *
+ * `settlement_id IS NULL` pins the lookup to the settlement row, the only kind
+ * of region `streets.region_id` points at (migration 0015): a district may share
+ * a settlement's name since 0017, and without it a street of that name in the
+ * district's settlement would collect these ways too.
+ *
+ * Replaced wholesale rather than upserted. A way has no natural key, and the
+ * sweep is each settlement's complete answer — a way OSM deleted must disappear
+ * here, or the builder keeps drawing a road that is gone. Re-applying stays
+ * idempotent: the same rows come back, under new ids nothing refers to.
+ */
+function insertStreetWays(entries) {
+  const lines = ["DELETE FROM street_ways;"];
+  for (const e of entries) {
+    const head =
+      `INSERT INTO street_ways (street_id, coords)\n` +
+      `SELECT s.id, w.column1 FROM (VALUES `;
+    const tail =
+      `) AS w\n` +
+      `  JOIN streets s ON s.street_name = ${esc(e.name)}\n` +
+      `  JOIN regions r ON r.id = s.region_id\n` +
+      `   AND r.region_name = ${esc(e.settlement)} AND r.settlement_id IS NULL;`;
+    const budget = MAX_STATEMENT_BYTES - Buffer.byteLength(head + tail);
+    let rows = [];
+    let size = 0;
+    const flush = () => {
+      lines.push(head + rows.join(",") + tail);
+      rows = [];
+      size = 0;
+    };
+    for (const way of e.ways) {
+      const row = `(${esc(JSON.stringify(way))})`;
+      const bytes = Buffer.byteLength(row);
+      if (bytes > budget) {
+        throw new Error(`street_ways.json: one way of ${e.settlement}/${e.name} is ` +
+          `${bytes} bytes, over D1's statement limit on its own`);
+      }
+      if (rows.length > 0 && size + bytes + 1 > budget) flush();
+      rows.push(row);
+      size += bytes + 1;
+    }
+    if (rows.length > 0) flush();
+  }
+  return lines;
+}
+
+/**
+ * Local D1 (miniflare) stalls on a single `--file` much over 1 MB — measured
+ * 26.10.2026: the 1.6 MB of street ways hung for five minutes and threw, while
+ * the same statements in two halves applied in 2 s each. So the geometry goes
+ * into numbered files next to seed.sql, each under this size, applied in order
+ * by seeds/apply.mjs. seed.sql itself stays exactly what it was.
+ */
+const MAX_FILE_BYTES = 700_000;
+
+/** `seed.sql` → `seed.ways.<n>.sql`, beside it. Read by seeds/apply.mjs too. */
+const chunkPrefix = (file) => `${basename(file, ".sql")}.ways.`;
+
+/**
+ * Write the ways statements as chunk files, first removing every chunk a
+ * previous run left: a stale `seed.ways.3.sql` applied after a shorter run's
+ * two would re-insert ways the DELETE in chunk 1 had just cleared.
+ */
+function writeWayChunks(statements, file) {
+  const dir = dirname(file);
+  const prefix = chunkPrefix(file);
+  for (const name of readdirSync(dir)) {
+    if (name.startsWith(prefix) && name.endsWith(".sql")) rmSync(join(dir, name));
+  }
+  const chunks = [];
+  let current = [];
+  let size = 0;
+  for (const statement of statements) {
+    const bytes = Buffer.byteLength(statement) + 1;
+    if (current.length > 0 && size + bytes > MAX_FILE_BYTES) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(statement);
+    size += bytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks.map((chunk, i) => {
+    const path = join(dir, `${prefix}${i + 1}.sql`);
+    writeFileSync(path, "-- Generated by seeds/generate-seed.mjs — do not edit by hand.\n" +
+      chunk.join("\n") + "\n", "utf8");
+    return path;
+  });
+}
+
 const regions = loadEntries("regions.json");
 const streets = loadEntries("streets.json", true);
 const aliases = loadAliases();
+const streetWays = loadStreetWays(streets);
 
 const linked = regions.filter((e) => e.settlement);
 const settlements0 = regions.filter((e) => !e.settlement);
@@ -278,6 +420,8 @@ const sql = [
 ].join("\n");
 
 writeFileSync(outFile, sql, "utf8");
+// Applied after seed.sql, whose streets the ways resolve against by name.
+const wayFiles = streetWays ? writeWayChunks(insertStreetWays(streetWays.entries), outFile) : [];
 
 const withCoords = (entries) => entries.filter((e) => e.lat !== null).length;
 
@@ -298,8 +442,18 @@ console.log(
   `${outFile} written: ${regions.length} regions (${withCoords(regions)} with coordinates, ` +
     `${linked.length} linked to a settlement), ` +
     `${streets.length} streets (${withCoords(streets)} with coordinates) ` +
-    `across ${settlements.size} settlement(s), ${aliases.length} region aliases`,
+    `across ${settlements.size} settlement(s), ${aliases.length} region aliases` +
+    (streetWays
+      ? `, ${streetWays.entries.reduce((n, e) => n + e.ways.length, 0)} street ways for ` +
+        `${streetWays.entries.length} streets in ${wayFiles.length} file(s) beside it`
+      : ", no street_ways.json (street geometry left as it is)"),
 );
+if (streetWays && streetWays.orphans > 0) {
+  console.warn(
+    `WARNING: ${streetWays.orphans} street(s) in street_ways.json have no entry in ` +
+      `streets.json, so their ways were left out. Promote the sweep's streets with them.`,
+  );
+}
 if (unknownParents.length > 0) {
   console.warn(
     `WARNING: ${unknownParents.length} settlement(s) named as a region's parent have no row ` +

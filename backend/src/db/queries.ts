@@ -191,6 +191,39 @@ export function getStreets(env: Env): Promise<NamedRow[]> {
     "SELECT id, street_name AS name, lat, lng, region_id FROM streets");
 }
 
+/** One stored OSM way: `coords` is JSON `[[lon, lat], …]` (migration 0020). */
+export interface StreetWayRow {
+  street_id: number;
+  coords: string;
+}
+
+/**
+ * The stored geometry of the given streets, one row per OSM way — what the
+ * polygon builder reads instead of Overpass (docs/specification.md §1.9).
+ *
+ * By street id, because the resolver has already picked each settlement's own
+ * row (matchStreet), so the id carries the scope. Indexed on street_id, so rows
+ * examined equal rows returned: ~100 for a four-boulevard block. Chunked like
+ * getUserIdsByStreets, though a block plus its curated variants is a handful.
+ *
+ * Ordered on purpose. The JSTS union is order-sensitive in the last digits: the
+ * same ways fed in two street orders measured 93,458 vs 93,474 m² for one
+ * block. Never a different verdict, but an unordered read would let one block
+ * come out a hair different between two runs. `id` within a street is the
+ * sweep's insertion order, which is OSM way-id order.
+ */
+export async function getStreetWays(env: Env, streetIds: number[]): Promise<StreetWayRow[]> {
+  const rows: StreetWayRow[] = [];
+  for (const chunk of chunkKeys(streetIds)) {
+    const { results } = await env.DB.prepare(
+      `SELECT street_id, coords FROM street_ways WHERE street_id IN (${inList(chunk.length)})
+        ORDER BY street_id, id`,
+    ).bind(...chunk).all<StreetWayRow>();
+    rows.push(...results);
+  }
+  return rows;
+}
+
 /** Test hook: drop the module-scope reference caches. */
 export function clearRefCaches(): void {
   regionsRef.cache = null;

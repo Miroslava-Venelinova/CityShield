@@ -22,7 +22,7 @@
 // and the outcome is merely coarse. It is a stopgap either way — only a corrected
 // sweep can put the RIGHT streets back.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,13 +112,64 @@ export function verifySeeds(regions, streets) {
   return problems;
 }
 
+/**
+ * The same two rules over street_ways.json (migration 0020): every entry must
+ * hang off a street the seed holds, and every point of every way must be near
+ * that street's settlement.
+ *
+ * The second matters more than it did for street rows. A street row is one pin;
+ * a way is geometry the polygon builder draws a block from, and the builder now
+ * trusts the settlement filing completely — the live Overpass query it replaced
+ * carried its own 12 km distance filter, the stored ways carry none. Checked per
+ * POINT rather than per first vertex for the same reason: one far-flung way is
+ * enough to drag the clip window somewhere else entirely. Measured 26.10.2026:
+ * the farthest point in the seed is 13.6 km from its settlement.
+ */
+export function verifyStreetWays(regions, streets, ways) {
+  const problems = [];
+  const settlements = new Map();
+  for (const r of regions) if (!r.settlement) settlements.set(r.name, r);
+  const seeded = new Set(streets.map((s) => `${s.settlement ?? "Варна"}\0${s.name}`));
+
+  for (const entry of ways) {
+    const settlement = entry.settlement ?? "Варна";
+    if (!seeded.has(`${settlement}\0${entry.name}`)) {
+      problems.push({
+        kind: "ways-orphan", row: entry,
+        message: `street_ways.json has ways for "${entry.name}" in ${settlement}, which `
+          + `streets.json does not hold — they will insert nothing`,
+      });
+      continue;
+    }
+    const parent = settlements.get(settlement);
+    if (!hasPoint(parent)) continue;
+    let farthest = 0;
+    for (const line of entry.ways) {
+      for (const [lng, lat] of line) {
+        farthest = Math.max(farthest, distanceKm(parent.lat, parent.lng, lat, lng));
+      }
+    }
+    if (farthest > MAX_SEED_DISTANCE_KM) {
+      problems.push({
+        kind: "ways-far", row: entry, km: farthest,
+        message: `ways of "${entry.name}" reach ${farthest.toFixed(0)} km from ${settlement} — `
+          + `the sweep filed geometry from somewhere else under it`,
+      });
+    }
+  }
+  return problems;
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
   const read = (f) => JSON.parse(readFileSync(join(here, f), "utf8"));
   const regions = read("regions.json");
   const streets = read("streets.json");
-  const problems = verifySeeds(regions, streets);
+  // Optional, as everywhere else: a seed from before migration 0020 has none.
+  const ways = existsSync(join(here, "street_ways.json")) ? read("street_ways.json") : [];
+  const wayProblems = verifyStreetWays(regions, streets, ways);
+  const problems = [...verifySeeds(regions, streets), ...wayProblems];
 
   const byKind = new Map();
   for (const p of problems) byKind.set(p.kind, (byKind.get(p.kind) ?? 0) + 1);
@@ -127,6 +178,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
 
   if (problems.length === 0) {
     console.log(`seeds verified: ${regions.length} regions, ${streets.length} streets, `
+      + `${ways.length} streets' geometry, `
       + `everything within ${MAX_SEED_DISTANCE_KM} km of what it says it is inside`);
     process.exit(0);
   }
@@ -140,6 +192,12 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
     process.exit(1);
   }
 
+  // Geometry is never pruned: a way in the wrong place is a sweep bug, and
+  // deleting it would only turn a wrong block into a missing one. Re-sweep.
+  if (wayProblems.length > 0) {
+    console.error(`${wayProblems.length} street_ways problem(s) are not pruned — re-run the `
+      + "province sweep in tools/osm-seed-builder and promote its geometry.");
+  }
   const bad = new Set(problems.map((p) => p.row));
   const keptStreets = streets.filter((s) => !bad.has(s));
   const keptRegions = regions.filter((r) => !bad.has(r));

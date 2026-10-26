@@ -9,9 +9,9 @@
 export {
   BLOCK_POLYGON_DEFAULTS,
   buildBlockPolygon,
-  clearOverpassCache,
-  fetchStreetWays,
   groupWaysByName,
+  loadStreetWays,
 } from "../../backend/src/ingestion/polygon";
 
-export { bestMatch, POLYGON_RESOLVE_THRESHOLD } from "../../backend/src/core/fuzzy";
+export { POLYGON_RESOLVE_THRESHOLD } from "../../backend/src/core/fuzzy";
+export { matchStreet } from "../../backend/src/core/place-names";

@@ -53,12 +53,14 @@ Use this after changing `seeds/*.json`.
 
 | Command | Deletes rows the seed no longer has? |
 |---|---|
-| `npm run db:local` / `db:remote` | **No.** Upserts only |
+| `npm run db:local` / `db:remote` | **No.** Upserts only (street geometry is replaced wholesale either way) |
 | `npm run db:reseed:local` / `db:reseed:remote` | **Yes.** Snapshot, wipe, reseed, restore |
 
 The reseed snapshots every user's placement by **(name, parent settlement
-name)**, clears regions, streets, aliases and their id sequences, applies
-`seed.sql`, and re-resolves the placements against the new ids. The parent
+name)**, clears regions, streets, aliases, street ways and their id sequences,
+applies `seed.sql` and its `seed.ways.<n>.sql` chunks, and re-resolves the
+placements against the new ids. All of it runs through `seeds/apply.mjs`, which
+stops at the first failing step. The parent
 half of the key is what keeps the two Припек apart. `alerts` and
 `crawl_state` are not touched.
 
@@ -67,11 +69,16 @@ Afterwards:
 ```sh
 node seeds/verify.mjs                                  # distance invariants
 npx wrangler d1 execute cityshield-db --remote --command \
-  "select (select count(*) from regions), (select count(*) from streets)"
+  "select (select count(*) from regions), (select count(*) from streets),
+          (select count(*) from street_ways)"
 ```
 
-The counts must match the JSON. A street whose settlement has no `regions`
-row inserts nothing and reports nothing. **Then redeploy.** The matcher's
+The counts must match the JSON and what `generate-seed.mjs` printed (ways:
+the "street ways for N streets" figure). A street whose settlement has no
+`regions` row inserts nothing and reports nothing, and neither do its ways.
+D1's free plan allows 100,000 row writes a day; a full apply rewrites every
+way (~5,700 deletes plus as many inserts), so a handful of applies a day is
+fine and a loop is not. **Then redeploy.** The matcher's
 startup data comes from the bundled seed, so a reseed without a redeploy
 moves every lookup onto the slow path.
 
@@ -86,6 +93,24 @@ merge button. Details are in
 
 After a sweep: zero hits on the 15 km distance backstop is the sign of a
 healthy run. A hit means something upstream is wrong.
+
+## Refresh street geometry
+
+The polygon builder draws blocks from `street_ways` in D1, never from a live
+query ([specification §1.9](specification.md)). It is as fresh as the last
+province sweep. Refresh it when OSM has fixed or added a street an alert needs —
+the symptom is a polygon failure reading `no stored geometry for: <street>`.
+
+1. Start the self-hosted Overpass (`tools/osm-seed-builder/overpass/overpass.bat
+   start`; `refresh` first to re-import the latest Geofabrik extract).
+2. Sweep the province in `tools/osm-seed-builder`. The progress shows a street
+   ways count beside the streets.
+3. Press the merge button. It replaces `backend/seeds/street_ways.json` for every
+   settlement the sweep covered.
+4. `node seeds/verify.mjs`, then `npm run db:remote` (no reseed needed — the
+   ways are replaced wholesale). Nothing to redeploy: the Worker reads the
+   table, the geometry is not bundled.
+5. Commit `street_ways.json` with the streets it belongs to.
 
 ## Check ingest health
 

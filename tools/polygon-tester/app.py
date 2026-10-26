@@ -8,7 +8,7 @@ judged correctly or whether a threshold threw away a real block: "all 1 enclosed
 area(s) were bounded by a single street" is the right answer for one alert and a
 bug for the next one. The difference is visible on a map and nowhere else.
 
-So this draws every stage: the ways Overpass returned, which of them the clip
+So this draws every stage: the stored ways of each street, which of them the clip
 window kept, the road bands the blocks are cut from, and every enclosed area
 with the share of its boundary each street accounts for — the number the
 sliver rule is decided on.
@@ -17,8 +17,8 @@ sliver rule is decided on.
 
 It prints a tokenized http://127.0.0.1:<port>/?t=<token> URL and opens it. As in
 the other tools, the token is checked on every call and the Host header is
-pinned to loopback: this process runs Node and can reach Overpass, so no other
-page in the browser gets to drive it.
+pinned to loopback: this process runs Node over the repo, so no other page in
+the browser gets to drive it.
 
 **The geometry is not reimplemented here.** Every run goes through the Worker's
 own `buildBlockPolygon` via entry.ts, bundled by esbuild out of backend/src, so
@@ -49,11 +49,16 @@ REPO_ROOT = HERE.parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
 WORKER_SRC = BACKEND_DIR / "src"
 FIXTURES_DIR = BACKEND_DIR / "test" / "fixtures"
-STREETS_SEED = REPO_ROOT / "tools" / "osm-seed-builder" / "output" / "streets.json"
+# The backend seed — the streets and the stored geometry production reads
+# (migration 0020), so a name resolves here to the row ingestion would pick and
+# its ways are the ways ingestion would build from.
+SEEDS_DIR = BACKEND_DIR / "seeds"
+STREETS_SEED = SEEDS_DIR / "streets.json"
+WAYS_SEED = SEEDS_DIR / "street_ways.json"
 
-# Fetched Overpass responses, kept so tuning never re-hits the API — Overpass
-# rate-limits, and a run that is answered from disk is also a run two knob
-# settings can be compared across. Gitignored; promote one to a fixture instead.
+# Loaded way documents (Overpass `out geom` shape, which is what the fixtures
+# use too), kept so a run is answered from one file and two knob settings can be
+# compared across it. Gitignored; promote one to a fixture instead.
 CACHE_DIR = HERE / "cache"
 BUILD_DIR = HERE / ".build"
 BUNDLE = BUILD_DIR / "worker.mjs"
@@ -67,7 +72,7 @@ ESBUILD = BACKEND_DIR / "node_modules" / ".bin" / ("esbuild.cmd" if sys.platform
 # name has to be safe to put in a path and readable a month later.
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,48}$")
 
-NODE_TIMEOUT_S = 120  # a live Overpass fetch carries its own 15 s cap and one retry
+NODE_TIMEOUT_S = 120  # a cold run bundles nothing new and builds in well under a second
 
 _lock = threading.Lock()
 
@@ -77,22 +82,6 @@ class ToolError(Exception):
 
 
 # ── the Worker bundle ─────────────────────────────────────────────────────────
-
-
-def overpass_url() -> str:
-    """
-    The URL the Worker is configured with, read from wrangler.jsonc rather than
-    repeated here — a tester pointed at a different endpoint than production is
-    a tester that answers a different question.
-    """
-    try:
-        text = (BACKEND_DIR / "wrangler.jsonc").read_text(encoding="utf-8")
-        found = re.search(r'"OVERPASS_URL"\s*:\s*"([^"]+)"', text)
-        if found:
-            return found.group(1)
-    except OSError:
-        pass
-    raise ToolError("Could not read OVERPASS_URL from backend/wrangler.jsonc.")
 
 
 def sources_mtime() -> float:
@@ -243,90 +232,25 @@ def write_document(directory: Path, name: str, document: dict) -> Path:
 
 def fetch_ways(names: list[str], resolve: bool, name: str) -> dict:
     """
-    Go to Overpass once, through the Worker's own `fetchStreetWays`, and keep
-    what comes back. Every later build reads the file, so tuning a threshold
-    across twenty runs is twenty local runs and one request.
+    Load the streets' stored geometry from the backend seed, through the
+    Worker's own `loadStreetWays`, and keep it as a document. Every later build
+    reads the file, exactly as before — and the document can still be promoted
+    to a fixture.
     """
+    if not WAYS_SEED.is_file():
+        raise ToolError(f"No street geometry at {repo_path(WAYS_SEED)} — run the province "
+                        "sweep in tools/osm-seed-builder and promote it.")
     payload = run_job({
         "action": "fetch",
         "names": names,
-        "seedPath": str(STREETS_SEED) if resolve else None,
-        "overpassUrl": overpass_url(),
+        "seedDir": str(SEEDS_DIR),
+        "resolve": resolve,
     })
     with _lock:
         path = write_document(CACHE_DIR, name, payload["document"])
     payload.pop("document", None)
     return {**payload, "saved": repo_path(path), "source_id": f"cache:{path.stem}",
             "sources": list_sources()}
-
-
-def promote(source_id: str, name: str) -> dict:
-    """
-    Copy a cached fetch into backend/test/fixtures, where the test suite can
-    reach it. The workflow this exists for is: a real alert builds a wrong
-    polygon, you fetch its ways here, you tune until it is right, and then the
-    case becomes a test so it stays right.
-    """
-    document = read_document(source_id)
-    with _lock:
-        path = write_document(FIXTURES_DIR, f"overpass-{name}", document)
-    return {"saved": repo_path(path), "source_id": f"fixture:{path.stem}",
-            "sources": list_sources()}
-
-
-# ── presets ───────────────────────────────────────────────────────────────────
-
-
-def read_presets() -> list[dict]:
-    try:
-        data = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
-        return [p for p in data if isinstance(p, dict)] if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def save_preset(label: str, streets: list, source_id: str, options: dict) -> dict:
-    label = str(label or "").strip()[:80]
-    if not label:
-        raise ToolError("A preset needs a label.")
-    entry = {
-        "label": label,
-        "streets": [str(s) for s in streets][:20],
-        "source": str(source_id or ""),
-        "options": {k: v for k, v in (options or {}).items() if isinstance(v, (int, float))},
-    }
-    with _lock:
-        presets = [p for p in read_presets() if p.get("label") != label]
-        presets.append(entry)
-        presets.sort(key=lambda p: p["label"].lower())
-        PRESETS_FILE.write_text(json.dumps(presets, ensure_ascii=False, indent=2) + "\n",
-                                encoding="utf-8")
-    return {"presets": presets}
-
-
-def delete_preset(label: str) -> dict:
-    with _lock:
-        presets = [p for p in read_presets() if p.get("label") != label]
-        PRESETS_FILE.write_text(json.dumps(presets, ensure_ascii=False, indent=2) + "\n",
-                                encoding="utf-8")
-    return {"presets": presets}
-
-
-# ── misc ──────────────────────────────────────────────────────────────────────
-
-
-def repo_path(path: Path) -> str:
-    return os.path.relpath(path, REPO_ROOT).replace("\\", "/")
-
-
-def parse_streets(raw) -> list[str]:
-    """One per line or comma-separated — alerts list them both ways and nobody
-    should have to reformat a paste."""
-    if isinstance(raw, list):
-        parts = [str(item) for item in raw]
-    else:
-        parts = re.split(r"[\n,;]+", str(raw or ""))
-    return [p.strip() for p in parts if p.strip()][:20]
 
 
 def clean_options(raw) -> dict:
@@ -357,7 +281,8 @@ def build(streets: list, source_id: str, resolve: bool, options: dict) -> dict:
         **run_job({
             "action": "build",
             "names": names,
-            "seedPath": str(STREETS_SEED) if resolve else None,
+            "seedDir": str(SEEDS_DIR) if STREETS_SEED.is_file() else None,
+            "resolve": resolve,
             "document": read_document(source_id),
             "options": clean_options(options),
         }),
@@ -421,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
                     "presets": read_presets(),
                     "seeded": STREETS_SEED.is_file(),
                     "seed_path": repo_path(STREETS_SEED),
-                    "overpass_url": overpass_url(),
+                    "ways_path": repo_path(WAYS_SEED),
                 })
             else:
                 self._send(404, b"Not found", "text/plain; charset=utf-8")
@@ -478,8 +403,8 @@ def main():
     except ToolError as e:
         sys.exit(str(e))
     if not STREETS_SEED.is_file():
-        print(f"Note: {repo_path(STREETS_SEED)} is missing — name resolution will be "
-              "unavailable, so type street names exactly as OSM has them.")
+        print(f"Note: {repo_path(STREETS_SEED)} is missing — names cannot be resolved "
+              "or their geometry loaded; build against a fixture instead.")
 
     Handler.token = secrets.token_urlsafe(24)
     port = free_port()

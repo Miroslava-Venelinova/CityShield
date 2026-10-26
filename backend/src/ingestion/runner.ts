@@ -24,7 +24,7 @@ const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promis
 ];
 
 // The 25 s the plan first assumed was conservative: scheduled handlers get up
-// to ~15 min of wall clock (only CPU is capped at 10 ms, and the AI/Overpass/
+// to ~15 min of wall clock (only CPU is capped at 10 ms, and the AI/
 // Nominatim hops are all I/O — see spikes/RESULTS.md). The budget exists to
 // keep a tick well inside the 15-min cron cadence so the next tick never
 // overlaps this one (the cursor/state model assumes one writer per source at a

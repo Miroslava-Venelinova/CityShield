@@ -256,6 +256,40 @@ SETTLEMENT_SWEEP_AROUND_TEMPLATE = """\
 out tags center;\
 """
 
+# The same two containers again, asking for each street way's full geometry —
+# the D1 copy the polygon builder reads instead of Overpass (migration 0020,
+# docs/specification.md §1.9). A second round trip rather than a change to the
+# sweep above, because Overpass cannot answer `center` and `geom` in one `out`:
+# switching the sweep to `geom` would re-derive every seeded coordinate.
+# Any `highway` value, NOT the STREET_HIGHWAYS filter the sweep above uses:
+# the polygon builder was fitted against Overpass answering `["highway"]` for a
+# seeded name, so a boulevard's `*_link` ramps and pedestrian stretches are part
+# of the street it draws. Filtering them here would quietly change which blocks
+# close. Only ways whose name is a seeded street are kept (run_sweep).
+SETTLEMENT_GEOMETRY_TEMPLATE = """\
+[out:json][timeout:{timeout}];
+rel(id:{rel_id});
+map_to_area->.s;
+way(area.s)["highway"]["name"];
+out tags geom;\
+"""
+
+SETTLEMENT_GEOMETRY_AROUND_TEMPLATE = """\
+[out:json][timeout:{timeout}];
+way(around:{radius},{lat},{lng})["highway"]["name"];
+out tags geom;\
+"""
+
+# Decimal places kept per coordinate: 7, which is all Overpass returns. Six
+# (~0.1 m) looked like plenty against a 12 m road band, but measured over the 48
+# street sets of the 10.2026 polygon review it moved block areas by up to 0.24%
+# against the live query the builder was fitted on. Seven reproduces it exactly,
+# for ~10% more seed file.
+WAY_COORD_DECIMALS = 7
+
+# The file the geometry lands in, next to streets.json in both stores.
+STREET_WAYS_FILE = "street_ways.json"
+
 # How far around a settlement's centre to look for its streets, in metres.
 # 2500 is what the survey behind migration 0015 used around Тополи, Аврен and
 # Долни чифлик; villages are small and the next settlement over is further than
@@ -703,6 +737,57 @@ def save_seed(target: str, store: str, entries: list[dict]) -> Path:
     return path
 
 
+WayKey = tuple[str, str]  # (settlement, street name) — the streets UNIQUE key
+
+
+def load_ways(store: str) -> dict[WayKey, list]:
+    """A store's street geometry, keyed like a street row. Missing file → empty."""
+    path = store_dir(store) / STREET_WAYS_FILE
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ToolError(f"{path.name}: expected a JSON array.")
+    return {((e.get("settlement") or DEFAULT_SETTLEMENT), e["name"]): e["ways"]
+            for e in data if isinstance(e, dict) and e.get("name") and e.get("ways")}
+
+
+def save_ways(store: str, ways: dict[WayKey, list]) -> Path:
+    """
+    One street per line, sorted like streets.json. Geometry pretty-printed one
+    coordinate per line would run to hundreds of thousands of lines; one compact
+    line per street keeps the file a few MB and a re-sweep's diff readable as
+    "these streets changed".
+    """
+    directory = store_dir(store)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / STREET_WAYS_FILE
+    lines = [json.dumps({"settlement": settlement, "name": name, "ways": lines},
+                        ensure_ascii=False, separators=(",", ":"))
+             for (settlement, name), lines in sorted(ways.items())]
+    path.write_text("[\n" + ",\n".join(lines) + ("\n" if lines else "") + "]\n",
+                    encoding="utf-8")
+    return path
+
+
+def merge_ways(store: str, incoming: dict[WayKey, list]) -> dict:
+    """
+    Replace every settlement `incoming` covers, wholesale; leave the rest alone.
+
+    Per settlement rather than per street because a sweep is that settlement's
+    complete answer: a street OSM renamed or deleted since the last sweep must
+    lose its ways here, or the builder keeps drawing a road that is gone.
+    """
+    covered = {settlement for settlement, _ in incoming}
+    current = load_ways(store)
+    kept = {key: lines for key, lines in current.items() if key[0] not in covered}
+    path = save_ways(store, {**kept, **incoming})
+    return {"target": "street_ways", "path": display_path(path),
+            "settlements": len(covered), "streets": len(incoming),
+            "ways": sum(len(lines) for lines in incoming.values()),
+            "removed": sum(1 for key in current if key[0] in covered and key not in incoming)}
+
+
 def merge_into_seed(target: str, incoming: list[dict], overwrite: bool,
                     store: str = "output", settlement: str | None = None,
                     authoritative: bool = False) -> dict:
@@ -877,6 +962,11 @@ def seed_status() -> dict:
                          else e["name"] for e in entries],
                 "settlements": dict(sorted(settlements.items(), key=lambda kv: -kv[1])),
             }
+        ways = load_ways(store)
+        status[store]["street_ways"] = {
+            "streets": len(ways),
+            "ways": sum(len(lines) for lines in ways.values()),
+        }
     status["sql"] = sql_status()
     status["regions_known"] = sorted(known_region_names())
     # Settlements the `around` kinds cannot search from, because nothing has
@@ -943,9 +1033,15 @@ def promote_to_backend(overwrite: bool) -> dict:
     """Merge output/ into backend/seeds/ — the one step that writes outside the
     tool's own directory, hence its own button rather than a side effect."""
     pending = {target: load_seed(target, "output") for target in TARGETS}
-    if not any(pending.values()):
+    ways = load_ways("output")
+    if not any(pending.values()) and not ways:
         raise ToolError("output/ is empty — merge some extracted rows into it first.")
-    return {"reports": [
+    # Geometry rides along whenever a sweep produced it, replacing backend's for
+    # each settlement it covers (merge_ways). Without this step the street rows
+    # would move and their ways would not, and generate-seed.mjs would key the
+    # new ways to nothing.
+    ways_report = merge_ways("backend", ways) if ways else None
+    return {"ways": ways_report, "reports": [
         # output/ is the tool's complete set for every name it holds — a whole
         # province sweep, not a hand-picked batch — so a backend row under one of
         # those names that output/ does not carry is a superseded key, typically a
@@ -1013,8 +1109,11 @@ def generate_sql() -> dict:
 
 def apply_to_d1(remote: bool) -> dict:
     """
-    Migrate, then apply output/seed.sql. Migrations first because the
-    coordinates the tool writes only have columns to land in from 0005 onwards.
+    Migrate, then apply output/seed.sql and the street-geometry chunks beside
+    it — through backend/seeds/apply.mjs, the same script `npm run db:*` runs,
+    so the order (migrations, seed, chunks) and the stop-at-first-failure rule
+    live in one place. Migrations first because the coordinates the tool writes
+    only have columns to land in from 0005 onwards, and the geometry from 0020.
 
     wrangler prompts for confirmation on the remote database; with no TTY it
     logs the question and takes the fallback (yes), so the run is not left
@@ -1024,19 +1123,8 @@ def apply_to_d1(remote: bool) -> dict:
         raise ToolError("output/seed.sql does not exist yet — generate it first.")
 
     scope = "--remote" if remote else "--local"
-    steps = [
-        ["npx", "wrangler", "d1", "migrations", "apply", "cityshield-db", scope],
-        ["npx", "wrangler", "d1", "execute", "cityshield-db", scope, f"--file={OUTPUT_SQL}"],
-    ]
-
-    results = []
-    for argv in steps:
-        result = run_command(argv)
-        results.append(result)
-        if result["exit_code"] != 0:
-            break  # applying seed.sql against an unmigrated schema only compounds the failure
-    return {"scope": scope, "steps": results,
-            "exit_code": max(r["exit_code"] for r in results)}
+    result = run_command(["node", str(SEEDS_DIR / "apply.mjs"), scope, "--sql", str(OUTPUT_SQL)])
+    return {"scope": scope, "steps": [result], "exit_code": result["exit_code"]}
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -1168,6 +1256,37 @@ def sweep_settlement(endpoint: str, settlement: dict, rel_id: int | None,
     streets = [e for e in elements if "highway" in (e.get("tags") or {})]
     districts = [e for e in elements if "place" in (e.get("tags") or {})]
     return group_elements(streets), group_elements(districts)
+
+
+def sweep_geometry(endpoint: str, settlement: dict, rel_id: int | None,
+                   radius: int, timeout: int = 300) -> dict[str, list[list[list[float]]]]:
+    """
+    One settlement's street ways as `{name: [[[lon, lat], …], …]}` — one line per
+    OSM way, in the container sweep_settlement used, so every way belongs to the
+    settlement its street row is filed under.
+    """
+    if rel_id is not None:
+        query = SETTLEMENT_GEOMETRY_TEMPLATE.format(timeout=timeout, rel_id=int(rel_id))
+    else:
+        if settlement["lat"] is None or settlement["lng"] is None:
+            return {}
+        query = SETTLEMENT_GEOMETRY_AROUND_TEMPLATE.format(
+            timeout=timeout, radius=int(radius), lat=settlement["lat"], lng=settlement["lng"])
+
+    ways: dict[str, list[list[list[float]]]] = {}
+    for element in overpass_post(endpoint, query).get("elements", []):
+        tags = element.get("tags") or {}
+        # The same name group_elements files the street under, or the ways
+        # would land on a key no street row carries.
+        name = (tags.get("name") or tags.get("name:bg") or "").strip()
+        line = [[round(p["lon"], WAY_COORD_DECIMALS), round(p["lat"], WAY_COORD_DECIMALS)]
+                for p in element.get("geometry") or []
+                if isinstance(p, dict) and "lon" in p and "lat" in p]
+        # A one-point way has no direction to extend and no length to bound
+        # anything with.
+        if name and len(line) >= 2:
+            ways.setdefault(name, []).append(line)
+    return ways
 
 
 # A name that is nothing but its own kind word: OSM carries `name=Площад` for an
@@ -1335,7 +1454,7 @@ def run_sweep(endpoint: str, province: str, radius: int,
     """
     try:
         _sweep_set(state="running", phase="Resolving the province…", done=0, total=0,
-                   settlements=0, districts=0, streets=0, current="",
+                   settlements=0, districts=0, streets=0, ways=0, current="",
                    skipped=[], dropped=[], resolved=[], error=None)
         settlements, boundary_ids = province_settlements(endpoint, province)
         _sweep_set(phase="Sweeping settlements…", total=len(settlements))
@@ -1360,9 +1479,17 @@ def run_sweep(endpoint: str, province: str, radius: int,
 
         district_where: dict[str, list[dict]] = {}
         street_rows: list[tuple[str, list[dict]]] = []
+        way_rows: dict[WayKey, list] = {}
+        # Every street name either store already files per settlement — see the
+        # geometry step below for why the sweep's own names are not enough.
+        seeded_streets: dict[str, set[str]] = {}
+        for store in STORES:
+            for entry in load_seed("streets", store):
+                seeded_streets.setdefault(entry["settlement"], set()).add(entry["name"])
         skipped: list[str] = []
         dropped: list[str] = []
         streets_total = 0
+        ways_total = 0
 
         for i, settlement in enumerate(settlements, 1):
             name = settlement["name"]
@@ -1445,7 +1572,29 @@ def run_sweep(endpoint: str, province: str, radius: int,
             if streets:
                 street_rows.append((name, streets))
                 streets_total += len(streets)
-            _sweep_set(done=i, districts=len(district_where), streets=streets_total)
+            # Geometry only for names that have a street row to hang it on:
+            # the ones that survived every filter above, plus any a seed store
+            # already files under this settlement. The second half matters —
+            # the backend seed holds names earlier extractions found with other
+            # highway classes (`Акад. Игор Курчатов` is a `*_link`), production
+            # resolves alerts against those rows too, and a row with no ways is
+            # a side no block can be drawn along.
+            kept_names = {s["name"] for s in streets} | seeded_streets.get(name, set())
+            if kept_names:
+                try:
+                    lines = sweep_geometry(endpoint, settlement, rel_id, radius)
+                except ToolError as e:
+                    # The streets are still good; only the polygon builder loses
+                    # this settlement, and it says so per alert.
+                    dropped.append(f"{name}: street geometry not fetched — {e}")
+                    _sweep_set(dropped=list(dropped))
+                    lines = {}
+                for street, street_lines in lines.items():
+                    if street in kept_names:
+                        way_rows[(name, street)] = street_lines
+                        ways_total += len(street_lines)
+            _sweep_set(done=i, districts=len(district_where), streets=streets_total,
+                       ways=ways_total)
 
         _sweep_set(phase="Merging…", current="")
 
@@ -1471,6 +1620,8 @@ def run_sweep(endpoint: str, province: str, radius: int,
         for settlement_name, streets in street_rows:
             merge_into_seed("streets", streets, overwrite,
                             store="output", settlement=settlement_name)
+        if way_rows:
+            merge_ways("output", way_rows)
 
         _sweep_set(state="done", phase="Finished.", current="", done=len(settlements),
                    districts=len(district_entries), skipped=skipped, dropped=dropped,

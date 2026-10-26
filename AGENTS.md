@@ -28,7 +28,8 @@ which something.
 backend/            the Worker — the entire server side
   wrangler.jsonc    bindings (D1 `DB`, `AI`, 8 rate limiters), crons, vars
   migrations/       D1 SQL migrations
-  seeds/            regions/streets/aliases.json + generate-seed.mjs
+  seeds/            regions/streets/aliases/street_ways.json, generate-seed.mjs,
+                    apply.mjs (what `npm run db:*` runs)
   src/index.ts      exports { fetch, scheduled }; scheduled dispatches on event.cron
   src/api/          Hono routes, middleware, rate limiting, /privacy
   src/core/         alert-service (+ locations, enrichment), fuzzy, place-names,
@@ -64,8 +65,8 @@ From `frontend/`: `npm run lint`, `npm run typecheck`. CI runs exactly these, pl
 `scheduled` (every 15 min) → `schedule.ts` picks the due sources → scrape
 (HTMLRewriter + string scans) → **AI parse** (Workers AI, JSON-schema mode) → **`normalize.ts`
 deterministic guards** → geocode (Nominatim, cached in D1) → build polygon
-(Overpass + JSTS) → store → target → push (OneSignal). A daily cleanup cron runs
-retention deletions.
+(street geometry stored in D1 + JSTS — no Overpass at runtime) → store → target →
+push (OneSignal). A daily cleanup cron runs retention deletions.
 
 A parsed **location is three slots** (`shared/schemas.ts`): `settlement`
 (`гр. Варна`), `area` (`кв. Виница`, `ж.к. Младост`) and `streets` — each
@@ -106,7 +107,10 @@ for each is in [docs/design-decisions.md](docs/design-decisions.md).
   Order matters (A14 before A2, A15 last); A15 alone adds a place.
 - **Only a hedged alert is ever suppressed as a duplicate**, and only against one
   already delivered.
-- **Seeded names are Overpass keys** — never reformat one (see Conventions).
+- **Seeded names are OSM keys** — never reformat one (see Conventions).
+- **Street geometry is seeded, never fetched at ingest time** (`street_ways`,
+  migration 0020). A street without ways is a sweep gap; re-sweep, do not add a
+  live fallback.
 - **Prompts are copied verbatim** (`shared/constants.ts`) — don't "improve" them;
   validate any change with `spikes/ai-eval`.
 - Deploy **migrations before the Worker that needs them.**
@@ -114,7 +118,8 @@ for each is in [docs/design-decisions.md](docs/design-decisions.md).
 ## Conventions
 
 - Every SQL statement lives in `src/db/queries.ts` — nowhere else.
-- Seeded region and street names are the **Overpass query keys**. Never
+- Seeded region and street names are **OSM's own names**, and a street's stored
+  geometry (`seeds/street_ways.json`) is filed under that exact string. Never
   "normalise" or reformat one; `parseName` already handles the spellings the
   sources actually write (`ЖК`, `ж.к`, `м-ст`, `ул.7`).
 - Matching is `core/fuzzy.ts` (a `pg_trgm` port — keep its semantics) plus

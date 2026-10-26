@@ -5,9 +5,9 @@
 import { env, fetchMock } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pointInRing, type Ring } from "../src/core/geo";
-import { clearRefCaches } from "../src/db/queries";
+import { clearRefCaches, getStreets } from "../src/db/queries";
 import {
-  buildBlockPolygon, buildPolygonForStreets, clearOverpassCache, fetchStreetWays, groupWaysByName,
+  buildBlockPolygon, buildPolygonForStreets, groupWaysByName, loadStreetWays, type OverpassResponse,
 } from "../src/ingestion/polygon";
 
 const SET1 = ["Йордан Йовков", "Хан Кубрат", "Ивац Войвода", "Тихомир"];
@@ -174,21 +174,22 @@ describe("buildBlockPolygon rejects dual-carriageway slivers", () => {
   });
 });
 
-describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
+describe("buildPolygonForStreets (fuzzy resolve + stored geometry)", () => {
+  // No test here may reach the network: the geometry is read from D1
+  // (migration 0020) and nothing else. A leftover live fetch would throw.
   beforeAll(() => {
     fetchMock.activate();
     fetchMock.disableNetConnect();
   });
 
-  // The settlement the block is being built in. It is now an input rather than
-  // the hardcoded "Варна" the Overpass query used to carry: the street lookup
-  // scopes to `id`, and the fetch measures the returned ways against `lat/lng`
-  // so a same-named street in another town cannot reach the geometry.
-  let varna: { id: number; name: string; lat: number | null; lng: number | null };
+  // The settlement the block is being built in. Its id is the whole scope: the
+  // street lookup is limited to it, and the stored ways are read by the rows
+  // that lookup picks, so a same-named street in another town cannot reach the
+  // geometry.
+  let varna: { id: number; name: string };
 
   beforeEach(async () => {
     clearRefCaches();
-    clearOverpassCache();
     await env.DB.prepare(
       "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES ('Варна', 43.2073873, 27.9166653)",
     ).run();
@@ -199,35 +200,62 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
          UNION ALL SELECT 'Ивац Войвода' UNION ALL SELECT 'Тихомир'
          UNION ALL SELECT 'Розова долина')`,
     ).run();
+    await env.DB.prepare("DELETE FROM street_ways").run();
     varna = (await env.DB.prepare(
-      "SELECT id, region_name AS name, lat, lng FROM regions WHERE region_name = 'Варна'",
+      "SELECT id, region_name AS name FROM regions WHERE region_name = 'Варна'",
     ).first())! as typeof varna;
   });
 
-  it("resolves prefixed/abbreviated names and builds the polygon", async () => {
-    fetchMock.get("https://overpass-api.de")
-      .intercept({ path: "/api/interpreter", method: "POST" })
-      .reply(200, overpassSet1Raw, { headers: { "Content-Type": "application/json" } });
+  /**
+   * File an Overpass document's ways under a settlement's street rows, keyed
+   * by name the way seeds/generate-seed.mjs keys them.
+   */
+  async function storeWays(doc: OverpassResponse, settlement = "Варна") {
+    const statements = [];
+    for (const [name, lines] of groupWaysByName(doc)) {
+      for (const line of lines) {
+        statements.push(env.DB.prepare(
+          `INSERT INTO street_ways (street_id, coords)
+           SELECT s.id, ? FROM streets s JOIN regions r ON r.id = s.region_id
+            WHERE s.street_name = ? AND r.region_name = ? AND r.settlement_id IS NULL`,
+        ).bind(JSON.stringify(line), name, settlement));
+      }
+    }
+    await env.DB.batch(statements);
+  }
+
+  it("resolves prefixed/abbreviated names and builds the polygon from stored ways", async () => {
+    await storeWays(overpassSet1);
 
     const { polygon } = await buildPolygonForStreets(env, [
       "ул. Йордан Йовков", "ул.Хан Кубрат", "Ивац Войвода", "ул. Тихомир",
     ], varna);
     expect(polygon).not.toBeNull();
     expect(polygon!.features[0]!.properties.streets.sort()).toEqual([...SET1].sort());
-    fetchMock.assertNoPendingInterceptors();
-
-    // Second call hits the module-scope Overpass cache (no interceptor left).
-    const again = await buildPolygonForStreets(env, SET1, varna);
-    expect(again.polygon).not.toBeNull();
   });
 
-  it("returns null (no Overpass call) when fewer than 3 names resolve", async () => {
+  it("returns null when fewer than 3 names resolve", async () => {
     const result = await buildPolygonForStreets(
       env, ["ул. Йордан Йовков", "Несъществуваща", "Друга измислена"], varna);
     expect(result.polygon).toBeNull();
     // The names that failed, so a source typo is distinguishable from a street
-    // that resolved fine and then found no OSM way (F6 / §2.1).
+    // that resolved fine and then had no stored way (F6 / §2.1).
     expect(result.reason).toContain("Несъществуваща");
+  });
+
+  // The seed half of a failure, named: a street that resolves but has no stored
+  // way is a gap in the sweep (outside the settlement's boundary, or renamed in
+  // OSM since), and "only 2 streets found" alone would read as a geometry fault.
+  it("names a resolved street the seed holds no geometry for", async () => {
+    await storeWays(overpassSet1);
+    await env.DB.prepare(
+      `DELETE FROM street_ways WHERE street_id IN
+         (SELECT id FROM streets WHERE street_name IN ('Тихомир', 'Ивац Войвода'))`,
+    ).run();
+
+    const result = await buildPolygonForStreets(env, SET1, varna);
+    expect(result.polygon).toBeNull();
+    expect(result.reason).toContain("no stored geometry for: Ивац Войвода, Тихомир");
   });
 
   // §2.1 Cause B, reproduced against the local Overpass instance on 10.08.2026:
@@ -241,7 +269,11 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
   // spellings score 0.389 on their cores while `Младост 1`/`Младост 2` score
   // 0.667, so no similarity threshold separates them.
   it("folds an OSM spelling variant's ways under the street they belong to", async () => {
-    const variant = JSON.stringify({
+    await env.DB.prepare(
+      `INSERT INTO streets (street_name, region_id)
+       VALUES ('бул. Януш Хуняди', ?), ('бул. Янош Хунияди', ?)`,
+    ).bind(varna.id, varna.id).run();
+    await storeWays({
       elements: [
         { type: "way", tags: { name: "бул. Януш Хуняди" },
           geometry: [{ lon: 27.8700, lat: 43.2228 }, { lon: 27.8689, lat: 43.2235 }] },
@@ -249,11 +281,11 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
           geometry: [{ lon: 27.8689, lat: 43.2235 }, { lon: 27.8696, lat: 43.2311 }] },
       ],
     });
-    fetchMock.get("https://overpass-api.de")
-      .intercept({ path: "/api/interpreter", method: "POST" })
-      .reply(200, variant, { headers: { "Content-Type": "application/json" } });
+    clearRefCaches();
+    const streets = await getStreets(env);
+    const canonical = streets.find((s) => s.name === "бул. Януш Хуняди")!;
 
-    const ways = await fetchStreetWays(env, ["бул. Януш Хуняди"], varna);
+    const ways = await loadStreetWays(env, [canonical], streets, varna.id);
     // Both ways arrive under the canonical name, and the variant is not a
     // street of its own — buildBlockPolygon counts distinct streets to decide
     // whether a face is a block, so a second entry would inflate that count.
@@ -265,9 +297,13 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
   // STORED names over the entire table, so a stored kind prefix decided the
   // winner and no settlement bounded the search: "ул. Никола Вапцаров" resolved
   // to Горица's "ул.Никола Вапцаров" rather than Varna's bare "Никола Вапцаров",
-  // and that resolved name — sent to a Варна-scoped Overpass query — matched zero
-  // ways. Three of the window's four ★ polygon failures are this.
-  it("resolves inside its own settlement, not to a like-named row elsewhere", async () => {
+  // and the geometry fetched under that name matched zero ways in Варна. Three
+  // of the window's four ★ polygon failures are this.
+  //
+  // Stored geometry makes the scope carry through: Горица's street has a way,
+  // Варна's does not, so if the resolver strayed to Горица its geometry would be
+  // read. It must not be — the reason names Варна's row as the one without ways.
+  it("resolves inside its own settlement and never reads another's geometry", async () => {
     await env.DB.prepare(
       "INSERT OR IGNORE INTO regions (region_name, lat, lng) VALUES ('Горица', 42.920, 27.830)",
     ).run();
@@ -276,19 +312,18 @@ describe("buildPolygonForStreets (fuzzy resolve + Overpass)", () => {
        VALUES ('ул.Никола Вапцаров', (SELECT id FROM regions WHERE region_name = 'Горица')),
               ('Никола Вапцаров', (SELECT id FROM regions WHERE region_name = 'Варна'))`,
     ).run();
+    await storeWays({
+      elements: [{ type: "way", tags: { name: "ул.Никола Вапцаров" },
+        geometry: [{ lon: 27.830, lat: 42.920 }, { lon: 27.832, lat: 42.921 }] }],
+    }, "Горица");
     clearRefCaches();
-
-    fetchMock.get("https://overpass-api.de")
-      .intercept({ path: "/api/interpreter", method: "POST" })
-      .reply(200, "{}", { headers: { "Content-Type": "application/json" } });
 
     // Two more Varna streets so the set reaches the three-street floor and the
     // assertion is about which row won, not about the count.
     const result = await buildPolygonForStreets(
       env, ["ул. Никола Вапцаров", "ул. Хан Кубрат", "ул. Тихомир"], varna);
-    // No OSM geometry came back, so there is no polygon — but the failure is now
-    // "no OSM geometry", which means all three names resolved to Varna rows.
     expect(result.reason).not.toContain("street names resolved");
+    expect(result.reason).toContain("no stored geometry for: Никола Вапцаров");
   });
 });
 

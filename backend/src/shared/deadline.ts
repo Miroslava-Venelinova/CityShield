@@ -1,6 +1,6 @@
 // Wall-clock budgeting for the ingest path.
 //
-// Every external hop in the pipeline (source fetch, Workers AI, Overpass,
+// Every external hop in the pipeline (source fetch, Workers AI,
 // Nominatim, OneSignal) can hang for minutes on its own. Without a shared budget
 // the runner's deadline check between messages is fiction: one stuck subrequest
 // burns the whole invocation and the neurons and subrequests spent on the

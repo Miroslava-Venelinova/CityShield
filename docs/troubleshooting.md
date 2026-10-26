@@ -125,8 +125,13 @@ work through the reason:
 - **"the streets enclose no block", with every name resolved:** count the
   ways per name. A single short fragment means an OSM spelling variant,
   which you add to `OSM_NAME_VARIANTS`.
-- **`Overpass HTTP 521/504`:** the public endpoint is down. This is not our
-  bug, and the failover list will handle it.
+- **`no stored geometry for: <street>`:** the name resolved, but the seed
+  holds no way for it in that settlement — it lies outside the settlement's
+  boundary, or OSM added or renamed it after the last sweep.
+  [Refresh street geometry](runbook.md#refresh-street-geometry).
+- **`Overpass HTTP 521/504`** (alerts stored before 26.10.2026 only): the
+  builder still fetched geometry live then, and the public endpoint was down.
+  It no longer calls Overpass at all.
 - **A degenerate ring was rejected:** this is intended. Check it in
   `tools/polygon-tester`.
 
@@ -175,8 +180,14 @@ nothing, silently.
 Every request must carry the per-run token from the printed URL, with `Host`
 pinned to `127.0.0.1`. Open the exact URL the tool printed.
 
-### Overpass answers 406
+### Overpass answers 406 (seed sweep)
 You sent a browser User-Agent. Overpass requires a descriptive one.
+
+### `wrangler d1 execute --local` hangs, then "Body Timeout Error"
+One `--file` much over 1 MB stalls local D1 (miniflare) and throws
+`HashIndex detected hash table inconsistency`. Apply through
+`node seeds/apply.mjs` (what `npm run db:*` calls), which applies the street
+geometry in ≤700 KB chunks.
 
 ### Overpass 429 during a seed sweep
 The public mirrors rate-limit. Use the self-hosted instance

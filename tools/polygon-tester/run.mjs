@@ -16,6 +16,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [, , bundlePath] = process.argv;
@@ -53,22 +54,61 @@ function toOverpassDocument(waysByName) {
 }
 
 /**
- * Raw names → seeded street names, exactly as buildPolygonForStreets does it:
- * same matcher, same threshold, same "first match wins, duplicates dropped"
- * rule. A name the tool resolves differently from ingestion would make every
- * polygon below an answer to the wrong question.
+ * The backend seed as the Worker sees it: street rows with ids and a settlement
+ * id, so the Worker's own `matchStreet` and `loadStreetWays` can run on them.
+ * Ids are synthetic — only consistent within this run, which is all they need.
  */
-function resolveNames(names, seedPath) {
-  const streets = JSON.parse(readFileSync(seedPath, "utf-8"));
+function loadSeed(seedDir, settlement) {
+  const streets = JSON.parse(readFileSync(join(seedDir, "streets.json"), "utf-8"));
+  const settlementIds = new Map();
+  const idOf = new Map();
+  const rows = streets.map((s, i) => {
+    const place = s.settlement || "Варна";
+    if (!settlementIds.has(place)) settlementIds.set(place, settlementIds.size + 1);
+    idOf.set(`${place}\0${s.name}`, i + 1);
+    return { id: i + 1, name: s.name, lat: s.lat ?? null, lng: s.lng ?? null,
+             region_id: settlementIds.get(place) };
+  });
+  const scopeId = settlementIds.get(settlement);
+  if (scopeId === undefined) fail(`The street seed holds no streets in "${settlement}".`);
+  return { rows, scopeId, idOf };
+}
+
+/**
+ * Raw names → seeded street rows, exactly as buildPolygonForStreets does it:
+ * same matcher, same settlement scope, same threshold, same "first match wins,
+ * duplicates dropped" rule. With `resolve` off, a name is taken as the OSM name
+ * it is and only looked up verbatim in the settlement.
+ */
+function resolveNames(names, seed, resolve) {
   const resolved = [];
   const seen = new Set();
   for (const raw of names) {
-    const match = worker.bestMatch(raw, streets, (s) => s.name, worker.POLYGON_RESOLVE_THRESHOLD);
-    const name = match ? match.name : null;
-    resolved.push({ raw, name, duplicate: !!name && seen.has(name) });
-    if (name) seen.add(name);
+    const row = resolve
+      ? worker.matchStreet(raw, seed.rows, seed.scopeId, worker.POLYGON_RESOLVE_THRESHOLD)
+      : seed.rows.find((r) => r.region_id === seed.scopeId && r.name === raw) ?? null;
+    resolved.push({ raw, name: row ? row.name : null, duplicate: !!row && seen.has(row.id), row });
+    if (row) seen.add(row.id);
   }
   return resolved;
+}
+
+/**
+ * The street_ways table, in memory: just enough of a D1 binding for the
+ * Worker's `loadStreetWays` (getStreetWays prepares, binds the ids, reads all).
+ */
+function seedWaysDb(seedDir, seed) {
+  const entries = JSON.parse(readFileSync(join(seedDir, "street_ways.json"), "utf-8"));
+  const byStreet = new Map();
+  for (const e of entries) {
+    const id = seed.idOf.get(`${e.settlement || "Варна"}\0${e.name}`);
+    if (id !== undefined) byStreet.set(id, e.ways.map((w) => ({ street_id: id, coords: JSON.stringify(w) })));
+  }
+  return {
+    prepare: () => ({
+      bind: (...ids) => ({ all: async () => ({ results: ids.flatMap((id) => byStreet.get(id) ?? []) }) }),
+    }),
+  };
 }
 
 /** What came back per street — the first place a province-wide fetch shows. */
@@ -110,22 +150,25 @@ try {
   const names = (job.names || []).map((n) => String(n).trim()).filter(Boolean);
   if (!names.length) fail("No street names given.");
 
-  const resolved = job.seedPath ? resolveNames(names, job.seedPath) : null;
-  // Unresolved names are dropped rather than passed through: Overpass matches
-  // `name` exactly, so an unresolved name can only ever return nothing, and
-  // leaving it in would make the "fewer than 3 streets" bail read as a geometry
-  // failure instead of a naming one.
+  const seed = job.seedDir ? loadSeed(job.seedDir, job.settlement || "Варна") : null;
+  const resolved = seed ? resolveNames(names, seed, job.resolve !== false) : null;
+  // Unresolved names are dropped rather than passed through: the stored
+  // geometry is keyed by street row, so a name with no row can only ever have
+  // no ways, and leaving it in would make the "fewer than 3 streets" bail read
+  // as a geometry failure instead of a naming one.
   const queryNames = resolved
     ? [...new Set(resolved.filter((r) => r.name).map((r) => r.name))]
     : names;
 
   if (action === "fetch") {
-    if (queryNames.length < 1) fail("Nothing resolved to fetch.");
-    worker.clearOverpassCache();
-    const ways = await worker.fetchStreetWays(
-      { OVERPASS_URL: job.overpassUrl }, queryNames, Date.now() + 60_000);
+    if (!seed) fail("Loading ways needs the backend seed (seedDir).");
+    const rows = [...new Map(resolved.filter((r) => r.row).map((r) => [r.row.id, r.row])).values()];
+    if (rows.length < 1) fail("Nothing resolved to load.");
+    // The Worker's own read, variant folding included — only the binding is ours.
+    const ways = await worker.loadStreetWays(
+      { DB: seedWaysDb(job.seedDir, seed) }, rows, seed.rows, seed.scopeId);
     done({
-      resolved,
+      resolved: resolved.map(({ row, ...r }) => r),
       queryNames,
       document: toOverpassDocument(ways),
       summary: waySummary(ways, queryNames),
@@ -136,7 +179,7 @@ try {
     const ways = worker.groupWaysByName(job.document || {});
     const result = await worker.buildBlockPolygon(ways, queryNames, { ...job.options, debug: true });
     done({
-      resolved,
+      resolved: resolved && resolved.map(({ row, ...r }) => r),
       queryNames,
       summary: waySummary(ways, queryNames),
       // Every name the document holds, not only the ones asked for: a fixture
