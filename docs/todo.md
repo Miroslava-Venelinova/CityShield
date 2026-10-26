@@ -5,12 +5,15 @@ against OneSignal is installed, sign-in works and push delivery is proven end to
 What the system *does* is specified in the [specification](specification.md); this file is only what is
 still open.
 
-Two things are left, and they are independent of each other:
+Three things are left, and they are independent of each other:
 
 - **Backend: accuracy, not features.** The pipeline works; what it gets wrong is *which
   place* an alert names and *who* therefore gets notified (§2).
 - **Release: everything Google Play wants** before the app can be published (§4–§5),
   most of which is calendar time rather than work.
+- **Legal and resilience gaps** found in the pre-release review of 26.10.2026 (§8–§9):
+  no terms of use or disclaimer, no permission to republish the sources, holes in the
+  privacy policy, and external services with no fallback and no one watching them.
 
 Items marked 🧑 need the operator (accounts, payments, decisions); §7 is the checklist
 of what only you can provide, and the work items point into it.
@@ -82,18 +85,13 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       by building the per-name data at module evaluation (§1.3), 11.6 ms → 1.27 ms. The
       in-memory trigram index below would **not** have fixed it: an index is still built
       per isolate on first use. Read specification.md §1.1 on what the 10 ms actually bounds.
-- [ ] **A message that cannot be processed still pins the cursor forever.** This is what
-      turned one over-budget message into a 20-hour outage instead of one late alert. The
-      design is deliberate for the transient cases — oldest-first, advance only past
-      successes — and `MAX_PUSH_ATTEMPTS` already caps the one failure that repeats
-      (a dead push). Nothing caps a message that fails *before* the store.
-      The awkward part: an `exceededCpu` kill runs no more code, so an attempt counter
-      written after the failure never gets written. It has to be written *before* the
-      heavy work and cleared on success — one extra D1 write per message per tick — and
-      then N strikes means skipping a real public-safety alert on purpose. That trade is
-      a product decision, not a refactor, which is why this is a checkbox and not a
-      patch. Cheap partial credit meanwhile: alert on a `crawl_state.updated_at` that
-      has not moved in a few hours (specification.md §3.8 has the query).
+- [x] ~~**A message that cannot be processed still pins the cursor forever.**~~ Done
+      31.08.2026 in `3c5f004`: `MAX_PRE_STORE_ATTEMPTS = 5` (`ingestion/state.ts`,
+      migration 0018) writes the attempt counter *before* the heavy work and moves the
+      cursor past a message after five strikes, so one bad message costs that message,
+      not the source. The `ingest_health` heartbeat and `/api/health` (migration 0019)
+      came in the same deploy. What is still missing is anyone *calling* `/api/health`
+      — that is §9.
 - [ ] **Workers AI is timing out far more than spike 2 measured — watch this.** Over the
       three recovery ticks on 30.07.2026: **6 `AI.run timed out after 30000 ms` against 8
       messages ingested**, and one epro message exhausted all 3 attempts and was deferred
@@ -196,6 +194,9 @@ lead time, not by effort: the first two items are measured in weeks and gate the
       (`DELETE /api/auth/me`, wired to Profile); the web page does not. Serve one from
       the Worker next to `/privacy` — it can be a static page explaining how to request
       deletion by email, but the URL has to exist and be entered in the console.
+      Play wants a page where someone *without the app installed* can ask for
+      deletion, which is why `/privacy` alone does not qualify (compliance.md §1 used
+      to say it did; corrected 26.10.2026).
 - [ ] **Content rating questionnaire** (IARC), **target audience and content**
       declaration, **ads declaration** (no ads), and the **government-apps / news**
       questions — CityShield republishes utility outage notices from public sources,
@@ -393,3 +394,196 @@ self-service:
 - AI Gateway ("cityshield", free, for AI request logs) — nice for debugging, not urgent.
 - No other accounts: Nominatim and Overpass need no registration — we just follow their
   usage policies, which the code is built to respect ([specification.md](specification.md) §2.6).
+
+## 8. Legal gaps — found in the 26.10.2026 pre-release review
+
+None of these were tracked before. The research behind them, with the law quoted and
+sources linked, is in **[legal.md](legal.md)**, and its §9 lists the questions for a
+one-hour consultation with a Bulgarian lawyer. That consultation is worth doing before
+release.
+
+### 8.1 Terms of use and a disclaimer — the largest gap
+
+- [ ] **There are no terms of use, and nothing anywhere says the app is unofficial.**
+      CityShield is something people may rely on for outage warnings. When an alert is
+      missed, late, or names the wrong street, nothing limits what was promised. Write
+      terms of use (Bulgarian + English, served by the Worker next to `/privacy`,
+      linked from the app and from registration) that cover at least:
+      - the app is **not an official source** and is not affiliated with ViK Варна,
+        ЕРП Север, Veolia/Енерджи Варна or Община Варна;
+      - alerts are **automatically extracted** and may be incomplete, late or wrong —
+        check the utility's own site for anything that matters;
+      - **no guarantee** of delivery or availability;
+      - a **minimum age** (see §8.2);
+      - Bulgarian law and courts apply.
+      Bulgarian law (ЗЗД чл. 94) does not let a provider exclude liability for intent or
+      gross negligence, and чл. 45 *presumes* fault in tort (legal.md §2), so the
+      liability clause needs a lawyer's wording, not a template.
+- [ ] **An in-app notice**: a short line on first launch, and on each alert's detail
+      view, saying the same thing — unofficial, may be wrong, link to the source.
+- [ ] Registration should show the terms and require accepting them, and store the
+      acceptance (timestamp + terms version), the same way as the location consent in
+      §8.2. They must be shown *before* signup: ЗЗП чл. 143 ал. 2 т. 10 makes a clause
+      the consumer could not read beforehand unfair.
+
+### 8.2 Privacy policy — gaps in what `/privacy` says today
+
+- [ ] 🧑 **Name the controller.** The policy says "the CityShield operator" and gives
+      only an email. GDPR Art. 13(1)(a) requires the controller's identity — the
+      operator's real name, or a company's name and address — and Play expects the
+      policy to match the developer name on the listing. Decide whose name goes there
+      (it will also be public on the Play listing).
+- [ ] **Undisclosed transfers from the device.** The app loads map tiles straight from
+      `tile.openstreetmap.org` and Leaflet from `unpkg.com`
+      (`frontend/src/components/leafletWebView.ts`), so both see the user's IP address.
+      The policy lists only Nominatim, and says that happens only when setting a
+      location. Fix: bundle Leaflet into the app (§9.1 — this also removes an outage
+      dependency), and list the OSMF tile servers in `/privacy` (both languages) and in
+      compliance.md §5.
+- [ ] **"Deleted immediately" is not quite true.** D1 Time Travel keeps restorable
+      history for 7 days (30 on Workers Paid), and that is the breach runbook's restore
+      path. Say so in `/privacy`: deleted at once from the live database, gone from
+      backups within 7 days.
+- [ ] 🧑 **No minimum age — decide 18+ for the first release** (legal.md §1). Admitting
+      anyone under 18 makes a DPIA mandatory (CPDP list item 7, "services offered
+      directly to a child"). Under-14s cannot contract (ЗЛС чл. 3) and need a parent's
+      consent for location (ЗЗЛД чл. 25в). 14–17s need parental consent for most legal
+      acts (ЗЛС чл. 4). An honest 18+ statement takes the service out of "offered
+      directly to a child" (EDPB 05/2020 ¶130). What 18+ takes:
+      - "only for people aged 18 and over" in the terms, `/privacy` and at signup;
+      - a **self-declaration checkbox** at registration, stored with a timestamp. Collect
+        no birth date and no ID: excessive age checking is itself a GDPR problem
+        (EDPB ¶135, ¶144);
+      - Play **target audience 18+**, and nothing in the listing or promotion aimed at
+        teenagers;
+      - a written rule: **when the operator learns a user is under 18, delete the
+        account** (and note it);
+      - optional: turn on Play Console's "Restrict minor access".
+- [ ] **No proof of location consent.** The policy names consent (Art. 6(1)(a)) as the
+      basis for storing the home coordinate, and Art. 7(1) requires being able to
+      *demonstrate* it. Nothing records when consent was given or to which wording.
+      Either store a consent timestamp + policy version on the user row when a location
+      is set (one migration, small), or move the basis to contract — see
+      [open-questions.md](open-questions.md).
+- [ ] Bump "Последна редакция / Last revised" on every change, and keep compliance.md §1
+      in sync with it (the policy's own rule).
+
+### 8.3 The right to republish the sources
+
+- [ ] 🧑 **Read each source site's terms of use.** What was found is in legal.md §3.1:
+      ViK and VarnaTraffic publish none; ERP Север has only "Всички права запазени" and
+      customer terms; energy-varna.bg links two terms pages that have not been read yet.
+      No robots.txt forbids the paths we read. Facts and news are not copyrightable
+      (ЗАПСП чл. 4), but the site terms and the database right still apply to
+      systematic copying.
+- [ ] **Decide verbatim text or summary.** The push currently carries the source's title
+      and text word for word. A summary built from the extracted fields, plus a link to
+      the notice, is the stronger position if an operator objects (legal.md §3.2).
+- [ ] **The scraper presents itself as Chrome** (`ingestion/scrape.ts`,
+      `DEFAULT_HEADERS`) because some sources block non-browser user agents. Getting
+      round a block is the weakest position to be in if an operator objects. Once
+      permission is in hand, the scraper can identify itself honestly, as the Nominatim
+      and Overpass requests already do.
+- [ ] 🧑 **Ask each operator for permission**: ViK Варна, ERP Север, Veolia Energy Varna,
+      and **map.bg**, which runs VarnaTraffic. A short email (what the app does, that it
+      links back, that it is free and unofficial) is the cheapest way to settle this,
+      and a written "yes" is worth keeping. Decide in advance what happens to a source
+      whose operator says no ([open-questions.md](open-questions.md)).
+- [ ] **Do not use the operators' logos or names in a way that suggests endorsement** —
+      in the app, the icon, or the store listing.
+
+### 8.4 Google Play: government information and misrepresentation
+
+- [ ] ViK Варна is majority state-owned (51% Български ВиК холдинг, 35% Община Варна).
+      VarnaTraffic is **not** the municipality's, as this item first said: it is run
+      privately by map.bg, though its data comes from the municipal Градски транспорт
+      ЕАД (legal.md §3.1). Google's government-information rules require an
+      unaffiliated app to put **easy-to-see sources** in the store description and
+      listing, and to **make clear it does not represent a government entity**
+      (legal.md §4). Never use "Official" / "Официален" anywhere. The app shows no link to the original notice today. Add a "source" link
+      on each alert's detail view (the source message URL is known at ingest), and the
+      non-affiliation sentence to the listing's full description and to §8.1's in-app
+      notice.
+
+### 8.5 Open-source licences and OSM attribution
+
+- [ ] **A "Licences" / "About" screen.** The APK ships React Native, Leaflet (BSD-2) and
+      other libraries whose licences require their notices to travel with the binary.
+      Generate the list from `frontend/package.json` dependencies at build time.
+- [ ] **OSM attribution outside the map.** The street and region seed is derived from
+      OSM (ODbL) and is used even when no map is on screen. The map attribution and the
+      `/privacy` footer cover part of it; add "© OpenStreetMap contributors, ODbL" to
+      the About screen too.
+
+### 8.6 Name and other checks
+
+- [ ] 🧑 **Trademark check for "CityShield"** on EUIPO / TMview and a Play Store search,
+      before the listing, the icon and the domain are all built around the name.
+- [ ] 🧑 **Закон за електронната търговия чл. 4** requires an information-society
+      service provider to publish its name, address and contact details. Whether a free
+      app with no revenue counts is a question for the lawyer in §8.1; the answer
+      overlaps with §8.2's controller identity anyway.
+
+### 8.7 Smaller items from the research
+
+- [ ] 🧑 **Limit Play distribution to Bulgaria** (or the EU) under Countries/regions. The
+      app is useless outside Varna, and this keeps COPPA and the US state app-store
+      age laws (Texas SB 2420, enforceable again since May 2026; Utah, Louisiana,
+      California) out of scope (legal.md §1.6).
+- [ ] **Identify the map to OSM.** The tile policy requires a distinct user agent naming
+      the app, and forbids spoofing. Both map WebViews send Android's default WebView
+      agent. Set `applicationNameForUserAgent` in `hardenedWebViewProps`
+      (`frontend/src/components/leafletWebView.ts`), and consider opening the
+      attribution link in the external browser instead of blocking it (legal.md §7).
+- [ ] **Replace "we use no cookies" in `/privacy`** with a short list of what the app
+      keeps on the device: sign-in tokens, settings, notification history, the OneSignal
+      subscription id. All of it is necessary for the service, so it is exempt from
+      consent (ЗЕТ чл. 4а ал. 4), but it has to be described (legal.md §5).
+- [ ] **OneSignal's transfer mechanism:** `/privacy` cites SCCs only. OneSignal says it is
+      DPF-certified. Check the DPF list, then cite both.
+- [ ] **Say the targeting is automatic.** One sentence in the terms and in the app:
+      "places are detected automatically and may be wrong". It covers the liability
+      side and the AI Act Art. 50 question (legal.md §6).
+- [ ] If minors are ever admitted (§8.2), write the **DPIA** first. CPDP list item 7 makes
+      it mandatory, and compliance.md §2's "not required" conclusion holds only for an
+      18+ service.
+
+## 9. Resilience and operations — found in the 26.10.2026 review
+
+### 9.1 External services and their fallbacks
+
+| Service | What happens when it fails today | What to do |
+|---|---|---|
+| Workers AI (`AI_MODEL`, qwen3-30b) | 3 attempts on the one model, then the message waits for the next tick (and is skipped after 5 strikes). Already timing out routinely (§2) | Fall back to a second, smaller model on timeout rather than retrying the same one |
+| The four source websites | A layout change makes the parser find nothing — which looks exactly like a quiet day. No alert | Warn when a source returns zero items or a parse error for longer than its normal quiet spell (per source, like the 6 h cursor check in `runner.ts`) |
+| Nominatim (`NOMINATIM_URL`) | `geocode` returns `null`; transient failures are not cached. No second provider | Acceptable for launch. Add a second geocoder only if failures show up in logs |
+| Overpass (`OVERPASS_URL`) | Failover exists in `polygon.ts`, but `OVERPASS_FALLBACK_URL` is **not set** in `wrangler.jsonc` | Set it (another public Overpass instance, or the self-hosted one) |
+| OSM tiles (`tile.openstreetmap.org`) | No fallback. Separately, the OSM tile usage policy requires apps to identify themselves; a WebView loading inline HTML may send no usable `Referer` and get blocked tiles | Test the maps on a **release** build on a real device. Plan a tile provider for when usage grows (that one is a new processor: §8.2, compliance.md §5) |
+| unpkg.com (Leaflet) | Maps are blank if unpkg is down or blocked | Bundle Leaflet into the APK (also fixes a §8.2 privacy item) |
+| OneSignal | Send failures hold the cursor and retry (`MAX_PUSH_ATTEMPTS = 3`) | Fine as one provider |
+
+### 9.2 Monitoring, backups, limits
+
+- [ ] **Something has to call `/api/health`.** The heartbeat exists (migration 0019) but
+      nothing outside polls it, and every incident so far was found by a person looking.
+      A free external uptime checker on `/api/health` with email alerts is enough.
+- [ ] **Off-site backups.** The only backup is D1 Time Travel's 7-day window. Add a
+      weekly `wrangler d1 export` stored somewhere else (a GitHub Actions artifact or
+      R2), so a mistake noticed on day 8 is recoverable.
+- [ ] **Free-plan limits under real users.** Estimate per-user daily load (API requests,
+      D1 reads, Workers AI neurons per parse) and work out at what user count the free
+      plan runs out. Past a limit the service simply stops, so know the number before
+      launch rather than after.
+
+### 9.3 App-side release blockers
+
+- [ ] **A minimum-version check, before the first Play upload.** Installed copies are
+      updated late or never. Have the app send its version (or call a small
+      `/api/app-config`) and show "please update" below a minimum the Worker controls.
+      Adding this later does not reach the copies already installed, so it has to ship
+      in version 1.
+- [ ] **Password reset is effectively a release blocker.** Until §3 delivers email,
+      anyone who forgets their password is locked out of their account for good.
+- [ ] **Crash reports**: Play Console's Android vitals (crashes, ANRs) need no SDK and no
+      privacy change, and are enough at the start. Adding Sentry or Crashlytics later
+      would be a new processor (§8.2).

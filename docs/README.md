@@ -29,7 +29,8 @@ Read these in order:
 | [working-practices.md](working-practices.md) | How work is done here, and the mistakes behind each habit |
 | [accuracy.md](accuracy.md) | The August 2026 notification-accuracy pass: diagnosis (Part I), fixes F1–F21 (Part II) |
 | [compliance.md](compliance.md) | GDPR record: Play Data Safety answers, DPIA/DPO reasoning, breach runbook |
-| [todo.md](todo.md) | Remaining work; §7 is the operator's account and credential checklist |
+| [legal.md](legal.md) | Pre-release legal research: minors, liability, republishing the sources, Play policies, OSM, with the law quoted and the questions for a lawyer |
+| [todo.md](todo.md) | Remaining work; §7 is the operator's account and credential checklist, §8 the legal gaps, §9 resilience |
 
 ## Docs that live next to their code
 

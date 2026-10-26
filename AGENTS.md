@@ -15,7 +15,7 @@ ERP Sever (power), Veolia (heating) and VarnaTraffic.
   [troubleshooting](docs/troubleshooting.md) (symptom → cause),
   [runbook](docs/runbook.md) (deploy, reseed, measure),
   [findings](docs/findings.md) (measured facts and dead ends),
-  [incidents](docs/incidents.md), [todo](docs/todo.md),
+  [incidents](docs/incidents.md), [todo](docs/todo.md), [legal](docs/legal.md),
   [open-questions](docs/open-questions.md), [glossary](docs/glossary.md).
 
 Read the relevant specification section before editing a module. Most of the non-obvious

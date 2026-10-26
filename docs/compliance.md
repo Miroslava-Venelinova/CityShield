@@ -11,6 +11,13 @@ supervisory authority: Комисия за защита на личните да
 Last reviewed: 21 July 2026. Re-review whenever a new data field, processor or
 data source is added.
 
+**Known gaps (pre-release review, 26 October 2026):** there are no terms of use,
+the policy does not name the controller, the device's requests to the OSM tile
+servers and unpkg.com are undisclosed, there is no minimum age, and location
+consent is not recorded. Each is a work item in [todo.md](todo.md) §8, and this
+record is wrong on those points until they are done. The legal research behind
+them is in [legal.md](legal.md).
+
 ---
 
 ## 1. Google Play Data Safety form
@@ -47,15 +54,24 @@ Companion answers:
   location is never read.
 - **Privacy policy URL:** `https://<api-host>/privacy` (served by the Worker).
 - **Account deletion URL** (required when accounts can be created in-app):
-  the same `/privacy` page documents the in-app path; give the Play listing
-  the `/privacy` URL.
+  **not `/privacy`.** Play requires a page where someone without the app
+  installed can request deletion, and `/privacy` only describes the in-app
+  button. A dedicated page served by the Worker is a work item in
+  [todo.md](todo.md) §4.3; give the Play listing that URL.
 
 Keep the form and the policy in sync: changing one without the other is itself
 a Play policy violation.
 
 ## 2. DPIA assessment — not required (Art. 35)
 
-**Conclusion: no DPIA needed. Reasoning kept here per §2.5.**
+**Conclusion: no DPIA needed — for an 18+ service only. Reasoning kept here per §2.5.**
+
+This conclusion depends on the minimum age ([legal.md](legal.md) §1). The CPDP's own
+Art. 35(4) list, item 7, makes a DPIA mandatory for "processing of personal data of
+children in relation to the offer of information society services directly to a
+child". Children are under 18 here, and a home location combined with vulnerable data
+subjects meets two WP248 criteria as well. If the service is opened to anyone under
+18, write the DPIA first.
 
 CityShield does not meet the Art. 35(1) "high risk" threshold, nor any entry on
 the CPDP's list of processing operations requiring a DPIA. The processing is a
@@ -155,3 +171,12 @@ Per §2.2 — confirm each before the Play release:
 - [x] OSMF Nominatim — no DPA available; documented decision is to disclose the
       transfer in the in-app consent copy (Profile → Set Location) and in
       `/privacy`, and to send no user identifier with the request.
+- [ ] **OSMF tile servers — undisclosed.** The app's map views load tiles
+      directly from `tile.openstreetmap.org`, so OSMF receives every map
+      user's IP address. Unlike Nominatim, this is not mentioned in `/privacy`
+      or the consent copy. Add it to both languages of `/privacy`. If tiles move
+      to a commercial provider (todo.md §9.1), that provider becomes a full
+      new-processor item.
+- [ ] **unpkg.com — remove rather than disclose.** Leaflet is loaded at
+      runtime from unpkg.com, which receives the user's IP address too. Bundling
+      Leaflet into the APK removes this recipient entirely (todo.md §8.2).

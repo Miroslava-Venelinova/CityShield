@@ -87,6 +87,12 @@ up in [incidents.md](incidents.md).
 - **21.10**: `cloudflare-migration` is fast-forwarded into `main` (`073a0ab`)
   and every other branch is deleted. CI now deploys from `main`, and new
   work starts on its own branch.
+- **26.10**: pre-release review of legal and resilience gaps. It found no terms
+  of use or disclaimer, no permission to republish the sources, gaps in
+  `/privacy`, and external services with no fallback or monitoring. All of it is
+  in [todo.md](todo.md) §8–§9. A same-day legal research pass
+  ([legal.md](legal.md)) recommends an **18+ minimum age**: any under-18 audience
+  makes a DPIA mandatory under the CPDP's list.
 
 ## Where the deployment stands (last known, 31.08.2026)
 

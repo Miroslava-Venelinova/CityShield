@@ -25,7 +25,13 @@ delete it here.
 | **Listed streets only, or the whole village?** ([accuracy.md §5.2](accuracy.md#52-do-we-notify-only-the-listed-streets-or-the-whole-settlement)) | Today, a village alert naming 6 of the 42 seeded streets notifies those streets plus residents with no street. A resident whose street was matched to the wrong row hears nothing |
 | **Should a street-only "в района на" alert widen to a district?** | There is no street → district link. Nearest district centroid would be a crude Voronoi split, so this needs real users to measure against first ([todo.md](todo.md) §6) |
 | **Enforce email verification at login?** | Only once mail is actually delivered ([todo.md](todo.md) §3) |
-| **Who pings `/api/health`?** | The heartbeat exists, but no external uptime check calls it. Every incident so far was found by a person looking |
+| **Who pings `/api/health`?** | The heartbeat exists, but no external uptime check calls it. Every incident so far was found by a person looking ([todo.md](todo.md) §9.2) |
+| **Location: consent or contract?** | `/privacy` names consent as the lawful basis for the home coordinate, but nothing records when consent was given, so it cannot be demonstrated (Art. 7(1)). Either store a consent timestamp + policy version, or argue the coordinate is necessary for the service the user asked for (contract) and rewrite the policy row ([todo.md](todo.md) §8.2) |
+| **Minimum age** | Recommended: **18+** for the first release. Any under-18 audience makes a DPIA mandatory (CPDP list item 7) and raises contract-capacity and parental-consent questions; an honest 18+ statement avoids all of it (EDPB 05/2020 ¶130). Options and trade-offs in [legal.md](legal.md) §1.5; work in [todo.md](todo.md) §8.2 |
+| **Push the source text verbatim, or a summary + link?** | Facts are free to use, but the notice text is copied word for word today. A summary is the safer position if an operator objects ([legal.md](legal.md) §3.2) |
+| **Natural person or company as controller / developer?** | Liability under ЗЗД чл. 45 is presumed-fault. An ЕООД limits personal exposure but changes the Play account type ([legal.md](legal.md) §9) |
+| **What if a source's operator says no?** | Permission to republish is being asked for ([todo.md](todo.md) §8.3). Options: drop the source, or keep a link-only alert ("ViK published an outage notice for your area") without copying the text. Decide before sending the emails |
+| **Whose name is the controller?** | The policy must name a real person or company (GDPR Art. 13), and it will be public on the Play listing. A company also changes the Play account type and the closed-test requirement ([todo.md](todo.md) §4.1, §8.2) |
 
 ## Blocked on data
 
@@ -40,8 +46,9 @@ delete it here.
 
 - **Historical logs**: the wrangler token lacks the observability scope.
   Grant it before the next incident, not during it ([todo.md](todo.md) §6).
-- **CI deploys**: whether the `CLOUDFLARE_API_TOKEN` secret exists has never
-  been checked, and nothing deploys from CI until `main` is merged forward.
+- **CI deploys**: `main` was merged forward on 21.10.2026, and the same day the
+  `CLOUDFLARE_API_TOKEN` secret was confirmed missing. Until it is added, the
+  deploy job fails on every push ([todo.md](todo.md) §7.3).
 
 ## Deferred on purpose
 
