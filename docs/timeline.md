@@ -97,6 +97,8 @@ up in [incidents.md](incidents.md).
   `fallbacks-backend`. Forward geocoding falls back to Photon when Nominatim
   fails transiently (migration 0021 records the provider). Workers AI retries a
   failed qwen3 parse on `AI_FALLBACK_MODEL` (Gemma 4 26B, eval still owed).
+  A source whose parser finds nothing past its quiet spell is now reported on
+  `/api/health` as silent (migration 0022).
 
 ## Where the deployment stands (last known, 31.08.2026)
 

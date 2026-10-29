@@ -17,7 +17,7 @@ Past occurrences of these failures are written up in
 3. **Historical logs cannot be queried.** The wrangler OAuth token lacks the
    observability scope (`10000 Authentication error`), so the only option is
    a live `wrangler tail`, at one data point per 15-minute tick. D1 has the
-   history: `ingest_health`, `crawl_state`, `ingest_attempts`, `alerts`.
+   history: `ingest_health`, `crawl_state`, `ingest_attempts`, `source_health`, `alerts`.
 
 ```sh
 cd backend
@@ -43,7 +43,11 @@ curl -H "X-Api-Key: $INGEST_API_KEY" \
    6 hours) and `Deadline reached before '<source>'`.
 4. If nothing is wrong on our side, the source may have changed. A 200 with
    nothing useful in it is the classic sign (epro's API change, ViK's
-   listing). Compare the app with the source website.
+   listing). Since 29.10, `/api/health` names such a source in
+   `silent_sources`, and its `source_runs` row gives the last outcome
+   (`empty`, `parse_error` + what failed, `fetch_error`). The tail says
+   `Source '<name>' has found NOTHING for N h`. Compare the app with the
+   source website, then the page with its parser in `scrape.ts`.
 
 ### Ticks end in `exceededCpu`
 A synchronous stretch went over 10 ms. **It has been a different stretch

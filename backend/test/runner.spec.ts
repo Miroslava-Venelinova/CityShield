@@ -8,8 +8,9 @@
 
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { getIngestHealth } from "../src/db/queries";
-import { runIngestTick } from "../src/ingestion/runner";
+import { getIngestHealth, getSourceHealthRows } from "../src/db/queries";
+import { runIngestion, runIngestTick } from "../src/ingestion/runner";
+import { found } from "../src/ingestion/silence";
 
 const CRON = "*/15 * * * *";
 
@@ -31,5 +32,30 @@ describe("runIngestTick", () => {
     const [row] = await getIngestHealth(env);
     expect(row!.started_at).toBeTruthy();
     expect(row!.completed_at).toBeNull();
+  });
+});
+
+// Source silence (silence.ts, migration 0022): each source's observation is
+// recorded as soon as that source returns, so a later source killed on the CPU
+// cap cannot take an earlier one's record down with it.
+describe("runIngestion records what each source's parser found", () => {
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM source_health").run();
+  });
+
+  it("records an observation per source, and nothing for one that threw", async () => {
+    // Names outside SOURCE_INTERVAL_MINUTES poll at the tick rate, so all are due.
+    await runIngestion(env, [
+      { name: "test-items", run: async () => found(3) },
+      { name: "test-broken", run: async () => ({ outcome: "parse_error", detail: "layout changed" }) },
+      { name: "test-threw", run: async () => { throw new Error("boom"); } },
+      { name: "test-skipped", run: async () => null },
+    ]);
+
+    const rows = await getSourceHealthRows(env);
+    expect(rows.map((r) => r.source)).toEqual(["test-broken", "test-items"]);
+    expect(rows.find((r) => r.source === "test-items")).toMatchObject({ outcome: "items", items: 3 });
+    expect(rows.find((r) => r.source === "test-broken"))
+      .toMatchObject({ outcome: "parse_error", detail: "layout changed", items_at: null });
   });
 });

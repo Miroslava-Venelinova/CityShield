@@ -4,10 +4,14 @@
 // process oldest-first, advance last_id only past successes, a failed message
 // blocks newer ones (a retried run must not re-notify), a persistently
 // failing message ages off the listing.
+//
+// Returns what the parsers found (silence.ts): the listing's link count, or the
+// first fetch/parse failure — null when it never got to look (cursor unreadable).
 
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
 import { fetchPage, readCapped, resolveSameHost } from "../scrape";
+import { found, type SourceObservation } from "../silence";
 import {
   claimAttempt, getLastId, hasStateRow, MAX_PRE_STORE_ATTEMPTS, recordSkip, releaseAttempts, writeLastId,
 } from "../state";
@@ -27,7 +31,9 @@ export interface IdListingOptions {
   processImpl?: (env: Env, tag: string, category: string, title: string, content: string, msgRef: string, deadline?: number) => Promise<boolean>;
 }
 
-export async function crawlIdListing(env: Env, deadline: number, opts: IdListingOptions): Promise<void> {
+export async function crawlIdListing(
+  env: Env, deadline: number, opts: IdListingOptions,
+): Promise<SourceObservation | null> {
   const { tag, category } = opts;
   const fetchImpl = opts.fetchImpl ?? fetchPage;
   const processImpl = opts.processImpl ?? processOutageMessage;
@@ -37,7 +43,7 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
     // Treating an unreadable cursor as 0 would reprocess — and re-notify —
     // messages already delivered. Wait for the next tick instead.
     console.error(`[${tag}] Could not read the stored cursor. Skipping this tick.`);
-    return;
+    return null;
   }
 
   let listingHtml: string;
@@ -45,14 +51,17 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
     listingHtml = await readCapped(await fetchImpl(opts.listingUrl, undefined, deadline));
   } catch (e) {
     console.error(`[${tag}] Failed to fetch listing page: ${e}. Stopping.`);
-    return;
+    return { outcome: "fetch_error", detail: `listing: ${e}` };
   }
 
   const msgUrls = opts.parsePage(listingHtml);
   if (msgUrls === null) {
     console.error(`[${tag}] Could not parse message URLs from the page. Stopping.`);
-    return;
+    return { outcome: "parse_error", detail: "listing: no message links recognised" };
   }
+  // The listing is an archive, so this counts every link on it, not only the
+  // new ones — a page that parses to nothing is the layout-change signature.
+  let observed = found(msgUrls.length);
 
   // Collect everything newer than the cursor (listing is newest-first).
   const newMessages: Array<{ id: number; url: string }> = [];
@@ -75,7 +84,7 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
     newMessages.push({ id: messageId, url: target });
   }
 
-  if (newMessages.length === 0) return;
+  if (newMessages.length === 0) return observed;
 
   // First run ever: initialize the cursor at the newest visible id without
   // processing — don't ingest (and notify about) the listing's history.
@@ -83,7 +92,7 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
     const newest = Math.max(...newMessages.map((m) => m.id));
     console.log(`[${tag}] First run — bootstrapping cursor to ${newest} without processing history.`);
     await writeLastId(env, category, newest);
-    return;
+    return observed;
   }
 
   // Oldest-first; cap work per tick — anything left is picked up next tick
@@ -103,6 +112,9 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
       // nothing about the message, and transient network trouble must not spend
       // a real message's strikes.
       console.error(`[${tag}] Failed to fetch message (id=${id}): ${e}. Stopping.`);
+      // A message page that never loads blocks every newer one and spends no
+      // strikes, so it is the source's failure as far as silence is concerned.
+      observed = { outcome: "fetch_error", detail: `message id=${id}: ${e}` };
       break;
     }
 
@@ -127,6 +139,9 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
       const message = await opts.parseMessage(html);
       if (message === null) {
         console.warn(`[${tag}] Could not parse message content (id=${id}).`);
+        // The listing parsed, the message did not: a layout change can break
+        // either page, and only this one carries the content.
+        observed = { outcome: "parse_error", detail: `message id=${id}: content not recognised` };
       } else {
         submitted = await processImpl(env, tag, category, message.title, message.content, `id=${id}`, deadline);
       }
@@ -153,4 +168,5 @@ export async function crawlIdListing(env: Env, deadline: number, opts: IdListing
     // forward, and writeLastId is an idempotent upsert.
     await writeLastId(env, category, id);
   }
+  return observed;
 }

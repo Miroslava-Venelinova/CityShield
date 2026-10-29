@@ -3,12 +3,13 @@
 
 import type { Env } from "../../env";
 import { heatingParseMessage, heatingParsePage } from "../scrape";
+import type { SourceObservation } from "../silence";
 import { crawlIdListing } from "./id-listing";
 
 const NODE_URL_PATTERN = /\/node\/(\d+)/;
 
-export async function run(env: Env, deadline: number): Promise<void> {
-  await crawlIdListing(env, deadline, {
+export async function run(env: Env, deadline: number): Promise<SourceObservation | null> {
+  return crawlIdListing(env, deadline, {
     tag: "HEATING",
     category: "heating",
     listingUrl: env.HEATING_URL,

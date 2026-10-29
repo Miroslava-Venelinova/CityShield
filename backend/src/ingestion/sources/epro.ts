@@ -15,6 +15,7 @@
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
 import { DEFAULT_HEADERS, fetchPage, readCapped, stripHtml } from "../scrape";
+import { found, type SourceObservation } from "../silence";
 import { addSeenIds, getSeenIds, hasStateRow } from "../state";
 import { MAX_MESSAGES_PER_TICK } from "./id-listing";
 
@@ -48,9 +49,15 @@ function entriesUrl(base: string, regionId: string, type: string): string {
     + "&offset=0&archive_from_date=&archive_to_date=";
 }
 
-/** Exported for tests; see run() for the production entry point. */
+/**
+ * Exported for tests; see run() for the production entry point.
+ *
+ * `failures` collects why each type query failed, fetch or parse, so run() can
+ * tell a source that is unreachable from one whose contract changed under it
+ * (silence.ts) — the null return alone says only "couldn't read".
+ */
 export async function fetchVarnaEntries(
-  env: Env, deadline?: number, fetchImpl: FetchImpl = fetchPage,
+  env: Env, deadline?: number, fetchImpl: FetchImpl = fetchPage, failures: SourceObservation[] = [],
 ): Promise<EproEntry[] | null> {
   // De-dupe across the two type buckets by raw content; the same interruption
   // appears identically in both, and one AI parse per interruption is enough.
@@ -58,7 +65,7 @@ export async function fetchVarnaEntries(
   let anyOk = false;
 
   for (const type of INTERRUPTION_TYPES) {
-    let areas: unknown;
+    let text: string;
     try {
       const res = await fetchImpl(
         entriesUrl(env.EPRO_URL, env.EPRO_REGION_ID, type),
@@ -66,10 +73,21 @@ export async function fetchVarnaEntries(
         deadline);
       // Read through the size cap rather than res.json(), which would buffer
       // whatever the endpoint decides to send (see readCapped).
-      areas = JSON.parse(await readCapped(res));
+      text = await readCapped(res);
     } catch (e) {
       // One type failing must not discard the other — press on.
       console.error(`[EPRO] Failed to fetch '${type}' interruptions: ${e}.`);
+      failures.push({ outcome: "fetch_error", detail: `${type}: ${e}` });
+      continue;
+    }
+    let areas: unknown;
+    try {
+      areas = JSON.parse(text);
+    } catch (e) {
+      // A 200 that is not JSON is the endpoint answering with something else
+      // entirely — a contract change, not a network blip.
+      console.error(`[EPRO] '${type}' response was not JSON: ${e}.`);
+      failures.push({ outcome: "parse_error", detail: `${type}: response was not JSON` });
       continue;
     }
 
@@ -77,6 +95,7 @@ export async function fetchVarnaEntries(
     // shape must read as "this type had nothing", not throw out of the runner.
     if (!Array.isArray(areas)) {
       console.error(`[EPRO] '${type}' response was not an array.`);
+      failures.push({ outcome: "parse_error", detail: `${type}: response was not an array` });
       continue;
     }
 
@@ -84,6 +103,7 @@ export async function fetchVarnaEntries(
       .find((a) => a && typeof a === "object" && String(a.area_id) === env.EPRO_REGION_ID);
     if (!area) {
       console.error(`[EPRO] Region '${env.EPRO_REGION_ID}' not found in '${type}' response.`);
+      failures.push({ outcome: "parse_error", detail: `${type}: region ${env.EPRO_REGION_ID} not found` });
       continue;
     }
     // Soft config sanity check — region_id is the key, but a mismatched name
@@ -109,9 +129,19 @@ export async function fetchVarnaEntries(
   return [...byKey.values()];
 }
 
-export async function run(env: Env, deadline: number, fetchImpl: FetchImpl = fetchPage): Promise<void> {
-  const entries = await fetchVarnaEntries(env, deadline, fetchImpl);
-  if (entries === null) return;
+export async function run(
+  env: Env, deadline: number, fetchImpl: FetchImpl = fetchPage,
+): Promise<SourceObservation | null> {
+  const failures: SourceObservation[] = [];
+  const entries = await fetchVarnaEntries(env, deadline, fetchImpl, failures);
+  // A parse failure is the more telling of the two: it is how the 2026 contract
+  // change would have looked, where a fetch failure is usually just the site.
+  if (entries === null) {
+    return failures.find((f) => f.outcome === "parse_error") ?? failures[0]
+      ?? { outcome: "fetch_error", detail: "no interruption type could be read" };
+  }
+  // Entries are the region's whole active list, not only the unseen ones.
+  const observed = found(entries.length);
 
   // First run ever: mark everything currently visible as seen without
   // processing (the old system already notified about it). Runs even when
@@ -126,16 +156,16 @@ export async function run(env: Env, deadline: number, fetchImpl: FetchImpl = fet
     }
     console.log(`[EPRO] First run — bootstrapping ${ids.length} seen id(s) without processing.`);
     await addSeenIds(env, CATEGORY, ids.length > 0 ? ids : ["bootstrap"]);
-    return;
+    return observed;
   }
-  if (entries.length === 0) return;
+  if (entries.length === 0) return observed;
 
   const storedSeen = await getSeenIds(env, CATEGORY);
   if (storedSeen === null) {
     // An unreadable seen set looks like "nothing processed yet", which would
     // re-notify every active interruption. Wait for the next tick.
     console.error("[EPRO] Could not read seen ids. Skipping this tick.");
-    return;
+    return observed;
   }
   const seenIds = new Set(storedSeen);
   let processed = 0;
@@ -158,4 +188,5 @@ export async function run(env: Env, deadline: number, fetchImpl: FetchImpl = fet
       await addSeenIds(env, CATEGORY, [id]);
     }
   }
+  return observed;
 }

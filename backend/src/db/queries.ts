@@ -655,6 +655,48 @@ export async function getIngestHealth(env: Env): Promise<IngestHealthRow[]> {
   return results;
 }
 
+// ── Source silence (migration 0022; ingestion/silence.ts) ───────────────────
+
+export interface SourceHealthRow {
+  source: string;
+  first_run_at: string;
+  run_at: string;
+  outcome: string;
+  items: number | null;
+  detail: string | null;
+  items_at: string | null;
+}
+
+/**
+ * Record what one run of a source's parser found, and return the row as it now
+ * stands — one statement, so the caller can judge silence without a second read.
+ * `items_at` only ever moves forward on an `items` run; every other outcome
+ * leaves it where it was, which is what lets the silence clock run.
+ */
+export async function recordSourceRun(
+  env: Env, source: string, outcome: string, items: number | null, detail: string | null,
+): Promise<SourceHealthRow | null> {
+  const now = nowIso();
+  return env.DB.prepare(
+    `INSERT INTO source_health (source, first_run_at, run_at, outcome, items, detail, items_at)
+     VALUES (?1, ?2, ?2, ?3, ?4, ?5, CASE WHEN ?3 = 'items' THEN ?2 END)
+     ON CONFLICT(source) DO UPDATE SET
+       run_at   = excluded.run_at,
+       outcome  = excluded.outcome,
+       items    = excluded.items,
+       detail   = excluded.detail,
+       items_at = COALESCE(excluded.items_at, source_health.items_at)
+     RETURNING *`,
+  ).bind(source, now, outcome, items, detail).first<SourceHealthRow>();
+}
+
+export async function getSourceHealthRows(env: Env): Promise<SourceHealthRow[]> {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM source_health ORDER BY source",
+  ).all<SourceHealthRow>();
+  return results;
+}
+
 /** Every source's cursor and when it last moved — the other half of the health view. */
 export async function getCrawlStateRows(
   env: Env,

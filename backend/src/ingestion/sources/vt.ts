@@ -10,6 +10,7 @@ import { VT_JSON_SCHEMA, vtAiSchema } from "../../shared/schemas";
 import { aiParse } from "../ai";
 import { ingestAlert } from "../pipeline";
 import { fetchPage, readCapped, vtParse, type VtMessage } from "../scrape";
+import { found, type SourceObservation } from "../silence";
 import { addSeenIds, getSeenIds, hasStateRow } from "../state";
 import { MAX_MESSAGES_PER_TICK } from "./id-listing";
 
@@ -24,27 +25,29 @@ async function messageId(msg: VtMessage): Promise<string> {
   return "sha1:" + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function run(env: Env, deadline: number): Promise<void> {
+export async function run(env: Env, deadline: number): Promise<SourceObservation | null> {
   let pageHtml: string;
   try {
     pageHtml = await readCapped(await fetchPage(env.VT_URL, undefined, deadline));
   } catch (e) {
     console.error(`[VT] Failed to fetch page: ${e}. Stopping.`);
-    return;
+    return { outcome: "fetch_error", detail: `page: ${e}` };
   }
 
   const rawMessages = await vtParse(pageHtml);
   if (rawMessages === null) {
     console.error("[VT] Page parsing returned no data. Stopping.");
-    return;
+    return { outcome: "parse_error", detail: "page: #infoAccordion not found" };
   }
+  // Every accordion entry on the page, seen before or not.
+  const observed = found(rawMessages.length);
 
   // First run ever: mark the current accordion as seen without processing.
   if (!(await hasStateRow(env, CATEGORY))) {
     const ids = await Promise.all(rawMessages.map(messageId));
     console.log(`[VT] First run — bootstrapping ${ids.length} seen id(s) without processing.`);
     await addSeenIds(env, CATEGORY, ids.length > 0 ? ids : ["bootstrap"]);
-    return;
+    return observed;
   }
 
   const storedSeen = await getSeenIds(env, CATEGORY);
@@ -52,7 +55,7 @@ export async function run(env: Env, deadline: number): Promise<void> {
     // An unreadable seen set looks like "nothing processed yet", which would
     // re-notify the whole visible accordion. Wait for the next tick.
     console.error("[VT] Could not read seen ids. Skipping this tick.");
-    return;
+    return observed;
   }
   const seenIds = new Set(storedSeen);
   let processed = 0;
@@ -109,4 +112,5 @@ export async function run(env: Env, deadline: number): Promise<void> {
     }, `id=${id}`, deadline);
     if (submitted) await markSeen();
   }
+  return observed;
 }

@@ -77,7 +77,7 @@ CityShield/
 │   │   │                       bus-lines
 │   │   ├── db/queries.ts       every prepared statement, in one place
 │   │   ├── ingestion/          runner, schedule, pipeline, normalize, ai,
-│   │   │                       polygon, scrape, state, sources/
+│   │   │                       polygon, scrape, state, silence, sources/
 │   │   └── shared/             schemas, constants (prompts), datetime, deadline
 │   ├── test/                   vitest suite (22 files, 359 tests) + fixtures
 │   └── spikes/                 Phase 0 de-risking spikes + RESULTS.md
@@ -126,7 +126,7 @@ design — nothing is correct only because a cache is warm:
 
 ### 1.2 Data model (D1)
 
-SQLite, migrations `0001`–`0021`. Current shape:
+SQLite, migrations `0001`–`0022`. Current shape:
 
 ```sql
 regions ( id INTEGER PK, region_name TEXT UNIQUE, lat REAL, lng REAL )
@@ -169,6 +169,8 @@ alerts (
 crawl_state   ( source TEXT PK, last_id INTEGER, seen_ids TEXT, updated_at TEXT )
 ingest_attempts ( source TEXT, ref TEXT, attempts INTEGER, skipped_at TEXT, first_at TEXT, last_at TEXT, PK(source,ref) )
 ingest_health   ( cron TEXT PK, started_at TEXT, completed_at TEXT, last_duration_ms INTEGER )
+source_health   ( source TEXT PK, first_run_at TEXT, run_at TEXT, outcome TEXT,   -- §3.8
+                  items INTEGER, detail TEXT, items_at TEXT )   -- items_at = last run whose parser found anything
 geocode_cache ( query TEXT PK, lat REAL, lng REAL, resolved_at TEXT,
                 provider TEXT )    -- NULL,NULL = cached miss; provider 'nominatim'|'photon', NULL = pre-0021 (nominatim)
 auth_tokens   ( token_hash TEXT PK, user_id, purpose, expires_at, used_at, created_at )
@@ -223,6 +225,7 @@ for the fan-out filter to examine.
 | 0019 | `ingest_health` — the tick heartbeat (§3.8) |
 | 0020 | `street_ways` — stored street geometry, so the polygon builder never calls Overpass (§1.9) |
 | 0021 | `geocode_cache.provider` — which geocoder answered, so a cached Photon fallback still reads as one (§1.5) |
+| 0022 | `source_health` — what each source's parser found per run, for the source-silence check (§3.8) |
 
 **A street belongs to a settlement** (migration 0015). `streets` was Varna-only
 and `street_name` was globally `UNIQUE`, which cost two things. Every village
@@ -464,7 +467,7 @@ and field casing are locked in by `frontend/src/services/api.ts`. Note the split
 | `PUT /api/preferences/{category}` | JWT | `{isEnabled}` → 204; unknown category → 400 |
 | `GET /api/preferences/bus-lines` | JWT | `{available, selected}` |
 | `PUT /api/preferences/bus-lines` | JWT | `{busLines}` → 204; unknown line → 400 |
-| `GET /api/health` | `X-Api-Key` | Tick heartbeat, per-source cursor ages, and the messages the pre-store cap gave up on; `status` is `degraded` when a tick started without completing or a cursor has stalled 6 h (§3.8). Behind the ingest key: nothing personal, but nothing the public needs |
+| `GET /api/health` | `X-Api-Key` | Tick heartbeat, per-source cursor ages, the messages the pre-store cap gave up on, and per-source parser results with `silent_sources`; `status` is `degraded` when a tick started without completing, a cursor has stalled 6 h, or a source is silent past its quiet spell (§3.8). Behind the ingest key: nothing personal, but nothing the public needs |
 | `GET /privacy` | — | Bilingual privacy policy (§2.5) |
 
 `AlertDTO`: `{id, original_message:{title, content}, processed_data:{locations,
@@ -1884,8 +1887,8 @@ DNS rebinding.
   signature, and it is a `SELECT` rather than a 15-minute `wrangler tail` vigil —
   which matters more than usual here, given historical logs are not queryable at
   all (below). `GET /api/health` (ingest key) returns it alongside every cursor's
-  age and the messages the pre-store cap gave up on; hang an external uptime ping
-  off it to be told rather than to look.
+  age, the messages the pre-store cap gave up on and the silent sources (below);
+  hang an external uptime ping off it to be told rather than to look.
 - **The signature of a stalled ingest** is a `crawl_state.updated_at` that has not
   moved while the source has published ids above the cursor. Two queries settle
   it: `SELECT source, last_id, updated_at FROM crawl_state`, then fetch
@@ -1925,6 +1928,37 @@ DNS rebinding.
   Both source-side ingestion outages so far (epro's contract change, ViK's
   region-scoped listing) looked healthy in the logs. Periodically compare what the
   app shows against the source websites.
+  **The tick now watches for the parser half of it** (29.10.2026, migration
+  0022, `ingestion/silence.ts`). Every source run returns what its parser found
+  — `items` (with a count), `empty`, `parse_error` or `fetch_error`, the first
+  failure winning — and the runner upserts it into `source_health` straight
+  after that source, so a later source's CPU kill cannot lose it. `items_at`
+  moves only on an `items` run. A source is **silent** once
+  `now − (items_at ?? first_run_at)` exceeds its quiet spell; judged from
+  timestamps, so a source whose every run is killed (the 13.08 heating shape)
+  still turns silent. Silence is logged as `Source '<name>' has found NOTHING
+  for N h` on each run past the limit, and `GET /api/health` returns
+  `silent_sources` (empty = healthy — **the field for an uptime checker**:
+  `status` also folds in the 6 h cursor check, which heating and vt trip on an
+  ordinary quiet week) plus a `source_runs` row per source. Failures past the
+  parser — AI, store, push — are not the source's and do not count; a run that
+  threw or never looked (unreadable cursor) records nothing.
+  What counts as an item decides the threshold more than how often a source
+  publishes, so the spells differ. **Recorded as ranges** (working-practices);
+  the value sits at the end that cries wolf less:
+
+  | Source | An item is | Evidence | Works across | Chosen |
+  |---|---|---|---|---|
+  | `heating` | a message link on the listing — an archive, never legitimately empty | 15 links in the captured listing; polled every 4 h; the 13.08 outage ran 18 days | 8–48 h (2–12 polls) | **24 h** |
+  | `epro` | an entry in the region's active / next-48 h lists, which carry planned cuts days ahead | 93 alerts in 02–08.08.2026 (~13/day) | 12–48 h | **24 h** |
+  | `vik` | a **newly published** message the id probe parsed (the probe never sees old ones) | 36 alerts in 02–08.08.2026 (~5/day); night and weekend gaps unmeasured | 24–72 h | **48 h** |
+  | `vt` | an accordion entry | 5 in the captured page; whether the page is ever legitimately empty is unmeasured | 48 h–7 d | **72 h** — a conservative default, not a measurement |
+
+  ViK is the weak one: its parser seeing nothing new is also its normal idle
+  tick, so a broken message layout surfaces only after 48 h — and meanwhile the
+  6 h `stepOverDeadIds` escape hatch may jump the cursor past ids it cannot
+  parse. Re-measure the vik and vt spells from `source_health` once a few
+  weeks of rows exist.
 - **A tick's wall time is now the number to watch, not its CPU.** Since 30.07.2026
   `AI.run` frequently exceeds its 30 s cap (§1.8) — 6 timeouts against 8 ingested
   messages over three ticks — and retries are serial, so a tick reached 175.9 s of
