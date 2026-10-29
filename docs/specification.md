@@ -1149,9 +1149,39 @@ fills up:
 
 ### 1.8 Workers AI (`ingestion/ai.ts`)
 
-`env.AI.run(env.AI_MODEL, {messages, response_format:{type:"json_schema",
+`env.AI.run(model, {messages, response_format:{type:"json_schema",
 json_schema}, max_tokens: 10000})`, three attempts with linear backoff, `null` on
-any failure — the source then skips the message and retries next tick.
+any failure — the source then skips the message and retries next tick (and the
+pre-store strike counter, §1.7, counts it exactly as before).
+
+- **The attempts alternate models: `AI_MODEL`, `AI_FALLBACK_MODEL`, `AI_MODEL`**
+  (29.10.2026). All three used to go to the primary, and since 30.07.2026 qwen3
+  routinely runs past its 30 s cap — a retry on the same model inside the same
+  minute mostly timed out again, spending another 30 s of the tick deadline on
+  nothing (§3.8). The second attempt now runs on a different model on separate
+  capacity. The third goes **back** to the primary rather than staying on the
+  fallback: the fallback is the less proven extractor, and one that rejects the
+  schema outright (5024/5025, as both other Phase 0 candidates did on every call)
+  must cost one quick attempt, not two of the primary's three. Any failure moves
+  on — timeout, binding error, unparseable JSON or a zod mismatch. Unset, empty
+  or equal to `AI_MODEL`, every attempt is `AI_MODEL` as before.
+  Every successful parse logs its model (`[ai] parsed by … (FALLBACK model)`),
+  so a fallback parse is findable in the tail; it is not persisted on the alert.
+- **Fallback model: `@cf/google/gemma-4-26b-a4b-it`**, a `vars` entry like the
+  primary. Chosen from the live catalog (29.10.2026) as: a different family on
+  separate capacity; slightly smaller (26B total, 4B active, MoE); multilingual
+  (pre-trained on 140+ languages, Bulgarian among them); accepts the same
+  `messages` + `response_format` input (Mistral Small 3.1 takes `guided_json`
+  instead, and Granite 4.0 Micro lists no Bulgarian); cheaper output tokens
+  than qwen3 ($0.30 vs $0.335 per M). The Llama family is out on Phase 0's
+  evidence (5025, and 5024 on nullable unions). **Unvalidated:** Cloudflare's
+  JSON-mode page does not list it (nor qwen3, which works), so whether its
+  decoder handles `["string","null"]` is unknown until `spikes/ai-eval` runs
+  it — it is in the harness's candidate list for that. Until then the design
+  bounds the risk: one attempt in three, and **the deterministic guards
+  (`normalize.ts`, §1.7) apply to its output exactly as to the primary's** —
+  they are decided from the source text, never from which model spoke
+  (`test/ai.spec.ts` drives an invented district through A10).
 
 - **Model: `@cf/qwen/qwen3-30b-a3b-fp8`**, a `vars` entry so it can be swapped
   without a code change. It was the only Phase 0 candidate that both supports
@@ -1164,7 +1194,7 @@ any failure — the source then skips the message and retries next tick.
   model and at the default 2,000 it burns the budget thinking and returns no
   JSON. Spike 2 sized this at 8,000; raised to 10,000 on 31.07.2026 so a long
   message with many locations cannot get truncated mid-JSON.
-- The AI binding accepts no `AbortSignal`, so each run is wrapped in a **30 s**
+- The AI binding accepts no `AbortSignal`, so each run (on either model) is wrapped in a **30 s**
   timeout (legitimate parses clock 4–21 s), bounded further by the remaining tick
   deadline. Starting an inference that cannot be waited out only burns neurons.
 - Zod schemas mirror the original Pydantic models, including fields hidden from
@@ -1179,8 +1209,8 @@ any failure — the source then skips the message and retries next tick.
   constrained decoder handles the *constructs* it uses (`["string","null"]`, an
   array of `string`, a `boolean`) — not that the bytes are load-bearing. A change
   that adds no new construct is re-validated by `spikes/ai-eval/run-eval.mjs`,
-  which imports the production prompt and schema directly: **3 runs × 3 candidate
-  models, compared per case id** (the key format changes with the shape, so
+  which imports the production prompt and schema directly: **3 runs × each
+  candidate model (both production models among them), compared per case id** (the key format changes with the shape, so
   matching pass *totals* can hide two cases swapping), reporting worst-of-3 and
   gating on "no case green in the baseline may regress". Three runs minimum
   because qwen3 deviates on roughly one run in five (§1.7's A3).

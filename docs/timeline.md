@@ -95,7 +95,8 @@ up in [incidents.md](incidents.md).
   makes a DPIA mandatory under the CPDP's list.
 - **29.10**: fallbacks for the external services (todo.md §9.1), on branch
   `fallbacks-backend`. Forward geocoding falls back to Photon when Nominatim
-  fails transiently (migration 0021 records the provider).
+  fails transiently (migration 0021 records the provider). Workers AI retries a
+  failed qwen3 parse on `AI_FALLBACK_MODEL` (Gemma 4 26B, eval still owed).
 
 ## Where the deployment stands (last known, 31.08.2026)
 
