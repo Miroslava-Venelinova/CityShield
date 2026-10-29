@@ -4,7 +4,7 @@
 import { env, fetchMock } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAlertFeedCache } from "../src/api/alerts";
-import { resetNominatimThrottle } from "../src/core/geocoding";
+import { resetGeocodeThrottles } from "../src/core/geocoding";
 import { sendPushToUsers } from "../src/core/onesignal";
 import { clearRefCaches } from "../src/db/queries";
 import { api, jsonInit, registerAndLogin } from "./helpers";
@@ -22,7 +22,7 @@ beforeEach(async () => {
   // The geocoding tests below put real calls through the 1,100 ms Nominatim
   // spacing, which is module-scope and shared with every other spec file in
   // this isolate. Left hot, it delays whatever runs next (see auth.spec.ts).
-  resetNominatimThrottle();
+  resetGeocodeThrottles();
   // Варна carries its centroid because it is both the city-wide fan-out's
   // origin and, since migration 0015, the settlement every street below belongs
   // to — a location that names no settlement of its own scopes its streets here.
@@ -1037,6 +1037,65 @@ describe("geocoding enrichment (forward geocode + D1 cache)", () => {
     const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
       .bind(alert_id).first<{ locations_json: string }>();
     expect(JSON.parse(row!.locations_json)[0].lat).toBeCloseTo(43.2);
+    fetchMock.assertNoPendingInterceptors();
+  });
+
+  // §1.5: a Nominatim outage used to leave every unseeded name unlocated. The
+  // Photon answer is used — and recorded as such, because an outage-era pin
+  // that reads `nominatim` is a fallback nobody can find afterwards.
+  it("pins from Photon when Nominatim is down, and says so in coords_source", async () => {
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(503, "Service Unavailable");
+    fetchMock.get("https://photon.komoot.io")
+      .intercept({ path: (p) => p.startsWith("/api/") })
+      .reply(200, JSON.stringify({
+        features: [{
+          geometry: { type: "Point", coordinates: [27.9001, 43.2002] },
+          properties: { countrycode: "BG", osm_key: "highway", osm_value: "residential" },
+        }],
+      }), { headers: { "Content-Type": "application/json" } });
+
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{ location_name: "", sublocations: ["Розова долина"], is_polygon: false }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.2002);
+    expect(loc.coords_source).toBe("photon");
+    fetchMock.assertNoPendingInterceptors();
+  });
+
+  // The third rung of the chain was already there: with both providers down, the
+  // seeded settlement centroid in D1 is the pin — coarse, and labelled as such.
+  it("falls back to the seeded settlement centroid when both geocoders are down", async () => {
+    fetchMock.get("https://nominatim.openstreetmap.org")
+      .intercept({ path: (p) => p.startsWith("/search") })
+      .reply(503, "Service Unavailable");
+    fetchMock.get("https://photon.komoot.io")
+      .intercept({ path: (p) => p.startsWith("/api/") })
+      .reply(502, "Bad Gateway");
+
+    const sub = await submit(basePayload({
+      processed_data: {
+        locations: [{ settlement: "гр. Варна", area: null, streets: ["Розова долина"], is_polygon: false }],
+      },
+    }));
+    const { alert_id } = await sub.json() as SubmitResponse;
+
+    const row = await env.DB.prepare("SELECT locations_json FROM alerts WHERE id = ?")
+      .bind(alert_id).first<{ locations_json: string }>();
+    const [loc] = JSON.parse(row!.locations_json);
+    expect(loc.lat).toBeCloseTo(43.2073873);
+    expect(loc.coords_source).toBe("settlement");
+    // A lookup that never got an answer is not a miss: nothing is cached.
+    const cache = await env.DB.prepare("SELECT COUNT(*) AS n FROM geocode_cache").first<{ n: number }>();
+    expect(cache!.n).toBe(0);
     fetchMock.assertNoPendingInterceptors();
   });
 });

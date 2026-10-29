@@ -1089,6 +1089,9 @@ def render_markdown(summary: dict) -> str:
                     pin += " · **settlement centroid, not the named place**"
                 elif source == "nominatim":
                     pin += " · via Nominatim"
+                elif source == "photon":
+                    # The geocoding fallback, used while Nominatim was down.
+                    pin += " · via Photon (Nominatim fallback)"
                 elif source == "none":
                     pin = "no coordinates"
                 subs = (" — " + ", ".join(location["sublocations"])) if location["sublocations"] else ""

@@ -67,6 +67,9 @@
     "HEATING_BASE_URL": "https://energy-varna.bg",
     "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
     "NOMINATIM_URL": "https://nominatim.openstreetmap.org",
+    // Forward-geocode fallback, asked only when Nominatim fails transiently
+    // (§1.5). Base URL; the client appends /api/. Remove to disable.
+    "PHOTON_URL": "https://photon.komoot.io",
     "JWT_ISSUER": "CityShield",
     "JWT_AUDIENCE": "CityShield Users",
     "JWT_EXPIRE_MINUTES": "60",

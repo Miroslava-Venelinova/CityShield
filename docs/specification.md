@@ -122,11 +122,11 @@ design — nothing is correct only because a cache is warm:
 | Cache | TTL / bound | Purpose |
 |---|---|---|
 | `regions` / `streets` rows | 6 h, single-flight | Fuzzy matching runs on nearly every alert path (§1.3) |
-| Nominatim slot chain | — | Serializes outbound geocodes ≥1,100 ms apart (§1.5) |
+| Nominatim / Photon slot chains | — | Serialize outbound geocodes ≥1,100 ms apart, one chain per provider (§1.5) |
 
 ### 1.2 Data model (D1)
 
-SQLite, migrations `0001`–`0020`. Current shape:
+SQLite, migrations `0001`–`0021`. Current shape:
 
 ```sql
 regions ( id INTEGER PK, region_name TEXT UNIQUE, lat REAL, lng REAL )
@@ -169,7 +169,8 @@ alerts (
 crawl_state   ( source TEXT PK, last_id INTEGER, seen_ids TEXT, updated_at TEXT )
 ingest_attempts ( source TEXT, ref TEXT, attempts INTEGER, skipped_at TEXT, first_at TEXT, last_at TEXT, PK(source,ref) )
 ingest_health   ( cron TEXT PK, started_at TEXT, completed_at TEXT, last_duration_ms INTEGER )
-geocode_cache ( query TEXT PK, lat REAL, lng REAL, resolved_at TEXT )  -- NULL,NULL = cached miss
+geocode_cache ( query TEXT PK, lat REAL, lng REAL, resolved_at TEXT,
+                provider TEXT )    -- NULL,NULL = cached miss; provider 'nominatim'|'photon', NULL = pre-0021 (nominatim)
 auth_tokens   ( token_hash TEXT PK, user_id, purpose, expires_at, used_at, created_at )
 refresh_tokens( token_hash TEXT PK, user_id, family_id, expires_at, used_at, created_at )
 ```
@@ -221,6 +222,7 @@ for the fan-out filter to examine.
 | 0018 | `ingest_attempts` — the pre-store attempt cap (§1.7) |
 | 0019 | `ingest_health` — the tick heartbeat (§3.8) |
 | 0020 | `street_ways` — stored street geometry, so the polygon builder never calls Overpass (§1.9) |
+| 0021 | `geocode_cache.provider` — which geocoder answered, so a cached Photon fallback still reads as one (§1.5) |
 
 **A street belongs to a settlement** (migration 0015). `streets` was Varna-only
 and `street_name` was globally `UNIQUE`, which cost two things. Every village
@@ -577,9 +579,11 @@ row said so** — a settlement-centroid fallback is byte-identical to a genuine
 city-centre location, so "how often are we guessing" could only be answered by a
 manual audit. This is the blind spot `polygon_failed` was invented to fix, one
 level down, and it takes the same shape: record *why* the coordinate is what it
-is. `resolveCoordinates` returns `seed` | `nominatim` | `settlement` | `none`
-beside the point, it rides inside `locations_json` so it needs no migration, and
-the review tool badges the fallback. Both settlement branches report
+is. `resolveCoordinates` returns `seed` | `nominatim` | `photon` | `settlement` |
+`none` beside the point, it rides inside `locations_json` so it needs no
+migration, and the review tool badges the fallbacks. `photon` is a geocoded
+answer from the fallback provider while Nominatim was down (below) — kept apart
+from `nominatim` so an outage-era pin stays findable. Both settlement branches report
 `settlement`, seeded or geocoded: what makes it a fallback is not where the
 number came from but what it describes — the centre of a settlement standing in
 for a place we lost, and a seeded city centroid is exactly as wrong for a lost
@@ -764,6 +768,43 @@ specific first (`suburb`, `neighbourhood`, `quarter`, `city_district`, `city`,
 `town`, `village`), because Nominatim labels the same place at several
 granularities and only some of them exist in our tables — returning one name
 meant central Varna matched nothing at all.
+
+**The forward fallback chain** (29.10.2026). `geocode` used to return null
+whenever Nominatim was unreachable, so every unseeded name looked up during an
+OSMF outage or a 429 was stored unlocated. The chain is now:
+
+1. **Seeded rows in D1** — unchanged and already first: a name that matches a
+   seeded region or street needs no network call at all (above).
+2. **Nominatim**, cached in `geocode_cache` (hits and misses).
+3. **Photon** (`PHOTON_URL`, `photon.komoot.io`), asked **only on a transient
+   Nominatim failure** — a network error, the 8 s timeout, a body that is not
+   JSON, 429 or 5xx. A Nominatim that answered "no such place" has answered;
+   asking a second index until one says yes is how a fuzzy match gets promoted
+   to a pin. Other 4xx and a refused throttle slot do not fall back either.
+   Photon gets the same `User-Agent`, its own ≥1,100 ms slot chain (its demo
+   server asks only for "reasonable" volume, and we ask only after a
+   Nominatim failure), `bbox` set to the Varna province (the seeded extent,
+   42.834–43.543 N × 27.122–28.065 E, padded ~5 km) and `countrycode=BG` —
+   and the answer is filtered to `countrycode` BG and through the same
+   non-place filter as Nominatim's (`osm_key`/`osm_value` are `class`/`type`).
+   The trailing `, България` is dropped from the query: the bbox already says
+   it, and Photon matches every term rather than parsing an address.
+4. **The seeded settlement centroid** — the existing last rung of
+   `resolveCoordinates`, reported as `coords_source: "settlement"`. With both
+   providers down an unseeded name still gets its settlement's pin, not none.
+
+Caching keeps its semantics: a Photon **hit** is cached with
+`provider = 'photon'` (migration 0021), so the next read still reports it; a
+Photon **miss** is not cached, because the primary never answered and the name
+is unresolved rather than unresolvable — caching it would keep Nominatim from
+being asked again for 180 days. Rows written before 0021 carry NULL and read as
+`nominatim`. Photon answers go through the same plausibility check (§2.5).
+
+Reverse geocoding has **no** fallback, deliberately: its answer is written to
+`region_id`/`street_id`, which are the targeting, and Photon labels address
+levels differently (`district`/`locality`). A mapping guessed without
+measurements could write a wrong region, and a failed lookup already leaves the
+stored one standing (`ok: false`, below).
 
 `ReverseAddress` carries an **`ok` flag separating "the lookup failed" from "this
 point matches nothing"**, which used to be the same empty result. `PUT
@@ -1455,7 +1496,8 @@ Live operational risks worth keeping in view:
   alarm. A source that returns 200 and nothing useful is the failure mode to
   watch for (§3.8).
 - **Shared free services.** Nominatim rate-limits and sheds load; it is treated
-  as best-effort and degrades to "no pin". Overpass was the other one until it
+  as best-effort, falls back to Photon on a transient failure for forward
+  lookups, and past that degrades to the settlement centroid or "no pin" (§1.5). Overpass was the other one until it
   took polygons down for two months (§1.9); it is no longer called at runtime,
   only by the seed sweep on a developer machine.
 - **Cron schedule drift.** The Cloudflare schedules API has reported schedules
@@ -1493,6 +1535,7 @@ Location is the sensitive item and is collected only through the explicit
 | **OneSignal** (US) | `user_id` as external id, device push registration, notification content | Accept OneSignal's **DPA**, record its transfer mechanism (DPF or SCCs), list it in the policy. Never receives location, email or preferences |
 | **Google / Firebase (FCM)** | The Android delivery channel beneath OneSignal | Accept Google's **Data Processing Terms** in the Firebase console; list Google as a processor |
 | **OSM Foundation (Nominatim)** | ⚠️ The user's **precise coordinates** on `PUT /api/auth/location`, and street names during ingest | No DPA exists. Handled by: explicit disclosure and consent in the location flow; requests carrying no user identifier and originating from Cloudflare's IP, not the user's; a link to OSMF's privacy policy. **Documented decision: keep Nominatim and disclose.** A fully clean alternative is self-hosting or a commercial EU geocoder with a DPA |
+| **komoot (Photon)** — forward-geocode fallback only (§1.5) | Place and street names from public alert texts, and only while Nominatim is failing. Never user coordinates: reverse geocoding has no fallback | No personal data; fair-use compliance only (descriptive User-Agent, ≥1.1 s spacing, cached hits) |
 | **Overpass** (seed sweep only, from a developer machine) | Nothing from this service — it is asked for OSM street geometry when the seed is rebuilt, never by the Worker (§1.9) | No personal data; fair-use compliance only |
 | **Mail provider** | Recipient address + message body | **None engaged** — delivery is mocked (§1.13). Before those flows go live: accept the DPA, confirm the processing location, add it to `/privacy` *and* compliance.md, and widen the Play Data Safety purpose for email to include Account management |
 
@@ -1570,7 +1613,9 @@ compliance.md §2–3, as Art. 5(2) accountability expects.
   grows, move to a provider with a free tier (Carto, Stadia, MapTiler) rather than
   hammering osm.org.
 - **Nominatim usage policy:** ≤1 req/s, descriptive User-Agent, caching — all
-  satisfied structurally by §1.5. Keep it that way.
+  satisfied structurally by §1.5. Keep it that way. The Photon fallback is held
+  to the same shape (same User-Agent, its own ≥1.1 s chain, cached hits), and is
+  OSM data too, so the existing attribution covers it.
 - **Scraped sources:** short factual public-safety announcements from official
   operators. Facts are not copyrightable, volumes are trivial, and the EU DSM
   Art. 4 text-and-data-mining exception covers automated extraction; full

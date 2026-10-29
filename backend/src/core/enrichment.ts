@@ -5,7 +5,7 @@
 import * as q from "../db/queries";
 import type { Env } from "../env";
 import { ringCentroid, distanceKm } from "./geo";
-import { buildGeocodeQuery, geocode, type GeoPoint } from "./geocoding";
+import { buildGeocodeQuery, geocode, type GeocodeHit, type GeoPoint } from "./geocoding";
 import {
   type AlertLocationDTO, asObject, extractPolygonGeometry, outerRing, readLocation,
   settlementOf, settlementScope,
@@ -167,16 +167,17 @@ function settlementExtentKm(scope: q.NamedRow, streets: readonly q.NamedRow[]): 
  * ultimately the settlement centroid, which is a coarse pin rather than a wrong
  * one. The rejection is logged: an anchor that keeps failing is a `region_aliases`
  * row waiting to be written, and it can only be noticed if it is said out loud.
+ * The Photon fallback's answers pass through the same check.
  */
 function plausible(
-  point: GeoPoint | null, scope: q.NamedRow | null, streets: readonly q.NamedRow[], what: string,
-): GeoPoint | null {
+  point: GeocodeHit | null, scope: q.NamedRow | null, streets: readonly q.NamedRow[], what: string,
+): GeocodeHit | null {
   if (point === null || scope === null || scope.lat === null || scope.lng === null) return point;
   const limit = settlementExtentKm(scope, streets);
   const km = distanceKm(point.lat, point.lng, scope.lat, scope.lng);
   if (km <= limit) return point;
   console.warn(
-    `[geocode] rejected '${what}' — Nominatim answered ${km.toFixed(1)} km from `
+    `[geocode] rejected '${what}' — ${point.provider} answered ${km.toFixed(1)} km from `
     + `${scope.name}, past its ${limit.toFixed(1)} km extent.`);
   return null;
 }
@@ -257,7 +258,8 @@ async function resolveCoordinates(
     const name = match?.name ?? geocodableName(dto.area);
     const point = plausible(
       await geocode(env, buildGeocodeQuery(name, settlement), deadline), anchor, streets, name);
-    if (point) return { point, source: "nominatim" };
+    // The provider that answered: `photon` when Nominatim was down (§1.5).
+    if (point) return { point, source: point.provider };
     // Area named but unresolvable — fall through to the streets rather than
     // leaving the alert with no pin at all.
   }
@@ -279,7 +281,7 @@ async function resolveCoordinates(
       const name = match?.name ?? geocodableName(raw);
       const point = plausible(
         await geocode(env, buildGeocodeQuery(name, settlement), deadline), anchor, streets, name);
-      if (point) return { point, source: "nominatim" };
+      if (point) return { point, source: point.provider };
     }
   }
 

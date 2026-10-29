@@ -18,6 +18,8 @@ export interface Env {
 
   // vars (wrangler.jsonc)
   AI_MODEL: string;
+  /** Model for the retry after AI_MODEL fails (ingestion/ai.ts). Unset or equal to AI_MODEL = every attempt on AI_MODEL. */
+  AI_FALLBACK_MODEL?: string;
   /** ViK listing, unfiltered by region. Only seeds/unwedges the cursor — the crawl walks ids (ingestion/sources/id-probe.ts). */
   VIK_URL: string;
   /** ViK message path prefix; the crawler appends "<id>.html". Must stay query-string-free, or every page is scoped to one region. */
@@ -31,6 +33,8 @@ export interface Env {
   HEATING_BASE_URL: string;
   HEATING_URL: string;
   NOMINATIM_URL: string;
+  /** Photon base URL, asked only when Nominatim fails transiently (core/geocoding.ts). Unset = no fallback. */
+  PHOTON_URL?: string;
   JWT_ISSUER: string;
   JWT_AUDIENCE: string;
   JWT_EXPIRE_MINUTES: string;

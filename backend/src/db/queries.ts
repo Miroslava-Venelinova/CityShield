@@ -1,6 +1,7 @@
 // All D1 SQL in one place (docs/specification.md §1.1 — no ORM). Timestamps are
 // new Date().toISOString() strings, which sort correctly lexicographically.
 
+import type { GeocodeProvider } from "../core/geocoding";
 import type { Env } from "../env";
 
 export interface UserRow {
@@ -815,22 +816,24 @@ export async function deleteUserRefreshTokens(env: Env, userId: string): Promise
 /**
  * A cached forward geocode: undefined when the query was never looked up, a row
  * with NULL coordinates when it was and Nominatim had no answer (misses are
- * cached too).
+ * cached too). `provider` is which geocoder answered (migration 0021); NULL on
+ * rows written before it, all of which came from Nominatim.
  */
 export async function getCachedGeocode(
   env: Env, query: string,
-): Promise<{ lat: number | null; lng: number | null } | undefined> {
-  const row = await env.DB.prepare("SELECT lat, lng FROM geocode_cache WHERE query = ?")
-    .bind(query).first<{ lat: number | null; lng: number | null }>();
+): Promise<{ lat: number | null; lng: number | null; provider: GeocodeProvider | null } | undefined> {
+  const row = await env.DB.prepare("SELECT lat, lng, provider FROM geocode_cache WHERE query = ?")
+    .bind(query).first<{ lat: number | null; lng: number | null; provider: GeocodeProvider | null }>();
   return row ?? undefined;
 }
 
 export async function putCachedGeocode(
-  env: Env, query: string, point: { lat: number; lng: number } | null,
+  env: Env, query: string, point: { lat: number; lng: number } | null, provider: GeocodeProvider,
 ): Promise<void> {
   await env.DB.prepare(
-    "INSERT OR REPLACE INTO geocode_cache (query, lat, lng, resolved_at) VALUES (?, ?, ?, ?)",
-  ).bind(query, point?.lat ?? null, point?.lng ?? null, nowIso()).run();
+    `INSERT OR REPLACE INTO geocode_cache (query, lat, lng, resolved_at, provider)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).bind(query, point?.lat ?? null, point?.lng ?? null, nowIso(), provider).run();
 }
 
 // ── Retention (daily cleanup cron, §1.10) ───────────────────────────────────
