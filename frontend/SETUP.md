@@ -184,7 +184,8 @@ frontend/
 ├── android/                        Committed, already patched — Gradle builds it as-is
 ├── scripts/
 │   ├── build.sh                    Gradle build + manifest patching (Docker only)
-│   └── install.sh                  ADB install via Docker
+│   ├── install.sh                  ADB install via Docker
+│   └── vendor-leaflet.mjs          postinstall: inline the pinned Leaflet into src/vendor
 └── src/
     ├── context/
     │   └── AuthContext.tsx          JWT token, hasLocation state
@@ -353,6 +354,21 @@ install Make: https://gnuwin32.sourceforge.net/packages/make.htm
 
 ## OpenStreetMap notes
 
-The app uses OpenStreetMap tiles — no Google Maps API key or billing required. Tiles come from `tile.openstreetmap.org` via the `UrlTile` component in `react-native-maps`.
+Both maps are Leaflet in a WebView (`src/components/AlertMap.tsx`,
+`LocationPickerMap.tsx`, shared setup in `leafletWebView.ts`) over tiles from
+`tile.openstreetmap.org` — no Google Maps API key or billing.
 
-For production, use a self-hosted tile server or a paid OSM provider (Stadia Maps, MapTiler) — the public OSM tile server enforces a usage policy and rate-limits heavy traffic. Swap the `urlTemplate` prop in `HomeScreen.tsx` to change providers.
+- **Leaflet is bundled, not loaded from a CDN.** `npm install` runs
+  `scripts/vendor-leaflet.mjs` (`postinstall`), which checks the pinned
+  `leaflet` package against SHA-512 hashes and writes it to
+  `src/vendor/leaflet.generated.ts` (gitignored). If that file is missing,
+  run `npm install` again — Metro cannot bundle without it, by design. To bump
+  Leaflet, change the exact version in `package.json` *and* in the script, and
+  recompute the two hashes as its header says.
+- **The WebView identifies itself** as `CityShield/<version>` to the tile
+  server, as the OSM tile policy requires.
+- **Failed tiles show a notice** over the map rather than a grey rectangle.
+- **Changing tile provider** is a privacy change, not just a URL swap: the
+  provider receives every map user's IP address. See `docs/todo.md` §9.1 for the
+  candidates and the checklist. The URL lives in `osmTileLayerScript`, and the
+  origin must also go into the CSP in `LEAFLET_HEAD`.

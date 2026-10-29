@@ -258,13 +258,15 @@ From the OSMF tile usage policy [policy page]:
 
 - **Identification:** apps must send "a distinct, stable User-Agent that names the app".
   Generic library defaults get blocked, and spoofing another app or browser is
-  prohibited. The map WebViews (`leafletWebView.ts`) set no user agent, so tiles are
-  requested with Android's default WebView agent. Fix: set
-  `applicationNameForUserAgent` (for example `CityShield/1.0 (+contact)`) on both
-  WebViews.
-- **Attribution** must be shown clearly on the map. It is shown. Tapping it is blocked
-  by `hardenedWebViewProps`, which is acceptable, but opening it in the external
-  browser would be better.
+  prohibited. ~~The map WebViews set no user agent.~~ Fixed 29.10.2026: both send
+  `CityShield/<version> (+<API>/privacy)` appended to the WebView agent
+  (`applicationNameForUserAgent` in `leafletWebView.ts`). The policy also says
+  "Native apps usually do not have a referer, this is ok", so the missing `Referer`
+  of an `about:blank` document is not a problem.
+- **Attribution** must be shown clearly on the map. It is shown. Tapping it is not
+  blocked, as this said before 29.10.2026: react-native-webview hands any URL outside
+  `originWhitelist` to the system, so the link opens in the external browser (read from
+  the library source; to confirm on a device).
 - No offline use, no prefetching, honour cache headers. The app does none of the
   first two.
 - Access is best-effort with no SLA and can be withdrawn without notice. That is the

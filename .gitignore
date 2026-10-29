@@ -28,6 +28,8 @@ frontend/android/app/src/main/assets/index.android.bundle
 frontend/*.keystore
 !frontend/android/app/debug.keystore
 frontend/.metro-cache/
+# Leaflet, inlined from node_modules by `postinstall` (scripts/vendor-leaflet.mjs)
+frontend/src/vendor/*.generated.ts
 
 # ── Deprecated pre-Cloudflare stack (backend_deprecated/) ─────────
 # Python ingestion

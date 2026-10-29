@@ -132,6 +132,77 @@ SELECT * FROM ingest_attempts WHERE skipped_at IS NOT NULL;
 SELECT id, push_attempts FROM alerts WHERE notified_at IS NULL;   -- abandoned pushes
 ```
 
+## Uptime check
+
+`.github/workflows/uptime.yml` calls `/api/health` from GitHub's machines at :07
+and :37 past every hour, so nothing local has to be running. A failed run is
+the alarm: GitHub emails the user who last changed the workflow's schedule
+(check *Settings → Notifications → Actions* on that account: "failed workflows
+only", email on). It **fails** when:
+
+- the Worker does not answer, or answers anything but 200 (a 401 *with* the
+  key means the repo secret no longer matches the Worker's `INGEST_API_KEY`);
+- the `*/15` ingest tick has not **completed** in over 1 hour — at least three
+  ticks in a row. The error says which kind: `started_at` still moving is the
+  `exceededCpu` signature, both frozen means the cron stopped firing
+  ([troubleshooting.md](troubleshooting.md), specification §3.8).
+
+It only **warns** (in the run's summary page) on stalled cursors and on
+messages given up on in the last 24 hours. The route's own `status: degraded`
+is not a failure: any cursor quiet for 6 hours sets it, and vt and heating are
+that quiet most days.
+
+Setup, once: add the Worker's `INGEST_API_KEY` as a repo secret of the same
+name. Until then the run checks liveness only (a 401 from the key gate) and
+says so in a warning. After rotating the key, update the repo secret too, or
+the next run fails with 401. Run it by hand from *Actions → Uptime → Run
+workflow*. GitHub disables scheduled workflows in a public repo after 60 days
+without a commit; re-enable it from the same page if that happens.
+
+## Restore from an off-site backup
+
+**Within 7 days, use Time Travel instead** — it restores to any minute, in place:
+`npx wrangler d1 time-travel restore cityshield-db --timestamp=<ISO time>`.
+
+`.github/workflows/backup.yml` exports the remote D1 every Monday at 02:07 UTC
+(`wrangler d1 export --remote`), encrypts it with the `BACKUP_PASSPHRASE` repo
+secret (`gpg --symmetric`, AES-256) and keeps it as a workflow artifact for
+**30 days**. The repo is public, so the artifact would be downloadable by anyone
+signed in to GitHub — the encryption is what keeps it private. Keep the
+passphrase somewhere other than GitHub (a password manager): GitHub cannot show
+a secret again, and without the passphrase every backup is noise. Note that an
+export blocks other queries on the database while it runs (seconds at this
+size).
+
+To restore:
+
+1. *Actions → Backup* → pick the run → download `cityshield-db-<stamp>` (a zip
+   holding `cityshield-db-<stamp>.sql.gpg`). Unzip it.
+2. Decrypt (asks for the passphrase):
+   ```sh
+   gpg --output cityshield-db.sql --decrypt cityshield-db-<stamp>.sql.gpg
+   ```
+   The `.sql` holds every user's email, password hash and home coordinate —
+   keep it off shared folders and delete it when done.
+3. Restore into a **fresh** database rather than over the live one — the dump
+   is `CREATE TABLE` + `INSERT`, and it fails on tables that already exist:
+   ```sh
+   cd backend
+   npx wrangler d1 create cityshield-restore --location=weur
+   npx wrangler d1 execute cityshield-restore --remote --file=../cityshield-db.sql
+   ```
+   If it stops on a foreign key, prepend `PRAGMA defer_foreign_keys = true;`
+   to the file and run it again.
+4. Check it (`select count(*) from users`, `select * from d1_migrations`), then
+   point `database_id` in `wrangler.jsonc` at the new database and deploy — or
+   copy the rows you need across with `wrangler d1 execute`. Migrations newer
+   than the backup still need applying (`wrangler d1 migrations apply`).
+5. Delete the decrypted `.sql`.
+
+Run a backup by hand from *Actions → Backup → Run workflow* — worth doing once
+right after the secrets exist, and restoring it into a scratch database once,
+so the first real restore is not also the first test.
+
 ## Simulate a cron locally
 
 ```sh
@@ -198,7 +269,7 @@ credentials.
 
 ```sh
 openssl rand -base64 48 | npx wrangler secret put JWT_KEY        # invalidates every access token in flight
-openssl rand -hex 32    | npx wrangler secret put INGEST_API_KEY # update the tools' config too
+openssl rand -hex 32    | npx wrangler secret put INGEST_API_KEY # update the tools' config and the repo secret too
 npx wrangler secret put ONESIGNAL_API_KEY                        # after regenerating in the dashboard
 npx wrangler deploy
 ```

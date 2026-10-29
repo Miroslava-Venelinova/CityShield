@@ -5,8 +5,14 @@
 import React from 'react';
 import {StyleProp, ViewStyle} from 'react-native';
 import {WebView, WebViewProps, WebViewMessageEvent} from 'react-native-webview';
-import {LEAFLET_HEAD, hardenedWebViewProps, safeCoord} from './leafletWebView';
+import {
+  LEAFLET_HEAD,
+  hardenedWebViewProps,
+  osmTileLayerScript,
+  safeCoord,
+} from './leafletWebView';
 import {useTheme} from '../context/ThemeContext';
+import {useI18n} from '../context/LanguageContext';
 
 // react-native-webview's class-component typings don't line up with the
 // React 19 / RN 0.85 type definitions yet (props collapse to `never`), so
@@ -30,6 +36,7 @@ const HOME_ZOOM = 12;
 function buildHtml(
   dark: boolean,
   backdrop: string,
+  tileNotice: string,
   initialLat?: number,
   initialLng?: number,
 ): string {
@@ -74,11 +81,7 @@ ${LEAFLET_HEAD}
   var map = L.map('map', { zoomControl: false, attributionControl: true })
              .setView([${centerLat}, ${centerLng}], ${centerZoom});
   map.attributionControl.setPrefix(false);
-
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
+${osmTileLayerScript(tileNotice)}
 
   function post(msg) {
     if (window.ReactNativeWebView) {
@@ -128,13 +131,20 @@ export default function LocationPickerMap({
   style,
 }: Props) {
   const {isDark, colors} = useTheme();
+  const {t} = useI18n();
   return (
     <WebViewComponent
       // Theming is baked into the document, so a theme change reloads it.
       key={isDark ? 'dark' : 'light'}
       style={style}
       source={{
-        html: buildHtml(isDark, colors.mapBackdrop, initialLat, initialLng),
+        html: buildHtml(
+          isDark,
+          colors.mapBackdrop,
+          t('map.tilesUnavailable'),
+          initialLat,
+          initialLng,
+        ),
       }}
       {...hardenedWebViewProps}
       onMessage={(event: WebViewMessageEvent) => {

@@ -36,7 +36,8 @@ of what only you can provide, and the work items point into it.
       wrangler 3.90, which can't read `wrangler.jsonc` ("Missing entry-point") — the job
       now runs the lockfile's wrangler instead.
 - [ ] 🧑 Create the `CLOUDFLARE_API_TOKEN` repo secret so that deploy job actually works —
-      verified **missing** 21.10.2026 (§7.3).
+      verified **missing** 21.10.2026 (§7.3). The weekly backup needs it too, plus
+      `BACKUP_PASSPHRASE`; the uptime check needs `INGEST_API_KEY`.
 - [ ] 🧑 Rotate `ONESIGNAL_API_KEY`; it passed through a chat transcript (§7.2).
 
 ## 2. Notification accuracy — the remaining backend work
@@ -336,15 +337,33 @@ Worker secret and mirrored in local `.dev.vars`.
   not read subscriber data, so the risk is spam rather than a breach — but regenerating
   it and re-running `wrangler secret put ONESIGNAL_API_KEY` takes about a minute.
 
-### 7.3 ⏳ CI auto-deploys — one API token, one GitHub secret
+### 7.3 ⏳ CI, uptime and backups — one API token, three GitHub secrets
 
-- Cloudflare dashboard → My Profile → API Tokens → create from the **"Edit Cloudflare
-  Workers"** template, scoped to your account.
-- Add it to the GitHub repo as the secret `CLOUDFLARE_API_TOKEN`.
+GitHub → the repo → Settings → Secrets and variables → Actions → *New repository
+secret*:
+
+- **`CLOUDFLARE_API_TOKEN`** — Cloudflare dashboard → My Profile → API Tokens → create
+  from the **"Edit Cloudflare Workers"** template, scoped to your account, then
+  **+ Add more → Account → D1 → Edit** (the weekly backup runs `wrangler d1 export`;
+  Cloudflare documents no narrower permission for it). Used by the `deploy` job and
+  `backup.yml`.
+- **`BACKUP_PASSPHRASE`** — a long random passphrase (e.g. `openssl rand -base64 32`).
+  The backups are encrypted with it because the repo is public. **Store it in a
+  password manager as well**: GitHub never shows a secret again, and without it no
+  backup can be restored.
+- **`INGEST_API_KEY`** — the same value as the Worker secret (it is in
+  `backend/.dev.vars`). Lets `uptime.yml` read `/api/health`; without it the check is
+  liveness only. Update it whenever the Worker's key is rotated.
+
+Then run *Actions → Backup → Run workflow* once and restore the result into a scratch
+database ([runbook](runbook.md#restore-from-an-off-site-backup)), and check that the
+account that pushed the workflows gets email for failed Actions runs (GitHub →
+Settings → Notifications → Actions).
 
 Not done: on 21.10.2026 the repo had no Actions secrets at all. Until it is, the
 `deploy` job fails on every push to `main` and deploys happen by hand with
-`npx wrangler deploy`.
+`npx wrangler deploy`, and the weekly backup fails (which GitHub emails, as a
+reminder).
 
 ### 7.4 ✅ Privacy policy — decided
 
@@ -474,16 +493,18 @@ release.
       policy to match the developer name on the listing. Decide whose name goes there
       (it will also be public on the Play listing).
 - [ ] **Undisclosed transfers from the device.** The app loads map tiles straight from
-      `tile.openstreetmap.org` and Leaflet from `unpkg.com`
-      (`frontend/src/components/leafletWebView.ts`), so both see the user's IP address.
-      The policy lists only Nominatim, and says that happens only when setting a
-      location. Fix: bundle Leaflet into the app (§9.1 — this also removes an outage
-      dependency), and list the OSMF tile servers in `/privacy` (both languages) and in
-      compliance.md §5.
+      `tile.openstreetmap.org` (`frontend/src/components/leafletWebView.ts`), so OSMF
+      sees the user's IP address. The policy lists only Nominatim, and says that happens
+      only when setting a location. Fix: list the OSMF tile servers in `/privacy` (both
+      languages) and in compliance.md §5.
+      ~~Leaflet from `unpkg.com`~~ — **removed 29.10.2026**: Leaflet is bundled into the
+      APK (spec §1.11), so unpkg no longer receives anything from the device.
 - [ ] **"Deleted immediately" is not quite true.** D1 Time Travel keeps restorable
       history for 7 days (30 on Workers Paid), and that is the breach runbook's restore
-      path. Say so in `/privacy`: deleted at once from the live database, gone from
-      backups within 7 days.
+      path. Since 29.10.2026 there is also a weekly encrypted export kept 30 days as a
+      GitHub Actions artifact (§9.2). Say so in `/privacy`: deleted at once from the
+      live database, gone from backups within 30 days — and decide whether GitHub is
+      named as the backup store (compliance.md §5).
 - [ ] 🧑 **No minimum age — decide 18+ for the first release** (legal.md §1). Admitting
       anyone under 18 makes a DPIA mandatory (CPDP list item 7, "services offered
       directly to a child"). Under-14s cannot contract (ЗЛС чл. 3) and need a parent's
@@ -551,6 +572,9 @@ release.
 
 - [ ] **A "Licences" / "About" screen.** The APK ships React Native, Leaflet (BSD-2) and
       other libraries whose licences require their notices to travel with the binary.
+      Since 29.10.2026 Leaflet really is inside the APK (it used to be fetched from
+      unpkg at runtime); its copyright line travels in the inlined code, but BSD-2 also
+      wants the licence text shown with the binary.
       Generate the list from `frontend/package.json` dependencies at build time.
 - [ ] **OSM attribution outside the map.** The street and region seed is derived from
       OSM (ODbL) and is used even when no map is on screen. The map attribution and the
@@ -572,11 +596,14 @@ release.
       app is useless outside Varna, and this keeps COPPA and the US state app-store
       age laws (Texas SB 2420, enforceable again since May 2026; Utah, Louisiana,
       California) out of scope (legal.md §1.6).
-- [ ] **Identify the map to OSM.** The tile policy requires a distinct user agent naming
-      the app, and forbids spoofing. Both map WebViews send Android's default WebView
-      agent. Set `applicationNameForUserAgent` in `hardenedWebViewProps`
-      (`frontend/src/components/leafletWebView.ts`), and consider opening the
-      attribution link in the external browser instead of blocking it (legal.md §7).
+- [x] ~~**Identify the map to OSM.**~~ Done 29.10.2026: `hardenedWebViewProps` sets
+      `applicationNameForUserAgent` to `CityShield/<version> (+<API>/privacy)`, appended to
+      the WebView's own agent (spec §1.11). No `Referer` is sent (the map document is
+      `about:blank`); the current tile policy says "Native apps usually do not have a
+      referer, this is ok". The attribution link turned out not to be blocked:
+      react-native-webview hands any URL outside `originWhitelist` to `Linking.openURL`,
+      so it already opens in the external browser — read from the library source,
+      **confirm on a device** along with the agent (a proxy, or OSM's logs if they write).
 - [ ] **Replace "we use no cookies" in `/privacy`** with a short list of what the app
       keeps on the device: sign-in tokens, settings, notification history, the OneSignal
       subscription id. All of it is necessary for the service, so it is exempt from
@@ -600,18 +627,50 @@ release.
 | The four source websites | **Done 29.10.2026** (spec §3.8, migration 0022): each run records what its parser found in `source_health`; a source that found nothing (empty or parse/fetch error) past its quiet spell — heating 24 h, epro 24 h, vik 48 h, vt 72 h — is logged loudly and listed in `/api/health`'s `silent_sources` | [ ] Re-measure the vik and vt spells from `source_health` after a few weeks of rows (both are conservative guesses). Point the §9.2 uptime checker at `silent_sources` (empty = healthy), not at `status` |
 | Nominatim (`NOMINATIM_URL`) | **Done 29.10.2026** (spec §1.5): forward lookups fall back to Photon (`PHOTON_URL`) on a transient failure (network, timeout, 429, 5xx), then to the seeded settlement centroid in D1. Hits are cached with their provider (migration 0021) and reported as `coords_source: "photon"`. Reverse geocoding still has no fallback, deliberately | Watch the logs for `asking Photon`. Re-check Photon's fair-use terms if volume grows |
 | Overpass | **No longer a runtime dependency** (26.10.2026): the polygon builder reads stored geometry from D1 (spec §1.9). Only the seed sweep calls it, locally | Nothing at runtime. Stored geometry ages: re-sweep when a polygon fails with `no stored geometry for` ([runbook](runbook.md#refresh-street-geometry)) |
-| OSM tiles (`tile.openstreetmap.org`) | No fallback. Separately, the OSM tile usage policy requires apps to identify themselves; a WebView loading inline HTML may send no usable `Referer` and get blocked tiles | Test the maps on a **release** build on a real device. Plan a tile provider for when usage grows (that one is a new processor: §8.2, compliance.md §5) |
-| unpkg.com (Leaflet) | Maps are blank if unpkg is down or blocked | Bundle Leaflet into the APK (also fixes a §8.2 privacy item) |
+| OSM tiles (`tile.openstreetmap.org`) | No second provider. Since 29.10.2026 a failed or stalled tile load shows a notice over the map instead of a silent grey rectangle, and the WebView identifies itself as `CityShield/<version>` as the tile policy requires (spec §1.11). The policy accepts no `Referer` from apps | Test the maps on a **release** build on a real device. Pick a provider before usage grows — see the candidates below |
+| ~~unpkg.com (Leaflet)~~ | **Gone 29.10.2026**: Leaflet is bundled into the APK, so a down or blocked unpkg no longer blanks the map | Nothing |
 | OneSignal | Send failures hold the cursor and retry (`MAX_PUSH_ATTEMPTS = 3`) | Fine as one provider |
+
+**A second tile source — candidates, and what adding one takes.** Deliberately not
+added: every candidate below receives each map user's IP address, which makes it a
+new recipient of personal data. OSMF's tiles are best-effort with no SLA, may block
+without notice, and forbid offline use; heavy traffic is expected to move elsewhere
+([OSMF tile policy](https://operations.osmfoundation.org/policies/tiles/); the
+community list is the OSM wiki's *Raster tile providers*).
+
+| Candidate | Notes |
+|---|---|
+| **Self-hosted on Cloudflare R2** (render Varna's extract ourselves, e.g. Protomaps/PMTiles or pre-rendered raster for a fixed bbox and zoom range) | The only option that adds **no new processor** — Cloudflare already is one. Costs work: a render pipeline, a style, and vector rendering in the WebView (MapLibre or protomaps-leaflet) if the tiles are vector. Must not be built by bulk-downloading osm.org tiles, which the policy forbids |
+| **MapTiler** (Switzerland) | EU-adjacent hosting, OSM-based raster and vector styles, free tier with an API key. Check the free tier's commercial-use terms |
+| **Stadia Maps** (US) | Hosts the Stamen/OSM styles; free tier for non-commercial use with an API key or domain/app registration |
+| **Thunderforest** (UK) | OSM-based raster styles; free "hobby" tier with an API key |
+| **CARTO basemaps** | Free under conditions set by CARTO; read the current terms before relying on them |
+
+Adding any third-party one requires, in the same change: its DPA (or a documented
+reason there is none) and transfer mechanism; a row in `/privacy` in both languages
+and in compliance.md §5 and spec §2.2; its origin in the map CSP (`img-src`) and in
+`network_security_config.xml`; its attribution in the map; an API key that ships in
+the APK (so it must be one the provider expects to be public, ideally locked to the
+package name); and a decision whether it is a fallback (switched to on `tileerror`)
+or the primary. Free-tier limits are per month — at Play-scale usage the fallback
+could exhaust them on the day OSMF has an outage.
 
 ### 9.2 Monitoring, backups, limits
 
-- [ ] **Something has to call `/api/health`.** The heartbeat exists (migration 0019) but
-      nothing outside polls it, and every incident so far was found by a person looking.
-      A free external uptime checker on `/api/health` with email alerts is enough.
-- [ ] **Off-site backups.** The only backup is D1 Time Travel's 7-day window. Add a
-      weekly `wrangler d1 export` stored somewhere else (a GitHub Actions artifact or
-      R2), so a mistake noticed on day 8 is recoverable.
+- [x] ~~**Something has to call `/api/health`.**~~ Done 29.10.2026:
+      `.github/workflows/uptime.yml` polls it every 30 minutes from GitHub's runners and
+      fails (GitHub emails the failure) when the Worker is down or the ingest tick has not
+      completed in an hour; stalled cursors and skipped messages are warnings in the run
+      summary ([runbook](runbook.md#uptime-check)). 🧑 Needs the `INGEST_API_KEY` repo
+      secret for more than a liveness check (§7.3). Cursor stalls still cannot fail it —
+      per-source quiet spells are the open "source websites" row in §9.1.
+- [x] ~~**Off-site backups.**~~ Done 29.10.2026: `.github/workflows/backup.yml` runs
+      `wrangler d1 export --remote` every Monday, encrypts it with `BACKUP_PASSPHRASE`
+      (the repo is public, so artifacts are downloadable by anyone signed in) and keeps
+      it 30 days as an artifact ([runbook](runbook.md#restore-from-an-off-site-backup)).
+      🧑 Needs the `CLOUDFLARE_API_TOKEN` (with D1 Edit) and `BACKUP_PASSPHRASE` secrets
+      (§7.3), then one test restore. The 30 days feed into §8.2's "deleted immediately"
+      item.
 - [ ] **Free-plan limits under real users.** Estimate per-user daily load (API requests,
       D1 reads, Workers AI neurons per parse) and work out at what user count the free
       plan runs out. Past a limit the service simply stops, so know the number before

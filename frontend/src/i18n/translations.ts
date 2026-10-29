@@ -24,6 +24,11 @@ const en = {
   'error.server': 'CityShield is having trouble right now. Please try again later.',
   'error.generic': 'Something went wrong. Please try again.',
 
+  // ── Maps (both Leaflet WebViews) ──
+  // Shown over the map when OSM tiles fail to load; alert areas and pins are
+  // drawn regardless.
+  'map.tilesUnavailable': 'Map tiles could not be loaded. Check your connection or try again later.',
+
   // ── Tab bar ──
   'tabs.home': 'Home',
   'tabs.alerts': 'Alerts',
@@ -297,6 +302,9 @@ const bg: Record<TranslationKey, string> = {
   'error.duplicateEmail': 'Вече съществува акаунт с този имейл.',
   'error.server': 'CityShield има временен проблем. Опитайте отново по-късно.',
   'error.generic': 'Нещо се обърка. Моля, опитайте отново.',
+
+  // ── Карти ──
+  'map.tilesUnavailable': 'Картата не можа да се зареди. Проверете връзката си или опитайте по-късно.',
   'common.from': 'От',
   'common.until': 'До',
   'common.daily': 'всеки ден',

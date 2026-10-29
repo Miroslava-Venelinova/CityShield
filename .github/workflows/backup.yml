@@ -1,0 +1,106 @@
+name: Backup
+
+# Weekly off-site copy of the remote D1 (docs/specification.md §3.8, restore
+# steps in docs/runbook.md "Restore from an off-site backup"). D1 Time Travel
+# only reaches back 7 days; this keeps a mistake noticed on day 8 recoverable,
+# and needs no machine of ours to be on.
+#
+# The dump holds users' emails, password hashes and home coordinates, and this
+# repository is PUBLIC — anyone signed in to GitHub can download a public
+# repo's artifacts. So the SQL is encrypted with BACKUP_PASSPHRASE before
+# upload, and the job refuses to run without it: a plaintext dump is never
+# uploaded, whatever the repo's visibility.
+#
+# Secrets: CLOUDFLARE_API_TOKEN (the deploy token, with Account → D1 → Edit
+# added) and BACKUP_PASSPHRASE (docs/todo.md §7.3).
+
+on:
+  schedule:
+    # Mondays 02:07 UTC (night in Varna). An export blocks every other query on
+    # the database while it runs, so it sits between two */15 ingest ticks;
+    # GitHub may start it late, and on a database this size the export takes
+    # seconds either way.
+    - cron: "7 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-backup
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: Export D1 to an encrypted artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Require both secrets
+        working-directory: .
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          missing=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$BACKUP_PASSPHRASE" ] || missing="$missing BACKUP_PASSPHRASE"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repo secret(s):$missing. See docs/todo.md §7.3."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+
+      # The lockfile's wrangler, as in ci.yml's deploy job: wrangler-action
+      # installs its own 3.x, which cannot read wrangler.jsonc.
+      - name: Export the remote database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 export cityshield-db --remote --output "$RUNNER_TEMP/cityshield-db.sql"
+          # A dump without the users table is not a backup, whatever wrangler's
+          # exit code said. Checked by name only: the contents never reach the log.
+          if ! grep -q 'CREATE TABLE[^(]*users' "$RUNNER_TEMP/cityshield-db.sql"; then
+            echo "::error::The export has no users table — refusing to keep it as a backup."
+            exit 1
+          fi
+          echo "Exported $(wc -c < "$RUNNER_TEMP/cityshield-db.sql") bytes."
+
+      - name: Encrypt
+        id: encrypt
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          stamp=$(date -u +%Y-%m-%dT%H%MZ)
+          mkdir -p "$RUNNER_TEMP/backup"
+          # Passphrase on a file descriptor, never on the command line.
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 --symmetric --cipher-algo AES256 \
+            --output "$RUNNER_TEMP/backup/cityshield-db-$stamp.sql.gpg" \
+            "$RUNNER_TEMP/cityshield-db.sql"
+          shred -u "$RUNNER_TEMP/cityshield-db.sql"
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cityshield-db-${{ steps.encrypt.outputs.stamp }}
+          path: ${{ runner.temp }}/backup/*.sql.gpg
+          if-no-files-found: error
+          # 30 days, the shortest the plan allowed: every copy keeps the
+          # accounts deleted since it was taken, and /privacy has to say how
+          # long that lasts (docs/todo.md §8.2). Four or five weekly copies.
+          retention-days: 30
+          # gpg already compressed it.
+          compression-level: 0

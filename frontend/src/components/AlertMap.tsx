@@ -1,6 +1,7 @@
 // ─── src/components/AlertMap.tsx ─────────────────────────────────────────────
 // OpenStreetMap alert map rendered with Leaflet inside a WebView.
-// No Google Maps SDK, no API keys — tiles come straight from OSM.
+// No Google Maps SDK, no API keys — tiles come straight from OSM, and Leaflet
+// itself is bundled (leafletWebView.ts), so the only runtime fetch is tiles.
 //
 // RN → web: marker/polygon data via injectJavaScript (window.__setData),
 //           camera moves via window.__flyTo.
@@ -16,8 +17,14 @@ import React, {
 } from 'react';
 import {StyleProp, ViewStyle} from 'react-native';
 import {WebView, WebViewProps, WebViewMessageEvent} from 'react-native-webview';
-import {LEAFLET_HEAD, MAP_GESTURE_SCRIPT, hardenedWebViewProps} from './leafletWebView';
+import {
+  LEAFLET_HEAD,
+  MAP_GESTURE_SCRIPT,
+  hardenedWebViewProps,
+  osmTileLayerScript,
+} from './leafletWebView';
 import {useTheme} from '../context/ThemeContext';
+import {useI18n} from '../context/LanguageContext';
 
 // react-native-webview's class-component typings don't line up with the
 // React 19 / RN 0.85 type definitions yet (props collapse to `never`), so
@@ -61,7 +68,7 @@ const HOME_LAT = 43.2141;
 const HOME_LNG = 27.9147;
 const HOME_ZOOM = 12;
 
-function buildHtml(dark: boolean, backdrop: string): string {
+function buildHtml(dark: boolean, backdrop: string, tileNotice: string): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -108,11 +115,7 @@ ${LEAFLET_HEAD}
   var map = L.map('map', { zoomControl: false, attributionControl: true })
              .setView([${HOME_LAT}, ${HOME_LNG}], ${HOME_ZOOM});
   map.attributionControl.setPrefix(false);
-
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
+${osmTileLayerScript(tileNotice)}
 
   var overlays = L.layerGroup().addTo(map);
 
@@ -187,15 +190,18 @@ const AlertMap = forwardRef<AlertMapHandle, Props>(function AlertMap(
   ref,
 ) {
   const {isDark, colors} = useTheme();
+  const {t} = useI18n();
   const webRef = useRef<WebView>(null);
   const readyRef = useRef(false);
+  const tileNotice = t('map.tilesUnavailable');
 
   // Theming is baked into the document (tile filter, marker fill), so a theme
   // change reloads the page. `key` on the WebView below forces that; this
-  // clears the flag so overlays are not pushed at the outgoing document.
+  // clears the flag so overlays are not pushed at the outgoing document. The
+  // tile notice's text is baked in too, so a language change reloads it.
   const html = useMemo(
-    () => buildHtml(isDark, colors.mapBackdrop),
-    [isDark, colors.mapBackdrop],
+    () => buildHtml(isDark, colors.mapBackdrop, tileNotice),
+    [isDark, colors.mapBackdrop, tileNotice],
   );
   useEffect(() => { readyRef.current = false; }, [html]);
 
