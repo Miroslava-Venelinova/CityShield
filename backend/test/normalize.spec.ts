@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import type { NamedRow } from "../src/db/queries";
 import type { ProcessedData } from "../src/shared/schemas";
 import {
-  applyCityWideGuard, isPlaceless, normalizeParse, type ReferenceRows, stripAddressDetail,
+  applyCityWideGuard, foldMixedScript, isPlaceless, normalizeParse, type ReferenceRows, stripAddressDetail,
 } from "../src/ingestion/normalize";
 
 let nextId = 0;
@@ -63,19 +63,36 @@ const run = (
 const shape = (out: ProcessedData) =>
   out.locations.map((l) => [l.settlement, l.area, l.streets, l.is_polygon] as const);
 
+// ── A16 ──────────────────────────────────────────────────────────────────────
+
+// 00ebf72c / 30454d00 — "ж.к \"Mладост\"" with a Latin M lost the district.
+describe("A16 · mixed-script words", () => {
+  it("folds Latin look-alikes inside a Cyrillic word", () => {
+    expect(foldMixedScript('ж.к "Mладост", блок 144')).toBe('ж.к "Младост", блок 144');
+    expect(foldMixedScript("м-т Tраката, бул. Владислaв")).toBe("м-т Траката, бул. Владислав");
+  });
+
+  it("leaves words written in one script alone", () => {
+    const text = "бензиностанция OMV – Чайка, ТП 726, 9:00 ч.";
+    expect(foldMixedScript(text)).toBe(text);
+  });
+});
+
 // ── A1 ───────────────────────────────────────────────────────────────────────
 
 describe("A1 · placeless names", () => {
   it.each([
     "м-т", "местност", "м.", "кв.", "квартал", "карето", "зона", "улица",
     "м-н Бурлекс", "ТП 726", "Строител ООД", "  ",
+    // 19118ffa / 7a3ef63e — the трафопост variants, parsed as streets.
+    "МТП Гробище Провадия", "МТТ Айкъна", "КТП 12", "БКТП Изгрев",
   ])("treats %s as no place at all", (name) => {
     expect(isPlaceless(name)).toBe(true);
   });
 
   it.each([
     "кв. Аспарухово", "с. Баново", "Вилна зона", "м-т Фичоза", "ул. Пловдив",
-    "Западна промишлена зона", "Бурлекс",
+    "Западна промишлена зона", "Бурлекс", "ул. Тполи", "Мтанка",
   ])("keeps %s", (name) => {
     expect(isPlaceless(name)).toBe(false);
   });
@@ -439,6 +456,13 @@ describe("A6 · hedged street lists target the region", () => {
     "Прекъсване в близост до ул. Пловдив и ул. Драва",
     "Ремонт на ул. Пловдив и прилежащите улици",
     "Ремонт на ул. Пловдив и околните улици",
+    // 75805863, 19fdd591 — hedges without the word район.
+    "абонатите на бл.17 и живущите около ул. Пловдив и ул. Драва",
+    "част от кв. Аспарухово -около ул \"Пловдив\" и ул. Драва",
+    "Ремонт на ул. Пловдив, ул. Драва и съседни на тях улици",
+    "Без вода в р-а на ул. Пловдив и ул. Драва",
+    "Без вода в районна на ул. Пловдив и ул. Драва",
+    "Ремонт на ул. Пловдив, ул. Драва и улиците около тях",
   ])("marks the location region-wide for %s", (message) => {
     const out = run([inArea("кв. Аспарухово", ["ул. Пловдив", "ул. Драва"])], message);
     expect(wide(out)).toEqual([true]);
@@ -452,6 +476,12 @@ describe("A6 · hedged street lists target the region", () => {
 
   // A1 already drops the bare noun; the cue must not fire on it either, or every
   // message containing the word "район" would widen.
+  it("does not read vik's 'до около 17 ч.' end time as a hedge", () => {
+    const out = run([inArea("кв. Аспарухово", ["ул. Пловдив"])],
+      "От 10.00 до около 17.00 ч. без вода ще бъдат абонатите на ул. Пловдив");
+    expect(wide(out)).toEqual([false]);
+  });
+
   it("does not fire on the standalone noun 'района'", () => {
     const out = run([inArea("кв. Аспарухово", ["ул. Пловдив"])],
       "Без вода ще бъде района: ул. Пловдив");
@@ -798,6 +828,37 @@ describe("heating messages carry the city", () => {
 // region and the stored `area` was null — the extractor dropped the name, so
 // the matcher never saw it. §5.1 ("a bare city is not an audience") is correct
 // and stays; this runs only on the shape that rule is about to send to nobody.
+
+// 45f9e59d, d249d7e6, dc952097 — the settlement was dropped and the location
+// scoped to Varna by default, so Varna's like-named place was notified.
+describe("A17 · a dropped settlement restored from the text", () => {
+  const settlementOf = (out: ProcessedData) => out.locations.map((l) => l.settlement);
+
+  it.each([
+    ["гр. Игнатиево - Промишлена зона, от 9 до 16 ч.", inArea("Промишлена зона")],
+    ["гр.Игнатиево Промишлена зона", inArea("Промишлена зона")],
+    ["гр. Игнатиево: ул. \"Пловдив\" и ул. Драва", inArea(null, ["ул. Пловдив", "ул. Драва"])],
+  ])("restores it for %s", (message, loc) => {
+    expect(settlementOf(run([loc], message, false, "epro"))).toEqual(["гр. Игнатиево"]);
+  });
+
+  it("leaves a district named before the village alone", () => {
+    const out = run([inArea("кв. Аспарухово")], "абонатите на кв. Аспарухово и с. Игнатиево");
+    expect(settlementOf(out)[0]).toBeNull();
+  });
+
+  it("leaves a comma-separated list to A9", () => {
+    const out = run([inArea("кв. Виница")], "с. Игнатиево, кв. Виница");
+    expect(settlementOf(out)[0]).toBeNull();
+  });
+
+  it.each([
+    "с. Игнатиево и с. Баново - Промишлена зона",
+    "гр. Варна и гр. Игнатиево - Промишлена зона",
+  ])("does nothing when the message names more than one settlement: %s", (message) => {
+    expect(settlementOf(run([inArea("Промишлена зона")], message))[0]).toBeNull();
+  });
+});
 
 describe("A15 · lost district rescue", () => {
   // Zones that are seeded regions of Варна, as they are in seeds/regions.json.

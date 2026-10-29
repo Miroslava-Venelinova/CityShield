@@ -132,6 +132,9 @@ function normalizeClock(value: unknown): string | null {
   const hm = HM_RE.exec(v);
   if (!hm) return null;
   const h = Number(hm[1]), mi = Number(hm[2]);
+  // "до около 24 часа" (3edc967c) is the end of the day, not a malformed clock;
+  // rejecting it dropped the end time. 23:59 keeps the window on its own date.
+  if (h === 24 && mi === 0) return "23:59";
   if (!(h >= 0 && h <= 23 && mi >= 0 && mi <= 59)) return null;
   return `${p2(h)}:${p2(mi)}`;
 }

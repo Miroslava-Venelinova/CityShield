@@ -196,7 +196,9 @@ how a village street's outage notified the like-named Varna street.
 ### A settlement scope is a preference, not a filter
 `matchRegion` retries without the scope when the scoped match finds nothing,
 because most regions still have no parent link. A scope can move a match to
-a better row but can never remove one. **Ref:** §1.3.
+a better row but can never remove one — except in targeting outside the city,
+where a retry that escapes into another settlement is discarded for the stated
+village or town (29.10.2026). **Ref:** §1.3.
 
 ### No invented coordinates
 Names that neither OSM nor Nominatim holds are not seeded with guessed
@@ -247,6 +249,24 @@ starts at 16.5 km. A user is dropped only when their position is known
 A settlement with seeded districts reaches every user under the settlement
 or any of its districts, plus users with a position but no region within
 9 km. A village keeps the plain `region_id = ?` query. **Ref:** §1.5.
+
+### A hedge widens to the village, an exact street does not
+
+Decided by the owner on 29.10.2026. "… на ул. X" / "улиците: X, Y" notifies only
+the people on those streets (plus street-less residents of the place, who cannot
+be ruled out). "в района на улиците X, Y" (guard A6) notifies the whole named
+district, or with no district the whole village or town. The bare city is the
+exception: a hedged street list under Варна stays street-only, because the only
+thing to widen to would be every district in the city (spec §1.5, §1.7).
+
+### Alerts carry the source text word for word
+
+Decided by the owner on 29.10.2026: the push and the in-app alert publish the
+source's title and text verbatim, with the operator named and a link back,
+rather than a summary built from the extracted fields. The legal position this
+takes is in [legal.md](legal.md) §3.2; it rests on asking each operator for
+permission ([todo.md](todo.md) §8.3), and the fallback if one says no is still
+open ([open-questions.md](open-questions.md)).
 
 ### Only a hedged alert is ever suppressed as a duplicate
 It is suppressed only against an alert **already delivered**. A confirmed

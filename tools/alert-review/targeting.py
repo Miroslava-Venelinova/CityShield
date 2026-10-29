@@ -498,6 +498,11 @@ def _users_by_region(tables, region_id):
 SETTLEMENT_REACH_KM = 9
 
 
+def _is_city(region) -> bool:
+    """isCity: the one settlement that owns the city-wide path (§5.1)."""
+    return parse_name(region.name)[1].strip().lower() == DEFAULT_SETTLEMENT.lower()
+
+
 def _users_by_region_wide(tables, region):
     """
     getUserIdsByRegionWide: a region that holds districts is a SETTLEMENT, and
@@ -517,7 +522,7 @@ def _users_by_region_wide(tables, region):
     district that got lost. Widening that to ~90 districts would be a city-sized
     push decided by an extraction we already know failed.
     """
-    if parse_name(region.name)[1].strip().lower() == DEFAULT_SETTLEMENT.lower():
+    if _is_city(region):
         return [], -1
 
     districts = [r for r in tables.regions
@@ -702,12 +707,25 @@ def target_location(location, tables, index):
     # resolved, mirroring the Worker's `settlement?.id` being `undefined`.
     region = match_region(area or settlement_name or "", tables,
                           in_settlement=settlement.id if settlement else _UNSET)
+
+    # Outside the city a match that escaped into another settlement, or no match
+    # at all for a named area, falls back to the settlement itself (29.10.2026).
+    if settlement is not None and not _is_city(settlement):
+        if (region is not None and region.id != settlement.id
+                and region.settlement_id is not None and region.settlement_id != settlement.id):
+            result["note"] = (f"\"{area or settlement_name}\" matched {region.name} in another "
+                              f"settlement; fell back to {settlement.name}")
+            region = settlement
+        elif region is None and area is not None:
+            result["note"] = (f"\"{area}\" matches no seeded area of {settlement.name}; "
+                              f"widened to the settlement")
+            region = settlement
     result["region"] = region.name if region else None
 
     # "в района на ул. X" (A6) names streets to say where the outage is, not who
-    # is in it — but only when an area resolved, or a bare city plus streets
-    # would widen to the whole settlement.
-    area_only = region_wide and area is not None and region is not None
+    # is in it: widen to the named district, or under a bare village or town to
+    # the whole settlement (owner's rule, 29.10.2026) — never to the bare city.
+    area_only = region_wide and region is not None and (area is not None or not _is_city(region))
     if region_wide:
         result["region_wide"] = True
 

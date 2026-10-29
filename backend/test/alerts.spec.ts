@@ -533,10 +533,87 @@ describe("targeting decision tree", () => {
       expect(body.user_ids).not.toContain(inCity);
     });
 
-    // A6 widens to a named area, not to the whole settlement. "в района на
-    // ул. X" under a bare city is still about those streets; widening it to
-    // every Varna user is a claim the message never made.
-    it("does not widen a hedged street list to the whole settlement", async () => {
+    // Owner's rule, 29.10.2026: "в района на улиците X, Y" under a village is
+    // about the village, so the hedge widens to all of it. Without the hedge
+    // the test above holds — only the street (and the street-less villagers).
+    it("widens a hedged street list under a village to the whole village", async () => {
+      await env.DB.prepare(
+        "INSERT INTO regions (region_name, lat, lng) VALUES ('Тополи', 43.2416, 27.8236)").run();
+      await env.DB.prepare(
+        `INSERT INTO streets (street_name, region_id, lat, lng)
+         SELECT name, id, 43.1976, 27.8170 FROM regions, (SELECT 'Бреза' AS name UNION ALL SELECT 'Липа')
+         WHERE region_name = 'Тополи'`).run();
+      clearRefCaches();
+
+      const onStreet = await createUser({ region: "Тополи", street: "Бреза", streetIn: "Тополи" });
+      const otherStreet = await createUser({ region: "Тополи", street: "Липа", streetIn: "Тополи" });
+      const streetless = await createUser({ region: "Тополи" });
+      const inCity = await createUser({ region: "Варна", street: "Дубровник" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "с. Тополи", area: null, streets: ["ул. Бреза"],
+            is_polygon: false, region_wide: true,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([onStreet, otherStreet, streetless]));
+      expect(body.user_ids).not.toContain(inCity);
+    });
+
+    // 29.10.2026 review: a scoped miss outside the city used to retry unscoped
+    // and land in Varna — Бяла's "Гръцката махала" notified Varna's (0c90f865).
+    it("never lets an area outside the city resolve into another settlement", async () => {
+      await env.DB.prepare(
+        "INSERT INTO regions (region_name, lat, lng) VALUES ('Бяла', 42.8742, 27.8873)").run();
+      await env.DB.prepare(
+        `INSERT INTO regions (region_name, lat, lng, settlement_id)
+         SELECT 'Гръцката махала', 43.2050, 27.9120, id FROM regions WHERE region_name = 'Варна'`).run();
+      clearRefCaches();
+
+      const inBiala = await createUser({ region: "Бяла" });
+      const inVarnaDistrict = await createUser({ region: "Гръцката махала" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "гр. Бяла", area: "Гръцката махала", streets: [], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([inBiala]));
+      expect(body.user_ids).not.toContain(inVarnaDistrict);
+    });
+
+    // "централната част на селото" (26687dfa) has no row and never will; the
+    // outage is still in the village.
+    it("widens an unmatched area under a village to the village", async () => {
+      await env.DB.prepare(
+        "INSERT INTO regions (region_name, lat, lng) VALUES ('Осеново', 43.2869, 27.6800)").run();
+      clearRefCaches();
+
+      const villager = await createUser({ region: "Осеново" });
+      const inCity = await createUser({ region: "Аспарухово" });
+
+      const res = await submit(basePayload({
+        processed_data: {
+          locations: [{
+            settlement: "с. Осеново", area: "централната част на селото", streets: [], is_polygon: false,
+          }],
+        },
+      }));
+      const body = await res.json() as SubmitResponse;
+      expect(new Set(body.user_ids)).toEqual(new Set([villager]));
+      expect(body.user_ids).not.toContain(inCity);
+    });
+
+    // A6 widens to a named area, not to the whole city. "в района на ул. X"
+    // under a bare Варна is still about those streets; widening it to every
+    // Varna user is a claim the message never made.
+    it("does not widen a hedged street list to the whole city", async () => {
       const onNamedStreet = await createUser({ region: "Аспарухово", street: "Дубровник" });
       const otherStreet = await createUser({ region: "Аспарухово", street: "Розова долина" });
 

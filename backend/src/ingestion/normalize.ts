@@ -62,6 +62,9 @@
 //   A14 streets can name where the REMEDY is: "разположена водоноска на
 //       кръстовището между ул. Юпитер и ул. Сатурн" is a water truck parked at a
 //       junction, not an outage on those two streets.
+//   A16 "ж.к Mладост" with a Latin M is a typo the eye cannot see, and every
+//       trigram holding it misses the seed: the district was lost twice in
+//       09.2026. Fold Latin look-alikes inside Cyrillic words before parsing.
 //
 // A10 and A12–A14 all read the *position* of a name inside the source text
 // rather than merely its presence, which is what keeps them off the shapes they
@@ -79,6 +82,28 @@ type Location = ProcessedData["locations"][number];
 export interface ReferenceRows {
   regions: readonly NamedRow[];
   streets: readonly NamedRow[];
+}
+
+// ── A16 · mixed-script words ─────────────────────────────────────────────────
+
+// Latin letters drawn identically to a Cyrillic one. Only these are folded: a
+// Latin letter with no Cyrillic twin is not a typo anyone could have made.
+const LATIN_TO_CYRILLIC: Readonly<Record<string, string>> = {
+  A: "А", B: "В", C: "С", E: "Е", H: "Н", K: "К", M: "М", O: "О", P: "Р", T: "Т",
+  X: "Х", Y: "У", a: "а", c: "с", e: "е", o: "о", p: "р", x: "х", y: "у",
+};
+const MIXED_WORD = /[\p{L}]*(?:\p{Script=Latin}\p{Script=Cyrillic}|\p{Script=Cyrillic}\p{Script=Latin})[\p{L}]*/gu;
+
+/**
+ * The message with every word that mixes Latin and Cyrillic letters folded to
+ * Cyrillic — `Mладост` → `Младост`, `Tраката` → `Траката`. A word in one script
+ * is left alone, so "OMV" and "ТП 726" are unchanged. Applied to the text the
+ * model and the guards read, never to the stored content, which is published
+ * word for word.
+ */
+export function foldMixedScript(message: string): string {
+  return message.replace(MIXED_WORD,
+    (word) => word.replace(/[A-Za-z]/g, (ch) => LATIN_TO_CYRILLIC[ch] ?? ch));
 }
 
 // ── A1 · placeless names ─────────────────────────────────────────────────────
@@ -99,8 +124,11 @@ const GENERIC_NAMES = new Set([
 ]);
 
 // Kinds that name a business or a piece of infrastructure rather than a place:
-// "м-н Бурлекс" (магазин), "ТП 726" (трафопост), a company name.
-const NON_PLACE_PREFIX = /^(?:м\s*-\s*н|магазин|фирма|тп|бкти|кту|подстанция)(?![\p{L}])/iu;
+// "м-н Бурлекс" (магазин), "ТП 726" (трафопост), a company name. The трафопост
+// family has variants — МТП/МТТ (мачтов), КТП/БКТП (комплектен): "МТП Гробище
+// Провадия" (19118ffa) was parsed as a street and resolved to nothing in Варна.
+const NON_PLACE_PREFIX =
+  /^(?:м\s*-\s*н|магазин|фирма|(?:м|к|бк)?тп|мтт|бкти|кту|подстанция)(?![\p{L}])/iu;
 const COMPANY_SUFFIX = /(?:^|\s)(?:оод|еоод|ад|еад|ет)\s*\.?$/iu;
 
 /**
@@ -274,8 +302,12 @@ const CITY_WIDE_PHRASES = [
  * by a required "на"/"около", which is what keeps it off the standalone noun
  * A1 already drops.
  */
+// "около ул. X", "живущите около", "съседни на тях улици", "улиците около тях"
+// and the shorthand "в р-а на" hedge the same way (75805863, 19fdd591, f4af32b8);
+// "в районна на" is a typo the sources really publish. A bare "около" must be followed
+// by a street kind, because "до около 17 ч." is how vik states its end time.
 const AREA_CUE =
-  /район[аъ]?\s+(?:на|около)|прилежащ|в\s+близост\s+до|(?:околн|съседн)ите\s+улици/iu;
+  /район(?:[аъ]|на)?\s+(?:на|около|от)|(?<![\p{L}])р-а\s+на|улиците\s+около|прилежащ|в\s+близост\s+до|(?:околн|съседн)\p{L}*\s+(?:на\s+тях\s+)?улиц|живущ\p{L}*\s+около|около\s+(?:ул|бул|бл|блок)(?![\p{L}])/iu;
 
 // ── A12 · a second block in the same message ─────────────────────────────────
 
@@ -682,6 +714,7 @@ export function normalizeParse(
   // sources publish one outage per message, so a hedge in it is about all of it.
   const areaCue = hasAreaCue(message);
   const src = readSource(message);
+  const stated = soleStatedSettlement(message, refs);
   const locations: Location[] = [];
 
   for (const original of output.locations) {
@@ -730,6 +763,17 @@ export function normalizeParse(
 
     // A9, before anything reads the two slots together.
     location.settlement = coherentSettlement(location, refs);
+
+    // A17, after A9: the settlement comes from the text's own "гр. X – …" form,
+    // which is stronger evidence than A9's guess from where a name is seeded.
+    if (location.settlement === null && stated !== null) {
+      const restored = restoreStatedSettlement(location, stated, message, src);
+      if (restored !== null) {
+        console.warn(`[normalize] A17 restored settlement "${restored}" — the message `
+          + `introduces this location with it and names no other settlement.`);
+        location.settlement = restored;
+      }
+    }
 
     // Веолия runs exactly one district-heating network and it is the city's, so
     // a heating message is about Варна by construction. A category constant, not
@@ -836,6 +880,73 @@ export function normalizeParse(
   // — A4 splits one entry into siblings that repeat the settlement, A10 can null
   // an `area` and leave two entries identical, A12 splits one polygon into two.
   return applyCityWideGuard({ ...output, locations: mergeDuplicates(locations) }, message);
+}
+
+// ── A17 · restore a settlement the extractor dropped ─────────────────────────
+
+/** "гр. Девня", "с.Тополи", "село Долище" — a settlement named with its kind. */
+const SETTLEMENT_MENTION = /(?<![\p{L}])(гр\.|с\.|град|село)\s*([\p{Lu}][\p{L}]*(?:\s+[\p{L}]+)?)/gu;
+
+/** Between the settlement and the place it introduces: a dash, a colon, a kind. */
+const INTRODUCES =
+  /^[\s\-–—:]*(?:(?:ул|бул|кв|ж\s*\.?\s*к|м-т|м-ст|м|с\.о|вз)\s*\.?\s*)?["'„“”]?$/iu;
+
+interface StatedSettlement {
+  written: string;
+  /** Offset just past the mention in the message. */
+  end: number;
+}
+
+/**
+ * The one seeded settlement other than the city that the message names with its
+ * kind, or null — when it names none, several, or the city itself.
+ */
+function soleStatedSettlement(message: string, refs: ReferenceRows): StatedSettlement | null {
+  const seeded = new Set<string>();
+  for (const r of refs.regions) {
+    const { kind, core } = parseName(r.name);
+    if (kind === null) seeded.add(core.toLowerCase());
+  }
+
+  const found = new Map<string, StatedSettlement>();
+  for (const m of message.matchAll(SETTLEMENT_MENTION)) {
+    const words = m[2]!.split(/\s+/);
+    // Two words first ("Вълчи дол", "Долни чифлик"), then the first alone.
+    for (const name of [words.join(" "), words[0]!]) {
+      if (!seeded.has(name.toLowerCase())) continue;
+      if (isBareCity(name)) return null;
+      const kind = m[1]!.toLowerCase().startsWith("с") ? "с." : "гр.";
+      const start = m.index! + m[0].length - m[2]!.length;
+      if (!found.has(name.toLowerCase())) {
+        found.set(name.toLowerCase(), { written: `${kind} ${name}`, end: start + name.length });
+      }
+      break;
+    }
+  }
+  return found.size === 1 ? [...found.values()][0]! : null;
+}
+
+/**
+ * A location the model left without a settlement, in a message that introduces
+ * it as "гр. X – <area>" (or "гр. X <area>", "гр. X: ул. …"): the settlement is X.
+ *
+ * Without it the location scopes to Varna by default, and the 29.10.2026 review
+ * found that behind 19 wrong matches — "гр. Вълчи дол – Промишлена зона" became
+ * Varna's Южна промишлена зона, Бяла's Гръцката махала became Varna's. Narrow on
+ * purpose, like A15: only when the message names exactly one settlement and never
+ * the city, and only when nothing but a dash, a colon or a kind abbreviation
+ * stands between the settlement and this location's first name — so "кв. Галата
+ * и с. Тополи" cannot pull Галата out of Varna, and "с. Аврен, кв. Виница" (a
+ * list, A9's case) is left to A9.
+ */
+function restoreStatedSettlement(
+  location: Location, stated: StatedSettlement, message: string, src: SourceText,
+): string | null {
+  const anchor = location.area ?? location.streets[0] ?? null;
+  if (anchor === null) return null;
+  const at = firstIndex(anchor, src, stated.end);
+  if (at < 0) return null;
+  return INTRODUCES.test(message.slice(stated.end, at)) ? stated.written : null;
 }
 
 // ── A15 · rescue a district the extractor dropped ────────────────────────────

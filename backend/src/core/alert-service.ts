@@ -169,9 +169,8 @@ async function getUserIdsInRange(
   // The audience is the most specific place named. That is what the flat schema
   // put in location_name, so splitting the slots left this resolution identical
   // apart from the scope.
-  const region = matchRegion(
+  let region = matchRegion(
     area ?? settlementName ?? "", regions, undefined, settlement?.id);
-  trace.region = region?.name ?? null;
 
   // `matchRegion` treats its scope as a preference and retries unscoped when the
   // scope matches nothing — it has to, because 171 of 260 seeded regions carry no
@@ -191,23 +190,44 @@ async function getUserIdsInRange(
     && region.id !== settlement.id
     && region.settlement_id !== null && region.settlement_id !== undefined
     && region.settlement_id !== settlement.id) {
-    const parent = regions.find((r) => r.id === region.settlement_id);
+    const parentId = region.settlement_id;
+    const parent = regions.find((r) => r.id === parentId);
     console.warn(
       `[targeting] "${area ?? settlementName}" resolved to "${region.name}" in `
-      + `${parent?.name ?? `settlement ${region.settlement_id}`}, outside the stated `
-      + `settlement ${settlement.name} — scoped match found nothing and the unscoped retry won.`);
+      + `${parent?.name ?? `settlement ${parentId}`}, outside the stated `
+      + `settlement ${settlement.name} — scoped match found nothing and the unscoped retry won.`
+      + (isCity(settlement) ? "" : ` Falling back to ${settlement.name} itself.`));
+    // Outside the city the retry's answer is never wanted: the 29.10.2026 review
+    // found it behind most of its wrong matches — "промишлена зона" in Девня,
+    // Провадия or Аксаково became Varna's Южна промишлена зона, Бяла's
+    // Гръцката махала became Varna's. The place the message named is the
+    // settlement, so that is the audience. The city keeps the retry: there the
+    // scope is often the default rather than something the message said, and a
+    // district of another settlement written without its town is what it finds.
+    if (!isCity(settlement)) region = settlement;
   }
+
+  // An area we hold no row for, inside a village or town we do ("централната
+  // част на селото", an unseeded кв. or вилна зона): the outage is in that
+  // settlement, so it is the audience rather than nobody (26687dfa, 56327146).
+  // Not the city — there a lost area stays a lost district (§5.1).
+  if (region === null && area !== null && settlement !== null && !isCity(settlement)) {
+    region = settlement;
+    trace.note = `"${area}" matches no seeded area of ${settlement.name}; widened to the settlement`;
+  }
+  trace.region = region?.name ?? null;
 
   // "в района на ул. X, ул. Y" (A6) names streets to say where the outage is,
   // not who is in it: a resident one street over is affected just as much, and
-  // the message never says how far it reaches. Target the whole region instead.
+  // the message never says how far it reaches. Target the whole region instead —
+  // the named district, or under a bare village or town the whole settlement
+  // (owner's rule, 29.10.2026: "в района на улиците" notifies the village,
+  // "на улица X" only that street).
   //
-  // Only when an AREA resolved, though. Vik routinely names streets under a bare
-  // city, and widening those to the entire settlement is not what the hedge
-  // claimed — before the split the city simply failed to resolve and the streets
-  // were kept, which is the behaviour worth preserving now that a settlement is
-  // present on every entry.
-  const areaOnly = region_wide && area !== null && region !== null;
+  // Never the city, though. Vik routinely names streets under a bare Варна, and
+  // widening those to ~90 districts is not what the hedge claimed — there is no
+  // street→district link to widen through, so the streets stay the audience.
+  const areaOnly = region_wide && region !== null && (area !== null || !isCity(region));
 
   // Streets resolve independently of the *region*: scraped alerts often name
   // only a street, so an unmatched region must not discard an otherwise
@@ -322,6 +342,11 @@ const SETTLEMENT_REACH_KM = 9;
  * people: the region set reaches everyone we placed, and the radius reaches the
  * residue we could not place but can still measure.
  */
+/** The city row — the one settlement that owns the city-wide path (§5.1). */
+function isCity(region: q.NamedRow): boolean {
+  return parseName(region.name).core.toLowerCase() === DEFAULT_SETTLEMENT.toLowerCase();
+}
+
 async function getUserIdsByRegionWide(
   env: Env, region: q.NamedRow, regions: readonly q.NamedRow[], trace: TargetTrace,
 ): Promise<string[]> {
@@ -343,7 +368,7 @@ async function getUserIdsByRegionWide(
   // and it is now loud (F1) instead of silent, which is the difference that
   // matters. Villages and towns are unaffected; only the settlement that owns
   // the city-wide path is excluded from being an audience by name alone.
-  if (parseName(region.name).core.toLowerCase() === DEFAULT_SETTLEMENT.toLowerCase()) {
+  if (isCity(region)) {
     trace.method = "none";
     trace.note = (trace.note ? trace.note + " → " : "")
       + `${region.name} alone is not an audience: a whole-city outage is published as `

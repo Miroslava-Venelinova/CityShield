@@ -413,6 +413,17 @@ still carry no parent link and a hard filter would make those unreachable
 whenever a settlement happened to be named. Scoping can therefore only move a
 match onto a better row, never take one away.
 
+**Targeting overrides the retry outside the city (29.10.2026).** When the
+location's settlement is a village or town and the retry lands on a row linked
+to *another* settlement, `getUserIdsInRange` discards it and targets the
+settlement itself; when the area matches nothing at all, it does the same. The
+review of 29.10.2026 found the retry behind most of its wrong matches — "гр.
+Девня – Промишлена зона" became Varna's Южна промишлена зона, Бяла's Гръцката
+махала became Varna's — and an unmatched "централната част на селото" notified
+nobody. Under the city the retry stays, because there the scope is usually the
+default rather than something the message said, and a lost area under Варна
+stays a lost district (§5.1).
+
 Three callers pass it: targeting resolves the settlement first and looks the area
 up inside it; `resolveCoordinates` does the same so the pin is the right district;
 and normalize's A9 must, or it would judge "гр. Белослав + Цветен квартал" —
@@ -679,7 +690,8 @@ Enrichment never throws: an alert without coordinates is still worth storing.
    region resolved the query is `street_id IN (…)` over the whole table, which is
    how an outage on a village street used to notify the like-named Varna one.
    All matched streets resolve in one query. No usable street → region-wide;
-   unknown region too → nobody.
+   unknown region too → nobody — except under a village or town, where an
+   unknown or foreign area falls back to the settlement itself (§1.3).
    The street list is paired with the region id **only when the region is not the
    settlement itself**. Pairing does two things at once — it narrows a boulevard
    that runs through several districts to the one named, and it carries that
@@ -695,10 +707,11 @@ Enrichment never throws: an alert without coordinates is still worth storing.
    register under, so AND-ing it was harmless, and dropping it would silently
    stop notifying a street-less villager about their own village's outage.
    A location marked `region_wide` (guard A6, §1.7) skips the street branch
-   entirely — but only if an **area** resolved. Widening to a named district is
-   the intent; widening to the whole settlement because the message said "в
-   района на" is not, and before the split the bare city simply failed to resolve
-   and the streets were kept.
+   entirely and widens to the named **area**, or — with no area — to the whole
+   **village or town** (owner's rule, 29.10.2026: "в района на улиците X, Y"
+   notifies the village, "на ул. X" only that street). **Never to the bare city**:
+   a hedged street list under Варна keeps street targeting, because there is no
+   street→district link to widen through and the alternative is ~90 districts.
    **When no street survives and the region IS a settlement that holds seeded
    districts, the audience is every user under any of them**, plus anyone with a
    position and no region at all inside `SETTLEMENT_REACH_KM` (9 km) of its
@@ -938,12 +951,12 @@ in production output:
 
 | | Rule | What it fixes |
 |---|---|---|
-| A1 | A bare kind (`м-т`, `местност`), a generic noun (`карето`, `зона`) or a shop/company/substation (`м-н …`, `… ООД`, `ТП 726`) is not a place — drop it before enrichment | The matcher always answers with *something*: `м-т` scored 0.364 on `м-т Фичоза` and pinned five villages' outage 40 km away |
+| A1 | A bare kind (`м-т`, `местност`), a generic noun (`карето`, `зона`) or a shop/company/substation (`м-н …`, `… ООД`, `ТП 726`, and since 29.10.2026 `МТП`/`МТТ`/`КТП`/`БКТП`) is not a place — drop it before enrichment | The matcher always answers with *something*: `м-т` scored 0.364 on `м-т Фичоза` and pinned five villages' outage 40 km away |
 | A2 | A polygon cue in the message (`карето`, `затворени`, `между`) plus ≥3 streets forces `is_polygon`, whatever the model said. A polygon entry is kept only while it still has streets | The pin fell back to the first street's centroid, 1.4 km off. The keep-test is the street list alone because the settlement now survives A1: a junk polygon with nothing to build from would otherwise be demoted to a region-wide push to the whole city |
 | A3 | A lone `Варна` only becomes `city_wide` when the message *says* city-wide (`всички абонати`, `цялата Варна`, …). The name tested is `area ?? settlement` | The guard fired on the same shape a **dropped district** produces, and `city_wide` fans out via `getAllUserIds` — five extraction failures were broadcast to every user. Testing `settlement` alone would now fire on every correctly parsed Varna district, since the prompt used to *suppress* the city and no longer does |
 | A4 | An entry in `streets` carrying a region kind, ending in `зона`, or (under a bare settlement with an empty `area`) matching a region row, is lifted out: into the `area` slot when exactly one was lifted and it *precedes* every street, otherwise into its own entry repeating the settlement | The flat `(location_name, sublocations)` schema had no slot for `гр. X - кв. Y`, so the district landed in the street array and targeted nobody. Absorbed the old A7: that rule existed only because a lifted district had to become a *new* location, and the ordering test survives as the fill-vs-sibling decision — `гр. Варна - част от: ул. Пловдив и м-т Фичоза` is a flat list, and giving the locality that street narrows it to the one street |
 | A5 | Trailing house/block/entrance detail is stripped from `ул.`/`бул.` names (`ул. Пловдив 25` → `ул. Пловдив`), never when the strip would empty the core (`ул.7` is a truncated ordinal) | House numbers dragged the street match around |
-| A6 | An area cue in the message (`в района на`, `района около`, `прилежащите улици`, `в близост до`, `околните/съседните улици`) plus ≥1 street sets `region_wide` on the location | The streets in a hedged message say *where* the outage is, not who is in it — targeting only those exact streets asserted a precision the source never gave, and missed the resident one street over |
+| A6 | An area cue in the message (`в района на`, `района около`, `прилежащите улици`, `в близост до`, `околните/съседните (на тях) улици`, and since 29.10.2026 `живущите около`, `около ул./бул./бл.`) plus ≥1 street sets `region_wide` on the location | The streets in a hedged message say *where* the outage is, not who is in it — targeting only those exact streets asserted a precision the source never gave, and missed the resident one street over |
 | A8 | A `city_wide: true` with no locations is demoted to `false` unless the message says city-wide in words — the same phrases A3 promotes on | A3 only ever promoted *into* city-wide, so a `city_wide` the model invented outright reached `sendUsersNotification` unchecked, and an empty location list there is answered with a broadcast. The widest action in the system had no deterministic guard at all |
 | A9 | When `settlement` and `area` both resolve to rows with coordinates and measure more than 20 km apart, the **settlement** is dropped | `с. Аврен` + `кв. Виница` is incoherent and silent: targeting follows the area, street scope follows the settlement, so the alert reaches one settlement while its streets are looked up in another. `regions` carries no parent link to check containment with, so the coordinates decide; dropping the settlement lands back on `settlementOf`'s Варна default, which is the pre-split behaviour rather than a new guess |
 | A10 | Every slot and street whose core does not appear in the source text is dropped. Lenient — one word of the core, matched at trigram ≥ 0.6 against one word of the message | Every guard above reasons about names the model *produced*; none asked whether the message says them. `40b78a66`'s entire source is one district (`ж.к Трошево`); the stored parse held six locations including a village 23 km away, and nothing deterministic could tell. Omission has no deterministic fix — **invention does**. Deliberately the weakest form of the test, because this guard DELETES data and a false positive is a silenced alert |
@@ -952,15 +965,17 @@ in production output:
 | A13 | An entry named inside an explicit `улиците:` list is never promoted by A4 | epro writes `гр. X – улиците: A, B, C`, and A4 lifted list entries into locations of their own: `5b048900` pinned `Георги Бенковски` on с. Бенковски 30 km from Суворово, and `0d59345b` made `Васил Левски` the *area* of a Вълчи дол alert, which then resolved to Varna's street of that name. The marker had already answered the question A4 was guessing at |
 | A14 | Streets named **only after** a remedy cue (`водоноска`, `кръстовището между`) are dropped; the location itself stays | `675df786`: "разположена водоноска на кръстовището между ул. Юпитер и ул. Сатурн" is a water truck parked at a junction — the streets locate the fix, not the outage. Positional, so a message naming the outage's own streets *before* the remedy keeps them. Runs **before A2**, because `POLYGON_CUE` contains `между` and a third street would otherwise turn the parking spot into a block |
 | A15 | A location that resolved to the bare city with **no area and no streets** — the shape §5.1 sends to nobody — has the source text re-scanned for a seeded district of that settlement, and adopts it when exactly ONE is named literally | Four alerts reached nobody, all industrial zones, and `Южна промишлена зона` is a byte-exact match for a seeded region with `area` stored as null: the extractor dropped it and the matcher never saw it. Runs only on the shape already guaranteed to reach nobody, so it cannot widen an audience — only recover one. Literal match, not `mentions`: the trigram test is safe for a guard that DELETES and would fabricate an area here. One candidate only; two named districts means ownership is unknowable, as in A4 |
+| A16 | Every word mixing Latin and Cyrillic letters has its Latin look-alikes folded to Cyrillic, in the copy of the message the model and the guards read — the stored and pushed text stays verbatim | `ж.к "Mладост"` with a Latin M (`00ebf72c`, `30454d00`) lost the district: no trigram holding the Latin letter matches the seed, and A10/A15 compare against the same unreadable text |
+| A17 | A location left with no settlement (after A9) gets the one settlement the message names with its kind (`гр. X`, `с. X`) — only when the message names exactly one, never the city, and only when nothing but a dash, a colon or a kind abbreviation stands between that settlement and the location's first name | 19 wrong matches in the 29.10.2026 review: the model dropped `гр. Девня`/`гр. Бяла`/`гр. Вълчи дол` from epro's and ViK's `гр. X – …` form, the location scoped to Varna by default, and Varna's like-named place was notified (`dc952097`, `d249d7e6`, `45f9e59d`). Runs after A9 because A9 cannot tell Бяла's Гръцката махала from Varna's — the text's form can. The adjacency test keeps it off lists: `с. Аврен, кв. Виница` is still A9's |
 
 **A6 changes targeting only.** The street list stays on the location, so the feed,
 the pin and the review tool still show the most specific thing the message said;
 what widens is `getUserIdsInRange`, which takes the region branch instead of the
-street branch. It is deliberately conditional on an **area** having resolved: vik
-routinely names streets under a bare city and no district at all, and there is no
-street→area link in the schema to recover one, so with nothing to widen to the
-named streets remain a better audience than nobody — and widening them to every
-user in the settlement is a claim the hedge never made. A2 wins over A6 — a
+street branch. It widens to the resolved **area**, or with none to the
+**settlement** when that is a village or town (owner's rule, 29.10.2026) — never
+to the bare city: vik routinely names streets under Варна and no district at
+all, and there is no street→area link in the schema to recover one, so the named
+streets remain a better audience than ~90 districts. A2 wins over A6 — a
 `карето` block is the more specific claim, and a bounded shape is exactly what A6
 declines to assert.
 
@@ -1008,7 +1023,9 @@ and stores the detail in `windows_json` only when the envelope loses some. Askin
 the model for both a schedule and a pair would invite it to contradict itself, so
 the pair is never requested. The prompt is prefixed with a `CURRENT_DATE:` line
 pinned to the Sofia calendar day, and every field is coerced or rejected here — a
-malformed value degrades to "no time", never to a wrong window. Times carry no
+malformed value degrades to "no time", never to a wrong window. The one clock
+outside 0–23 that is accepted is `24:00` ("до около 24 часа"), read as 23:59 on
+the same date so the window does not spill into the next day. Times carry no
 offset on purpose: the audience is in Bulgaria, so
 `new Date("2026-07-27T08:00:00")` parses correctly in device-local time.
 - Polygon building is skipped when under **1 s** of budget remain — a polygon is

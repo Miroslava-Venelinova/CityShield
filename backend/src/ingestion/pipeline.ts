@@ -15,7 +15,7 @@ import { OUTAGE_JSON_SCHEMA, outageAiSchema, type ProcessedData } from "../share
 import { normalizeSchedule, sofiaToday } from "../shared/datetime";
 import { expired } from "../shared/deadline";
 import { aiParse } from "./ai";
-import { normalizeParse } from "./normalize";
+import { foldMixedScript, normalizeParse } from "./normalize";
 import { buildPolygonForStreets } from "./polygon";
 
 // One D1 read of the stored street geometry plus the JSTS pipeline — tens of
@@ -148,7 +148,9 @@ export async function processOutageMessage(
   // Pinned once here so both the prompt input and the normalization below agree
   // even if the message is processed across a midnight boundary.
   const today = sofiaToday();
-  const message = `${title}\n${content}`;
+  // A16: the model and the guards read a copy with look-alike Latin letters
+  // folded; `title`/`content` themselves are stored and pushed verbatim.
+  const message = foldMixedScript(`${title}\n${content}`);
   const aiOutput = await aiParse(
     env, OUTAGE_AI_PROMPT, `CURRENT_DATE: ${today}\n${message}`,
     OUTAGE_JSON_SCHEMA, outageAiSchema, deadline);

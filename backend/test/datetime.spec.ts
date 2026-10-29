@@ -133,6 +133,13 @@ describe("normalizeSchedule", () => {
     expect(out.end_time).toBe("2026-07-26T06:00:00");
   });
 
+  // 3edc967c — "до около 24 часа" lost its end time to the 0–23 check.
+  it("reads a 24:00 end as the end of the same day", () => {
+    const out = normalizeSchedule(schedule(TODAY, TODAY, [{ start: "17:30", end: "24:00" }]), TODAY);
+    expect(out.start_time).toBe("2026-07-25T17:30:00");
+    expect(out.end_time).toBe("2026-07-25T23:59:00");
+  });
+
   it("keeps only the envelope when a window is missing a bound", () => {
     // Half a window cannot be rendered as a repeating one.
     expect(normalizeSchedule(

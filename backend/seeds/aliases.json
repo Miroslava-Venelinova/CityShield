@@ -24,5 +24,23 @@
   {
     "alias": "В-во",
     "region": "кв. Владиславово"
+  },
+  {
+    "_why": "Source shorthand for Западна промишлена зона, found in the 29.10.2026 review (9f0d8ee5, 353e9f82 batch): 'ЗПЗ' and 'З.П.З.' share no trigram with the full name, the same situation as 'В -во' above.",
+    "alias": "ЗПЗ",
+    "region": "Западна промишлена зона"
+  },
+  {
+    "alias": "З.П.З.",
+    "region": "Западна промишлена зона"
+  },
+  {
+    "_why": "epro and ViK write the resort as a locality ('м-т Св. Св. Константин и Елена', 'м. …'), while OSM and the seed carry it as к.к. The kind filter keeps м-т and к.к. apart on purpose (F8 left к.к. out of the merged class), so the source's kind is listed as an alias of the one real row rather than loosening the filter (49e2953b, 52552aac).",
+    "alias": "м-т Св. Св. Константин и Елена",
+    "region": "к.к. Св. св. Константин и Елена"
+  },
+  {
+    "alias": "м. Св. Св. Константин и Елена",
+    "region": "к.к. Св. св. Константин и Елена"
   }
 ]
