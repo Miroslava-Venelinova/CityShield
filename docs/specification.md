@@ -1413,6 +1413,15 @@ normalization; and targeting at scale.
 | `app` | `npm ci` → `npm run lint` → `npm run typecheck` |
 | `deploy` | On pushes to `main` only, after `worker`: `npm ci` → `wrangler deploy` (lockfile version), authenticated by the `CLOUDFLARE_API_TOKEN` repo secret |
 
+Two scheduled workflows run from `main` only (GitHub runs schedules on the
+default branch; a public repo's Actions minutes are free). GitHub emails a failed
+scheduled run to whoever last changed its schedule.
+
+| Workflow | Schedule | What it does |
+|---|---|---|
+| `uptime.yml` | `7,37 * * * *` | `GET /api/health` with the `INGEST_API_KEY` repo secret. Fails on no answer / non-200, or when the `*/15` tick has not *completed* in over 1 h; stalled cursors and the last day's skipped messages are warnings only (§3.8). Without the secret: liveness only (expects the key gate's 401) |
+| `backup.yml` | `7 2 * * 1` (weekly) | `npm ci` → `wrangler d1 export cityshield-db --remote` (lockfile version) → `gpg --symmetric` AES-256 with the `BACKUP_PASSPHRASE` secret → artifact kept 30 days. Refuses to run without both secrets; never uploads plaintext |
+
 ### 1.13 Email verification and password reset
 
 Both flows are built, tested and live in the app; **delivery is mocked** —
@@ -1557,7 +1566,10 @@ Location is the sensitive item and is collected only through the explicit
   subscriber data.
 - Local tools that can reach production (§3.7) require a per-run token and pin
   `Host` to loopback, so no page open in a browser can POST to them.
-- Backups: D1 **Time Travel** gives 7-day point-in-time restore on the free plan.
+- Backups: D1 **Time Travel** gives 7-day point-in-time restore on the free plan,
+  plus a weekly `wrangler d1 export` kept off-site as a GitHub Actions artifact
+  for 30 days, **encrypted** with a passphrase secret because the repo is public
+  (§1.12, runbook "Restore from an off-site backup").
 - **Breach plan (Art. 33/34):** 72-hour notification to the CPDP. The runbook
   lives in [compliance.md](compliance.md) §4.
 
@@ -1664,8 +1676,18 @@ without a token, `/privacy` serves the current processor list, and
 ### 3.5 CI deploys
 
 Dashboard → My Profile → API Tokens → create from the **"Edit Cloudflare
-Workers"** template, scoped to the account → add as the GitHub repo secret
-`CLOUDFLARE_API_TOKEN`. The `deploy` job (§1.12) then runs on pushes to `main`.
+Workers"** template, scoped to the account, and **add Account → D1 → Edit** →
+add as the GitHub repo secret `CLOUDFLARE_API_TOKEN`. The `deploy` job (§1.12)
+then runs on pushes to `main`, and `backup.yml` can export the database. D1
+Edit is there for the export: Cloudflare's API schema names no permission
+group for the export endpoint (it is a `POST`), so Read is not known to be
+enough. It widens nothing real — a token that can deploy the Worker can
+already ship code that reads every row.
+
+The other repo secrets: `INGEST_API_KEY` (same value as the Worker secret, for
+`uptime.yml`; update both on rotation) and `BACKUP_PASSPHRASE` (a long random
+passphrase for `backup.yml`, also kept outside GitHub — without it the backups
+cannot be decrypted).
 
 ### 3.6 Platform limits to re-check
 
@@ -1827,8 +1849,11 @@ DNS rebinding.
   signature, and it is a `SELECT` rather than a 15-minute `wrangler tail` vigil —
   which matters more than usual here, given historical logs are not queryable at
   all (below). `GET /api/health` (ingest key) returns it alongside every cursor's
-  age and the messages the pre-store cap gave up on; hang an external uptime ping
-  off it to be told rather than to look.
+  age and the messages the pre-store cap gave up on. `.github/workflows/uptime.yml`
+  polls it every 30 minutes from GitHub and fails — which GitHub emails — when
+  the ingest tick has not completed in an hour (§1.12, runbook "Uptime check").
+  It deliberately does not fail on `status: degraded`, which any cursor quiet
+  for 6 h sets; vt and heating are that quiet most days.
 - **The signature of a stalled ingest** is a `crawl_state.updated_at` that has not
   moved while the source has published ids above the cursor. Two queries settle
   it: `SELECT source, last_id, updated_at FROM crawl_state`, then fetch
@@ -1896,6 +1921,11 @@ DNS rebinding.
   The authoritative instrument remains real `cpuTime` from `wrangler tail`.
 - **D1 Time Travel** (`wrangler d1 time-travel`) gives 7-day point-in-time
   restore on the free plan — the recovery path referenced by the breach runbook.
+  Past 7 days, the weekly encrypted export (`backup.yml`, kept 30 days) is the
+  only copy. A `wrangler d1 export` **blocks every other query** on the database
+  while it runs, hence its slot between two ingest ticks at night, and it is not
+  supported on databases with virtual tables — adding an FTS5 table would break
+  the backup.
 - Retention deletions log their row counts each night; a cleanup that starts
   reporting zero forever is worth a look before the 500 MB cap is.
 

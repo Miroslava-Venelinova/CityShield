@@ -118,7 +118,9 @@ data breach, unless it is unlikely to result in a risk to data subjects.
    (`wrangler secret put …` — rotating `JWT_SECRET` invalidates every session,
    which is the intended effect during a credential breach), and if data was
    altered or destroyed, restore with D1 Time Travel
-   (`wrangler d1 time-travel restore`, 7-day window on the free plan).
+   (`wrangler d1 time-travel restore`, 7-day window on the free plan), or
+   from the weekly encrypted off-site export for anything older
+   ([runbook.md](runbook.md#restore-from-an-off-site-backup)).
 3. **Assess scope.** From the logs, determine which endpoints and which
    user records were reached, and which categories were involved: emails +
    password hashes, or home coordinates. Home coordinates are the highest-risk
@@ -177,6 +179,17 @@ Per §2.2 — confirm each before the Play release:
       or the consent copy. Add it to both languages of `/privacy`. If tiles move
       to a commercial provider (todo.md §9.1), that provider becomes a full
       new-processor item.
+- [ ] **GitHub (Actions artifacts) — encrypted backups.** Since 29.10.2026 a
+      weekly export of the whole D1 (emails, password hashes, home
+      coordinates) is kept as a workflow artifact for 30 days. It is
+      encrypted (AES-256, `gpg --symmetric`) with a passphrase held only as a
+      repo secret (and by the operator), so whoever can download the artifact
+      gets nothing readable. The repo is public, so the encryption is not
+      optional. Encrypted personal data is
+      still personal data: decide whether GitHub is listed in `/privacy` as a
+      backup store, and say in `/privacy` that deleted accounts leave the
+      backups within 30 days (todo.md §8.2). Moving the copies to R2 instead
+      would keep them with Cloudflare, an existing processor.
 - [x] ~~**unpkg.com — remove rather than disclose.**~~ Done 29.10.2026:
       Leaflet is bundled into the APK (specification §1.11) and the map CSP no
       longer allows any origin but the OSM tile servers, so unpkg.com receives

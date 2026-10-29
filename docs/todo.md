@@ -36,7 +36,8 @@ of what only you can provide, and the work items point into it.
       wrangler 3.90, which can't read `wrangler.jsonc` ("Missing entry-point") — the job
       now runs the lockfile's wrangler instead.
 - [ ] 🧑 Create the `CLOUDFLARE_API_TOKEN` repo secret so that deploy job actually works —
-      verified **missing** 21.10.2026 (§7.3).
+      verified **missing** 21.10.2026 (§7.3). The weekly backup needs it too, plus
+      `BACKUP_PASSPHRASE`; the uptime check needs `INGEST_API_KEY`.
 - [ ] 🧑 Rotate `ONESIGNAL_API_KEY`; it passed through a chat transcript (§7.2).
 
 ## 2. Notification accuracy — the remaining backend work
@@ -323,15 +324,33 @@ Worker secret and mirrored in local `.dev.vars`.
   not read subscriber data, so the risk is spam rather than a breach — but regenerating
   it and re-running `wrangler secret put ONESIGNAL_API_KEY` takes about a minute.
 
-### 7.3 ⏳ CI auto-deploys — one API token, one GitHub secret
+### 7.3 ⏳ CI, uptime and backups — one API token, three GitHub secrets
 
-- Cloudflare dashboard → My Profile → API Tokens → create from the **"Edit Cloudflare
-  Workers"** template, scoped to your account.
-- Add it to the GitHub repo as the secret `CLOUDFLARE_API_TOKEN`.
+GitHub → the repo → Settings → Secrets and variables → Actions → *New repository
+secret*:
+
+- **`CLOUDFLARE_API_TOKEN`** — Cloudflare dashboard → My Profile → API Tokens → create
+  from the **"Edit Cloudflare Workers"** template, scoped to your account, then
+  **+ Add more → Account → D1 → Edit** (the weekly backup runs `wrangler d1 export`;
+  Cloudflare documents no narrower permission for it). Used by the `deploy` job and
+  `backup.yml`.
+- **`BACKUP_PASSPHRASE`** — a long random passphrase (e.g. `openssl rand -base64 32`).
+  The backups are encrypted with it because the repo is public. **Store it in a
+  password manager as well**: GitHub never shows a secret again, and without it no
+  backup can be restored.
+- **`INGEST_API_KEY`** — the same value as the Worker secret (it is in
+  `backend/.dev.vars`). Lets `uptime.yml` read `/api/health`; without it the check is
+  liveness only. Update it whenever the Worker's key is rotated.
+
+Then run *Actions → Backup → Run workflow* once and restore the result into a scratch
+database ([runbook](runbook.md#restore-from-an-off-site-backup)), and check that the
+account that pushed the workflows gets email for failed Actions runs (GitHub →
+Settings → Notifications → Actions).
 
 Not done: on 21.10.2026 the repo had no Actions secrets at all. Until it is, the
 `deploy` job fails on every push to `main` and deploys happen by hand with
-`npx wrangler deploy`.
+`npx wrangler deploy`, and the weekly backup fails (which GitHub emails, as a
+reminder).
 
 ### 7.4 ✅ Privacy policy — decided
 
@@ -469,8 +488,10 @@ release.
       APK (spec §1.11), so unpkg no longer receives anything from the device.
 - [ ] **"Deleted immediately" is not quite true.** D1 Time Travel keeps restorable
       history for 7 days (30 on Workers Paid), and that is the breach runbook's restore
-      path. Say so in `/privacy`: deleted at once from the live database, gone from
-      backups within 7 days.
+      path. Since 29.10.2026 there is also a weekly encrypted export kept 30 days as a
+      GitHub Actions artifact (§9.2). Say so in `/privacy`: deleted at once from the
+      live database, gone from backups within 30 days — and decide whether GitHub is
+      named as the backup store (compliance.md §5).
 - [ ] 🧑 **No minimum age — decide 18+ for the first release** (legal.md §1). Admitting
       anyone under 18 makes a DPIA mandatory (CPDP list item 7, "services offered
       directly to a child"). Under-14s cannot contract (ЗЛС чл. 3) and need a parent's
@@ -621,12 +642,20 @@ could exhaust them on the day OSMF has an outage.
 
 ### 9.2 Monitoring, backups, limits
 
-- [ ] **Something has to call `/api/health`.** The heartbeat exists (migration 0019) but
-      nothing outside polls it, and every incident so far was found by a person looking.
-      A free external uptime checker on `/api/health` with email alerts is enough.
-- [ ] **Off-site backups.** The only backup is D1 Time Travel's 7-day window. Add a
-      weekly `wrangler d1 export` stored somewhere else (a GitHub Actions artifact or
-      R2), so a mistake noticed on day 8 is recoverable.
+- [x] ~~**Something has to call `/api/health`.**~~ Done 29.10.2026:
+      `.github/workflows/uptime.yml` polls it every 30 minutes from GitHub's runners and
+      fails (GitHub emails the failure) when the Worker is down or the ingest tick has not
+      completed in an hour; stalled cursors and skipped messages are warnings in the run
+      summary ([runbook](runbook.md#uptime-check)). 🧑 Needs the `INGEST_API_KEY` repo
+      secret for more than a liveness check (§7.3). Cursor stalls still cannot fail it —
+      per-source quiet spells are the open "source websites" row in §9.1.
+- [x] ~~**Off-site backups.**~~ Done 29.10.2026: `.github/workflows/backup.yml` runs
+      `wrangler d1 export --remote` every Monday, encrypts it with `BACKUP_PASSPHRASE`
+      (the repo is public, so artifacts are downloadable by anyone signed in) and keeps
+      it 30 days as an artifact ([runbook](runbook.md#restore-from-an-off-site-backup)).
+      🧑 Needs the `CLOUDFLARE_API_TOKEN` (with D1 Edit) and `BACKUP_PASSPHRASE` secrets
+      (§7.3), then one test restore. The 30 days feed into §8.2's "deleted immediately"
+      item.
 - [ ] **Free-plan limits under real users.** Estimate per-user daily load (API requests,
       D1 reads, Workers AI neurons per parse) and work out at what user count the free
       plan runs out. Past a limit the service simply stops, so know the number before

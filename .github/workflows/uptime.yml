@@ -1,0 +1,119 @@
+name: Uptime
+
+# External check on GET /api/health (docs/specification.md §3.8, docs/runbook.md
+# "Uptime check"). It runs on GitHub's machines, so nobody's PC has to be on,
+# and a failed scheduled run is emailed by GitHub — every incident so far was
+# found by a person happening to look.
+#
+# What fails the run (needs a human):
+#   - the Worker does not answer, or answers anything but 200;
+#   - the ingest cron's last *completed* tick is older than MAX_HOURS_SINCE_COMPLETION.
+#     A killed tick (exceededCpu) leaves started_at moving and completed_at
+#     standing still; a cron that stopped firing freezes both.
+# What only warns (in the run's summary):
+#   - stalled cursors and the route's own `status: degraded`, which any cursor
+#     quiet for 6 h sets. vt and heating are routinely that quiet, so failing on
+#     it would email every half hour for nothing;
+#   - messages the pre-store cap gave up on.
+#
+# /api/health sits behind the ingest key. Without the INGEST_API_KEY repo
+# secret the run checks liveness only: a 401 from the key gate proves the Worker
+# is deployed, its config guard passed, and the edge is routing to it.
+
+on:
+  schedule:
+    # Off the hour: GitHub delays or drops scheduled runs most at :00.
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: uptime
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: GET /api/health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the Worker's health
+        env:
+          HEALTH_URL: https://cityshield.cityshield-varna.workers.dev/api/health
+          INGEST_API_KEY: ${{ secrets.INGEST_API_KEY }}
+          INGEST_CRON: "*/15 * * * *"
+          # 1 h on a 15-minute cron: at least three ticks in a row did not
+          # finish. Tighter would page for one dropped cron fire plus a long
+          # tick (DEADLINE_MS is 5 min); looser only delays the email.
+          MAX_HOURS_SINCE_COMPLETION: "1"
+        run: |
+          set -uo pipefail
+          body="$RUNNER_TEMP/health.json"
+
+          # --retry rides out one dropped connection or a 5xx blip; a Worker
+          # that is really down fails all four attempts. No --fail, so a 401 is
+          # a status to read rather than an error to retry.
+          fetch() {
+            curl --silent --show-error --max-time 30 \
+                 --retry 3 --retry-delay 10 --retry-all-errors \
+                 --output "$body" --write-out '%{http_code}' "$@" "$HEALTH_URL"
+          }
+
+          if [ -z "$INGEST_API_KEY" ]; then
+            code=$(fetch) || code="unreachable"
+            if [ "$code" = "401" ]; then
+              echo "::warning::INGEST_API_KEY repo secret is not set: checked liveness only (the key gate answered 401). See docs/runbook.md."
+              echo "Liveness only: the Worker answered 401 from the key gate." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::Worker is not answering normally: expected 401 from the key gate, got $code."
+            exit 1
+          fi
+
+          code=$(fetch -H "X-Api-Key: $INGEST_API_KEY") || code="unreachable"
+          case "$code" in
+            200) ;;
+            401) echo "::error::/api/health answered 401: the INGEST_API_KEY repo secret no longer matches the Worker's secret."; exit 1 ;;
+            *)   echo "::error::/api/health answered $code (5xx: Worker or D1 failing; unreachable: DNS/edge/network)."; exit 1 ;;
+          esac
+
+          if ! jq -e '.ticks and .sources' "$body" > /dev/null; then
+            echo "::error::/api/health returned 200 but not the expected JSON."
+            exit 1
+          fi
+
+          {
+            echo "### /api/health — $(jq -r '.status' "$body") at $(jq -r '.checked_at' "$body")"
+            echo
+            echo "| cron | started | completed | h since completion | unfinished |"
+            echo "|---|---|---|---|---|"
+            jq -r '.ticks[] | "| `\(.cron)` | \(.started_at) | \(.completed_at) | \(.hours_since_completion) | \(.started_but_never_completed) |"' "$body"
+            echo
+            echo "| source | last id | h since cursor moved | stalled (>6 h) |"
+            echo "|---|---|---|---|"
+            jq -r '.sources[] | "| \(.source) | \(.last_id) | \(.hours_since_cursor_moved) | \(.stalled) |"' "$body"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for s in $(jq -r '.sources[] | select(.stalled) | .source' "$body"); do
+            echo "::warning::Source '$s' has not moved its cursor in over 6 h — quiet, or wedged (docs/troubleshooting.md)."
+          done
+          # The list is the 20 most recent ever; only the last day's are news.
+          jq -r '.skipped_messages[]
+                 | select((.skipped_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > now - 86400)
+                 | "::warning::Gave up on \(.source) message \(.ref) at \(.skipped_at) after \(.attempts) attempts — it was never delivered."' "$body"
+
+          verdict=$(jq -r --arg cron "$INGEST_CRON" --argjson max "$MAX_HOURS_SINCE_COMPLETION" '
+            (.ticks | map(select(.cron == $cron)) | first) as $t
+            | if $t == null then "no heartbeat row for the ingest cron"
+              elif $t.hours_since_completion == null then "the ingest tick has never completed"
+              elif $t.hours_since_completion > $max then
+                "the ingest tick last completed \($t.hours_since_completion) h ago (started \($t.hours_since_start) h ago: "
+                + (if $t.hours_since_start > $max then "the cron has stopped firing"
+                   else "ticks start but do not finish — the exceededCpu signature" end) + ")"
+              else "ok" end' "$body")
+          if [ "$verdict" != "ok" ]; then
+            echo "::error::Ingestion is not healthy: $verdict. See docs/specification.md §3.8."
+            exit 1
+          fi
+          echo "Healthy: the ingest tick completed within ${MAX_HOURS_SINCE_COMPLETION} h."

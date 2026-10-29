@@ -96,7 +96,9 @@ up in [incidents.md](incidents.md).
 - **29.10**: on `fallbacks-app-ops`, Leaflet is bundled into the APK (unpkg.com
   is gone from the device's contacts), the map WebViews identify themselves to
   OSM as `CityShield/<version>`, and a failed tile load shows a notice instead
-  of a grey map.
+  of a grey map. Two scheduled GitHub workflows are added: an uptime check on
+  `/api/health` every 30 minutes, and a weekly encrypted D1 export kept 30
+  days. Both wait on repo secrets ([todo.md](todo.md) §7.3).
 
 ## Where the deployment stands (last known, 31.08.2026)
 
