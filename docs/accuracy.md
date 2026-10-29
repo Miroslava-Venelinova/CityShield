@@ -1,5 +1,87 @@
 # Notification accuracy — failures and fixes
 
+## The 29.10.2026 review — read this first
+
+**937 alerts** (31.08.2026 18:06 → 29.10.2026 07:45 UTC), every one judged by one of
+eight parallel Claude reviewers against a single brief, then aggregated
+(`tools/alert-review/reports/review-20261029-120000.md`; the verdicts are in
+`judgments.json`, so the review tool shows them). **561 accurate, 349 inaccurate,
+27 not implemented — 37% inaccurate**, 144 marked important. By category: heating
+66% (21 of 32), vik 43%, epro 32%, vt 0 of 4.
+
+**Not comparable one-for-one with the 13% of 08.08.** These reviewers counted a
+place missing from our seed as inaccurate, which the human pass mostly did not,
+and 47 alerts are block polygons that failed only because `overpass-api.de`
+answered HTTP 521 to the Worker from early September to the 26.10 deploy (46 of
+47 polygon attempts failed in that window, against 9 of 17 before it).
+
+What the 349 inaccurate alerts come down to:
+
+| Cause | Alerts | State |
+|---|---:|---|
+| Matcher / fallback — wrong district, a foreign settlement's like-named place, an unmatched area notifying nobody | 103 | **Largely fixed 29.10**, see below |
+| Seed data gap only — locality, village street or renamed street not in our tables | 101 | Open: data work |
+| Model extraction — dropped, merged or invented places, empty location list | 55 | Open |
+| Fixed by the 26.10 deploy or the 29.10 guards | 51 | Done |
+| Time parse — continuous multi-day spans stored as a daily recurrence, lost dates | 23 | Open |
+| Other — truncated scrapes, a restoration notice stored as an outage, facility-only notices | 16 | Open |
+
+**Fixed on 29.10.2026** (spec §1.3, §1.5, §1.7; each with a test naming its alert):
+
+- **The unscoped retry no longer escapes a village or town.** A scoped miss used to
+  retry across the province and land on Varna: "промишлена зона" in Девня,
+  Провадия, Аксаково and Вълчи дол became Varna's Южна промишлена зона, Бяла's
+  Гръцката махала became Varna's. Outside the city the stated settlement is now the
+  audience, and an area with no row at all ("централната част на селото",
+  "висока зона") falls back to it instead of notifying nobody. Locations reaching
+  nobody: **133 → 106** (9.4% → 7.4%); all 32 changed locations moved from nobody to
+  the settlement the message named.
+- **A17 restores a dropped settlement** from the text's own `гр. X – …` form: 13
+  stored alerts (Бяла ×7, Девня ×4, Провадия ×2) would now scope correctly.
+- **A6 hedge cues** extended (`живущите около`, `около ул.`, `съседни на тях
+  улици`, `улиците около тях`, `в р-а на`, `в района от`, the typo `в районна на`):
+  11 stored alerts flip to hedged. **Owner's rule:** a hedge under a village or town
+  now widens to the whole settlement (spec §1.5).
+- **A16** folds Latin look-alikes (`Mладост`), **A1** drops МТП/МТТ/КТП/БКТП
+  substations, `24:00` is accepted as an end time.
+- Aliases: `ЗПЗ`/`З.П.З.` → Западна промишлена зона, `м-т`/`м.` Св. Св. Константин
+  и Елена → the к.к. row (seed only — **a reseed is needed** for them to reach D1).
+
+Together with the 26.10 polygon change these touch 88 of the 349 inaccurate alerts
+and fully resolve an estimated 52. The estimate replays stored parses through the
+new guards and targeting; it cannot replay the model, so it covers the
+deterministic part only.
+
+**Polygons, replayed from the stored geometry:** 39 of the 65 polygon attempts since
+10.08 now close a ring. The other 26 fail inside the builder ("bounded by a single
+street" ×14, "degenerate" ×9, "enclose no block" ×3), mostly around ул. Девня,
+Пеячевич, бул. Левски and Генерал Колев — real blocks, correct street resolution,
+so this is a `tools/polygon-tester` session, not a data fix. `15a862fb` built a
+ring from live Overpass and does not from the stored ways: the one regression.
+
+**Still open, in order of reach:**
+
+1. **Localities with no row** — Малко Ю, Ваялар, Кабакум, Руските окопи, Голяма
+   могила, Салтанат, Розмарин, Вилна зона Кранево, кв. Белопал: 91 alerts, the
+   largest single issue. Most are documented as absent from OSM and Nominatim
+   (findings.md); they need another source.
+2. **Seed the village and town streets** (todo §2) — Вълчи дол has none at all;
+   Звездица, Провадия, Девня, Долни чифлик and Шкорпиловци are partial. 63 alerts.
+3. **Model omissions** — dropped places (44), empty location lists (15). The count
+   check in §2.9 is still the proposed answer.
+4. **Continuous multi-day spans** ("от 20:30 на 27.09 до 13:00 на 28.09") are stored
+   as a daily window, shown as "…daily". The schedule schema cannot say
+   "continuous"; a prompt + schema change, so it waits on the AI eval (F16).
+5. **Street renames** — Толбухин → Маршал Фьодор Толбухин, Капитан Райчо → Кап. Райчо
+   Николов, Ивац → Ивац Войвода. There is no street-alias table yet. 20 alerts.
+6. **Duplicates** — 14 same-day reposts stored twice.
+7. **Bare "Младост" reaches only Младост 2.** An alias maps to one row; this needs a
+   name that targets both, or a parent row. About 10 alerts.
+8. **Non-outage notices** — "Аварията е отстранена", a fixed phone line — are stored
+   and pushed as outages. A restoration cue should store without notifying.
+
+---
+
 **Date:** 09.08.2026 · **Branch:** `cloudflare-migration` · **Baseline:** the
 02.08.2026 13:00 UTC deploy (`2f478c8`, Worker version
 `0752e410-777d-4377-8994-f84dfc3991ea`), which is when `alerts` was cleared and
@@ -997,6 +1079,10 @@ street we matched to the wrong row hears nothing.
 
 *(The previous edition said 97 streets for Долни чифлик; the seed holds 42. 97 is
 Провадия's count.)*
+
+**Decided 29.10.2026:** it depends on the wording. "на ул. X" stays street-only;
+"в района на улиците X, Y" widens to the whole village or district (A6), never to
+the bare city. See [design-decisions.md](design-decisions.md#a-hedge-widens-to-the-village-an-exact-street-does-not).
 
 ### 5.3 The pre-store attempt counter (§4.1) and the AI count check (§2.9)
 

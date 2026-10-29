@@ -93,6 +93,13 @@ up in [incidents.md](incidents.md).
   in [todo.md](todo.md) §8–§9. A same-day legal research pass
   ([legal.md](legal.md)) recommends an **18+ minimum age**: any under-18 audience
   makes a DPIA mandatory under the CPDP's list.
+- **29.10**: alert review over 937 alerts since 31.08 (37% inaccurate by a stricter
+  measure; [accuracy.md](accuracy.md)). Found the polygon builder dead for two
+  months behind overpass-api.de's 521s, already fixed by the 26.10 deploy. Shipped
+  on `review-and-release-prep`: the owner's hedge rule (a hedge widens to the
+  village), the settlement fallback outside the city, guards A16 and A17, wider A1
+  and A6, `24:00` end times, two aliases. Legal drafts in `docs/legal-texts/`.
+  Two owner decisions recorded: verbatim text, and street-vs-village by wording.
 
 ## Where the deployment stands (last known, 31.08.2026)
 

@@ -45,7 +45,9 @@ The 28.07 review (99 alerts: 54 accurate, 33 inaccurate) produced the guards, th
 kind-aware matcher and the schedule model that shipped in `6deac05`. Those fixes were
 validated against *stored* parses; what they do to *fresh* ingestion is unmeasured.
 
-- [ ] **Re-run the review loop.** After the redeploy, let a few days of alerts accumulate
+- [x] ~~**Re-run the review loop.**~~ Done 29.10.2026 over 937 alerts — 37% inaccurate by a
+      stricter measure; causes, fixes and the ranked remainder in
+      [accuracy.md](accuracy.md#the-29102026-review--read-this-first). The original note: After the redeploy, let a few days of alerts accumulate
       and run `tools/alert-review` over them. This is the measurement that decides
       everything below — do not act on any of it before the numbers exist.
       The buckets to watch, in the order they were expected to shrink: name ambiguity
@@ -72,6 +74,17 @@ validated against *stored* parses; what they do to *fresh* ingestion is unmeasur
       (a settlement missing from `regions` inserts nothing, silently), and the
       **startup budget** `wrangler deploy` prints — it was 27 ms against 400 ms, and the
       seed growing ~4× is the one number worth watching.
+- [ ] 🧑 **Reseed the remote D1** so the 29.10 aliases (ЗПЗ, м-т Св. Св. Константин и
+      Елена) reach `region_aliases` — they are in `seeds/aliases.json` only.
+- [ ] **Street aliases** — no table exists; Толбухин, Капитан Райчо and Ивац need one
+      (20 alerts in the 29.10 review). Same doctrine as regions: an alias, not a lower
+      threshold.
+- [ ] **Bare "Младост" targets only Младост 2** — needs a name that reaches both.
+- [ ] **Restoration notices** ("Аварията е отстранена") are pushed as new outages.
+- [ ] **Continuous multi-day spans** are stored as a daily recurrence (schema + prompt;
+      waits on the AI eval).
+- [ ] **Polygon builder:** 26 of 65 real blocks still fail; replay them in
+      `tools/polygon-tester` (ids in accuracy.md).
 - [ ] **Grow `region_aliases` from what the sources actually write.** The table (0013)
       holds two rows today. Every name the review flags as unmatched but obviously real
       is an alias row, and an alias is cheaper and more exact than loosening the matcher.
@@ -503,7 +516,9 @@ release.
       No robots.txt forbids the paths we read. Facts and news are not copyrightable
       (ЗАПСП чл. 4), but the site terms and the database right still apply to
       systematic copying.
-- [ ] **Decide verbatim text or summary.** The push currently carries the source's title
+- [x] ~~**Decide verbatim text or summary.**~~ Decided 29.10.2026: **verbatim**, with
+      attribution and a source link ([design-decisions.md](design-decisions.md#alerts-carry-the-source-text-word-for-word)).
+      The original note: The push currently carries the source's title
       and text word for word. A summary built from the extracted fields, plus a link to
       the notice, is the stronger position if an operator objects (legal.md §3.2).
 - [ ] **The scraper presents itself as Chrome** (`ingestion/scrape.ts`,
