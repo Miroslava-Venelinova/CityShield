@@ -13,8 +13,8 @@ data source is added.
 
 **Known gaps (pre-release review, 26 October 2026):** there are no terms of use,
 the policy does not name the controller, the device's requests to the OSM tile
-servers and unpkg.com are undisclosed, there is no minimum age, and location
-consent is not recorded. Each is a work item in [todo.md](todo.md) §8, and this
+servers are undisclosed (unpkg.com, the other one, was removed on 29.10.2026),
+there is no minimum age, and location consent is not recorded. Each is a work item in [todo.md](todo.md) §8, and this
 record is wrong on those points until they are done. The legal research behind
 them is in [legal.md](legal.md).
 
@@ -177,6 +177,9 @@ Per §2.2 — confirm each before the Play release:
       or the consent copy. Add it to both languages of `/privacy`. If tiles move
       to a commercial provider (todo.md §9.1), that provider becomes a full
       new-processor item.
-- [ ] **unpkg.com — remove rather than disclose.** Leaflet is loaded at
-      runtime from unpkg.com, which receives the user's IP address too. Bundling
-      Leaflet into the APK removes this recipient entirely (todo.md §8.2).
+- [x] ~~**unpkg.com — remove rather than disclose.**~~ Done 29.10.2026:
+      Leaflet is bundled into the APK (specification §1.11) and the map CSP no
+      longer allows any origin but the OSM tile servers, so unpkg.com receives
+      nothing from the device. The tile servers are now the app's only
+      third-party contact outside the Worker, OneSignal/FCM and (via the Worker)
+      Nominatim.

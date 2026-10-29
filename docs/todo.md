@@ -461,12 +461,12 @@ release.
       policy to match the developer name on the listing. Decide whose name goes there
       (it will also be public on the Play listing).
 - [ ] **Undisclosed transfers from the device.** The app loads map tiles straight from
-      `tile.openstreetmap.org` and Leaflet from `unpkg.com`
-      (`frontend/src/components/leafletWebView.ts`), so both see the user's IP address.
-      The policy lists only Nominatim, and says that happens only when setting a
-      location. Fix: bundle Leaflet into the app (§9.1 — this also removes an outage
-      dependency), and list the OSMF tile servers in `/privacy` (both languages) and in
-      compliance.md §5.
+      `tile.openstreetmap.org` (`frontend/src/components/leafletWebView.ts`), so OSMF
+      sees the user's IP address. The policy lists only Nominatim, and says that happens
+      only when setting a location. Fix: list the OSMF tile servers in `/privacy` (both
+      languages) and in compliance.md §5.
+      ~~Leaflet from `unpkg.com`~~ — **removed 29.10.2026**: Leaflet is bundled into the
+      APK (spec §1.11), so unpkg no longer receives anything from the device.
 - [ ] **"Deleted immediately" is not quite true.** D1 Time Travel keeps restorable
       history for 7 days (30 on Workers Paid), and that is the breach runbook's restore
       path. Say so in `/privacy`: deleted at once from the live database, gone from
@@ -536,6 +536,9 @@ release.
 
 - [ ] **A "Licences" / "About" screen.** The APK ships React Native, Leaflet (BSD-2) and
       other libraries whose licences require their notices to travel with the binary.
+      Since 29.10.2026 Leaflet really is inside the APK (it used to be fetched from
+      unpkg at runtime); its copyright line travels in the inlined code, but BSD-2 also
+      wants the licence text shown with the binary.
       Generate the list from `frontend/package.json` dependencies at build time.
 - [ ] **OSM attribution outside the map.** The street and region seed is derived from
       OSM (ODbL) and is used even when no map is on screen. The map attribution and the
@@ -557,11 +560,14 @@ release.
       app is useless outside Varna, and this keeps COPPA and the US state app-store
       age laws (Texas SB 2420, enforceable again since May 2026; Utah, Louisiana,
       California) out of scope (legal.md §1.6).
-- [ ] **Identify the map to OSM.** The tile policy requires a distinct user agent naming
-      the app, and forbids spoofing. Both map WebViews send Android's default WebView
-      agent. Set `applicationNameForUserAgent` in `hardenedWebViewProps`
-      (`frontend/src/components/leafletWebView.ts`), and consider opening the
-      attribution link in the external browser instead of blocking it (legal.md §7).
+- [x] ~~**Identify the map to OSM.**~~ Done 29.10.2026: `hardenedWebViewProps` sets
+      `applicationNameForUserAgent` to `CityShield/<version> (+<API>/privacy)`, appended to
+      the WebView's own agent (spec §1.11). No `Referer` is sent (the map document is
+      `about:blank`); the current tile policy says "Native apps usually do not have a
+      referer, this is ok". The attribution link turned out not to be blocked:
+      react-native-webview hands any URL outside `originWhitelist` to `Linking.openURL`,
+      so it already opens in the external browser — read from the library source,
+      **confirm on a device** along with the agent (a proxy, or OSM's logs if they write).
 - [ ] **Replace "we use no cookies" in `/privacy`** with a short list of what the app
       keeps on the device: sign-in tokens, settings, notification history, the OneSignal
       subscription id. All of it is necessary for the service, so it is exempt from
@@ -585,9 +591,33 @@ release.
 | The four source websites | A layout change makes the parser find nothing — which looks exactly like a quiet day. No alert | Warn when a source returns zero items or a parse error for longer than its normal quiet spell (per source, like the 6 h cursor check in `runner.ts`) |
 | Nominatim (`NOMINATIM_URL`) | `geocode` returns `null`; transient failures are not cached. No second provider | Acceptable for launch. Add a second geocoder only if failures show up in logs |
 | Overpass | **No longer a runtime dependency** (26.10.2026): the polygon builder reads stored geometry from D1 (spec §1.9). Only the seed sweep calls it, locally | Nothing at runtime. Stored geometry ages: re-sweep when a polygon fails with `no stored geometry for` ([runbook](runbook.md#refresh-street-geometry)) |
-| OSM tiles (`tile.openstreetmap.org`) | No fallback. Separately, the OSM tile usage policy requires apps to identify themselves; a WebView loading inline HTML may send no usable `Referer` and get blocked tiles | Test the maps on a **release** build on a real device. Plan a tile provider for when usage grows (that one is a new processor: §8.2, compliance.md §5) |
-| unpkg.com (Leaflet) | Maps are blank if unpkg is down or blocked | Bundle Leaflet into the APK (also fixes a §8.2 privacy item) |
+| OSM tiles (`tile.openstreetmap.org`) | No second provider. Since 29.10.2026 a failed or stalled tile load shows a notice over the map instead of a silent grey rectangle, and the WebView identifies itself as `CityShield/<version>` as the tile policy requires (spec §1.11). The policy accepts no `Referer` from apps | Test the maps on a **release** build on a real device. Pick a provider before usage grows — see the candidates below |
+| ~~unpkg.com (Leaflet)~~ | **Gone 29.10.2026**: Leaflet is bundled into the APK, so a down or blocked unpkg no longer blanks the map | Nothing |
 | OneSignal | Send failures hold the cursor and retry (`MAX_PUSH_ATTEMPTS = 3`) | Fine as one provider |
+
+**A second tile source — candidates, and what adding one takes.** Deliberately not
+added: every candidate below receives each map user's IP address, which makes it a
+new recipient of personal data. OSMF's tiles are best-effort with no SLA, may block
+without notice, and forbid offline use; heavy traffic is expected to move elsewhere
+([OSMF tile policy](https://operations.osmfoundation.org/policies/tiles/); the
+community list is the OSM wiki's *Raster tile providers*).
+
+| Candidate | Notes |
+|---|---|
+| **Self-hosted on Cloudflare R2** (render Varna's extract ourselves, e.g. Protomaps/PMTiles or pre-rendered raster for a fixed bbox and zoom range) | The only option that adds **no new processor** — Cloudflare already is one. Costs work: a render pipeline, a style, and vector rendering in the WebView (MapLibre or protomaps-leaflet) if the tiles are vector. Must not be built by bulk-downloading osm.org tiles, which the policy forbids |
+| **MapTiler** (Switzerland) | EU-adjacent hosting, OSM-based raster and vector styles, free tier with an API key. Check the free tier's commercial-use terms |
+| **Stadia Maps** (US) | Hosts the Stamen/OSM styles; free tier for non-commercial use with an API key or domain/app registration |
+| **Thunderforest** (UK) | OSM-based raster styles; free "hobby" tier with an API key |
+| **CARTO basemaps** | Free under conditions set by CARTO; read the current terms before relying on them |
+
+Adding any third-party one requires, in the same change: its DPA (or a documented
+reason there is none) and transfer mechanism; a row in `/privacy` in both languages
+and in compliance.md §5 and spec §2.2; its origin in the map CSP (`img-src`) and in
+`network_security_config.xml`; its attribution in the map; an API key that ships in
+the APK (so it must be one the provider expects to be public, ideally locked to the
+package name); and a decision whether it is a fallback (switched to on `tileerror`)
+or the primary. Free-tier limits are per month — at Play-scale usage the fallback
+could exhaust them on the day OSMF has an outage.
 
 ### 9.2 Monitoring, backups, limits
 

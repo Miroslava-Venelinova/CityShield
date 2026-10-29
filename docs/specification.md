@@ -1352,7 +1352,25 @@ toggles), Profile (account, push permission, location, Privacy & Data).
 
 - **Map**: Leaflet in a WebView over OpenStreetMap tiles; polygons and pins come
   straight from `/api/alerts/recent`. OSM attribution is required and must
-  survive WebView changes (§2.6).
+  survive WebView changes (§2.6). Both maps share `components/leafletWebView.ts`:
+  - **Leaflet is bundled, not fetched.** `leaflet` is pinned to an exact version
+    in `package.json`; `postinstall` (`scripts/vendor-leaflet.mjs`) checks
+    `dist/leaflet.js` and `leaflet.css` against pinned SHA-512 hashes and writes
+    them as strings to `src/vendor/leaflet.generated.ts` (gitignored), which is
+    inlined into each map document. The map's only network origin is
+    `tile.openstreetmap.org` — the CSP allows nothing else. Bumping Leaflet means
+    changing the version in both places and recomputing the hashes.
+  - **The WebView names the app to OSM**: `applicationNameForUserAgent` appends
+    `CityShield/<package.json version> (+<API>/privacy)` to the WebView's own
+    agent, as the tile policy requires. Tiles carry no `Referer` (the document is
+    `about:blank`), which the policy accepts from apps; a `baseUrl` on the
+    Worker's origin would add one, and is deliberately not used.
+  - **Tile failures are visible.** A pass of tiles with any `tileerror`, or one
+    still unfinished after 20 s, shows a non-blocking notice over the map
+    (`map.tilesUnavailable`); the next pass that loads cleanly hides it. There is
+    no second tile provider — that would be a new processor (todo.md §9.1).
+  - A tapped link (the attribution) fails `originWhitelist` and is handed to the
+    system browser by react-native-webview; nothing navigates the WebView itself.
 - **Push**: OneSignal SDK. Sign-in calls `OneSignal.login(userId)`, sign-out
   calls `logout()`. There is no "register device" step and no Firebase SDK in the
   app — FCM sits *below* OneSignal, configured in their dashboard.

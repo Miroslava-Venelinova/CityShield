@@ -47,6 +47,9 @@ RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
 WORKDIR /app
 
 COPY package.json ./
+# `postinstall` inlines Leaflet into src/vendor (scripts/vendor-leaflet.mjs), so
+# the script has to be in the image before the install runs.
+COPY scripts/vendor-leaflet.mjs ./scripts/
 RUN npm install --legacy-peer-deps
 
 COPY . .

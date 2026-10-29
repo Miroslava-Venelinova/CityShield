@@ -93,6 +93,10 @@ up in [incidents.md](incidents.md).
   in [todo.md](todo.md) §8–§9. A same-day legal research pass
   ([legal.md](legal.md)) recommends an **18+ minimum age**: any under-18 audience
   makes a DPIA mandatory under the CPDP's list.
+- **29.10**: on `fallbacks-app-ops`, Leaflet is bundled into the APK (unpkg.com
+  is gone from the device's contacts), the map WebViews identify themselves to
+  OSM as `CityShield/<version>`, and a failed tile load shows a notice instead
+  of a grey map.
 
 ## Where the deployment stands (last known, 31.08.2026)
 
