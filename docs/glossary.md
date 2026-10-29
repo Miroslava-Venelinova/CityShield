@@ -51,7 +51,7 @@ Phrases the guards read:
 | **seed** | `backend/seeds/*.json`: the regions, streets and aliases built from OSM by `tools/osm-seed-builder` |
 | **alias** | A row in `region_aliases`: another written form of an existing region (`Владислав Варненчик` → `кв. Владиславово`) |
 | **OSM name variant** | One street carrying two OSM spellings. Curated in `polygon.ts` (`OSM_NAME_VARIANTS`) |
-| **`coords_source`** | Where a pin came from: `seed`, `nominatim`, `settlement` (a fallback to the settlement centre) or `none` |
+| **`coords_source`** | Where a pin came from: `seed`, `nominatim`, `photon` (the geocoding fallback while Nominatim was down), `settlement` (a fallback to the settlement centre) or `none` |
 | **`polygon_failed`** | Set in `locations_json` when a polygon was asked for and not built |
 
 ## Targeting and delivery

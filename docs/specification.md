@@ -77,7 +77,7 @@ CityShield/
 │   │   │                       bus-lines
 │   │   ├── db/queries.ts       every prepared statement, in one place
 │   │   ├── ingestion/          runner, schedule, pipeline, normalize, ai,
-│   │   │                       polygon, scrape, state, sources/
+│   │   │                       polygon, scrape, state, silence, sources/
 │   │   └── shared/             schemas, constants (prompts), datetime, deadline
 │   ├── test/                   vitest suite (22 files, 359 tests) + fixtures
 │   └── spikes/                 Phase 0 de-risking spikes + RESULTS.md
@@ -122,11 +122,11 @@ design — nothing is correct only because a cache is warm:
 | Cache | TTL / bound | Purpose |
 |---|---|---|
 | `regions` / `streets` rows | 6 h, single-flight | Fuzzy matching runs on nearly every alert path (§1.3) |
-| Nominatim slot chain | — | Serializes outbound geocodes ≥1,100 ms apart (§1.5) |
+| Nominatim / Photon slot chains | — | Serialize outbound geocodes ≥1,100 ms apart, one chain per provider (§1.5) |
 
 ### 1.2 Data model (D1)
 
-SQLite, migrations `0001`–`0020`. Current shape:
+SQLite, migrations `0001`–`0022`. Current shape:
 
 ```sql
 regions ( id INTEGER PK, region_name TEXT UNIQUE, lat REAL, lng REAL )
@@ -169,7 +169,10 @@ alerts (
 crawl_state   ( source TEXT PK, last_id INTEGER, seen_ids TEXT, updated_at TEXT )
 ingest_attempts ( source TEXT, ref TEXT, attempts INTEGER, skipped_at TEXT, first_at TEXT, last_at TEXT, PK(source,ref) )
 ingest_health   ( cron TEXT PK, started_at TEXT, completed_at TEXT, last_duration_ms INTEGER )
-geocode_cache ( query TEXT PK, lat REAL, lng REAL, resolved_at TEXT )  -- NULL,NULL = cached miss
+source_health   ( source TEXT PK, first_run_at TEXT, run_at TEXT, outcome TEXT,   -- §3.8
+                  items INTEGER, detail TEXT, items_at TEXT )   -- items_at = last run whose parser found anything
+geocode_cache ( query TEXT PK, lat REAL, lng REAL, resolved_at TEXT,
+                provider TEXT )    -- NULL,NULL = cached miss; provider 'nominatim'|'photon', NULL = pre-0021 (nominatim)
 auth_tokens   ( token_hash TEXT PK, user_id, purpose, expires_at, used_at, created_at )
 refresh_tokens( token_hash TEXT PK, user_id, family_id, expires_at, used_at, created_at )
 ```
@@ -221,6 +224,8 @@ for the fan-out filter to examine.
 | 0018 | `ingest_attempts` — the pre-store attempt cap (§1.7) |
 | 0019 | `ingest_health` — the tick heartbeat (§3.8) |
 | 0020 | `street_ways` — stored street geometry, so the polygon builder never calls Overpass (§1.9) |
+| 0021 | `geocode_cache.provider` — which geocoder answered, so a cached Photon fallback still reads as one (§1.5) |
+| 0022 | `source_health` — what each source's parser found per run, for the source-silence check (§3.8) |
 
 **A street belongs to a settlement** (migration 0015). `streets` was Varna-only
 and `street_name` was globally `UNIQUE`, which cost two things. Every village
@@ -473,7 +478,7 @@ and field casing are locked in by `frontend/src/services/api.ts`. Note the split
 | `PUT /api/preferences/{category}` | JWT | `{isEnabled}` → 204; unknown category → 400 |
 | `GET /api/preferences/bus-lines` | JWT | `{available, selected}` |
 | `PUT /api/preferences/bus-lines` | JWT | `{busLines}` → 204; unknown line → 400 |
-| `GET /api/health` | `X-Api-Key` | Tick heartbeat, per-source cursor ages, and the messages the pre-store cap gave up on; `status` is `degraded` when a tick started without completing or a cursor has stalled 6 h (§3.8). Behind the ingest key: nothing personal, but nothing the public needs |
+| `GET /api/health` | `X-Api-Key` | Tick heartbeat, per-source cursor ages, the messages the pre-store cap gave up on, and per-source parser results with `silent_sources`; `status` is `degraded` when a tick started without completing, a cursor has stalled 6 h, or a source is silent past its quiet spell (§3.8). Behind the ingest key: nothing personal, but nothing the public needs |
 | `GET /privacy` | — | Bilingual privacy policy (§2.5) |
 
 `AlertDTO`: `{id, original_message:{title, content}, processed_data:{locations,
@@ -588,9 +593,11 @@ row said so** — a settlement-centroid fallback is byte-identical to a genuine
 city-centre location, so "how often are we guessing" could only be answered by a
 manual audit. This is the blind spot `polygon_failed` was invented to fix, one
 level down, and it takes the same shape: record *why* the coordinate is what it
-is. `resolveCoordinates` returns `seed` | `nominatim` | `settlement` | `none`
-beside the point, it rides inside `locations_json` so it needs no migration, and
-the review tool badges the fallback. Both settlement branches report
+is. `resolveCoordinates` returns `seed` | `nominatim` | `photon` | `settlement` |
+`none` beside the point, it rides inside `locations_json` so it needs no
+migration, and the review tool badges the fallbacks. `photon` is a geocoded
+answer from the fallback provider while Nominatim was down (below) — kept apart
+from `nominatim` so an outage-era pin stays findable. Both settlement branches report
 `settlement`, seeded or geocoded: what makes it a fallback is not where the
 number came from but what it describes — the centre of a settlement standing in
 for a place we lost, and a seeded city centroid is exactly as wrong for a lost
@@ -777,6 +784,43 @@ specific first (`suburb`, `neighbourhood`, `quarter`, `city_district`, `city`,
 `town`, `village`), because Nominatim labels the same place at several
 granularities and only some of them exist in our tables — returning one name
 meant central Varna matched nothing at all.
+
+**The forward fallback chain** (29.10.2026). `geocode` used to return null
+whenever Nominatim was unreachable, so every unseeded name looked up during an
+OSMF outage or a 429 was stored unlocated. The chain is now:
+
+1. **Seeded rows in D1** — unchanged and already first: a name that matches a
+   seeded region or street needs no network call at all (above).
+2. **Nominatim**, cached in `geocode_cache` (hits and misses).
+3. **Photon** (`PHOTON_URL`, `photon.komoot.io`), asked **only on a transient
+   Nominatim failure** — a network error, the 8 s timeout, a body that is not
+   JSON, 429 or 5xx. A Nominatim that answered "no such place" has answered;
+   asking a second index until one says yes is how a fuzzy match gets promoted
+   to a pin. Other 4xx and a refused throttle slot do not fall back either.
+   Photon gets the same `User-Agent`, its own ≥1,100 ms slot chain (its demo
+   server asks only for "reasonable" volume, and we ask only after a
+   Nominatim failure), `bbox` set to the Varna province (the seeded extent,
+   42.834–43.543 N × 27.122–28.065 E, padded ~5 km) and `countrycode=BG` —
+   and the answer is filtered to `countrycode` BG and through the same
+   non-place filter as Nominatim's (`osm_key`/`osm_value` are `class`/`type`).
+   The trailing `, България` is dropped from the query: the bbox already says
+   it, and Photon matches every term rather than parsing an address.
+4. **The seeded settlement centroid** — the existing last rung of
+   `resolveCoordinates`, reported as `coords_source: "settlement"`. With both
+   providers down an unseeded name still gets its settlement's pin, not none.
+
+Caching keeps its semantics: a Photon **hit** is cached with
+`provider = 'photon'` (migration 0021), so the next read still reports it; a
+Photon **miss** is not cached, because the primary never answered and the name
+is unresolved rather than unresolvable — caching it would keep Nominatim from
+being asked again for 180 days. Rows written before 0021 carry NULL and read as
+`nominatim`. Photon answers go through the same plausibility check (§2.5).
+
+Reverse geocoding has **no** fallback, deliberately: its answer is written to
+`region_id`/`street_id`, which are the targeting, and Photon labels address
+levels differently (`district`/`locality`). A mapping guessed without
+measurements could write a wrong region, and a failed lookup already leaves the
+stored one standing (`ok: false`, below).
 
 `ReverseAddress` carries an **`ok` flag separating "the lookup failed" from "this
 point matches nothing"**, which used to be the same empty result. `PUT
@@ -1125,9 +1169,39 @@ fills up:
 
 ### 1.8 Workers AI (`ingestion/ai.ts`)
 
-`env.AI.run(env.AI_MODEL, {messages, response_format:{type:"json_schema",
+`env.AI.run(model, {messages, response_format:{type:"json_schema",
 json_schema}, max_tokens: 10000})`, three attempts with linear backoff, `null` on
-any failure — the source then skips the message and retries next tick.
+any failure — the source then skips the message and retries next tick (and the
+pre-store strike counter, §1.7, counts it exactly as before).
+
+- **The attempts alternate models: `AI_MODEL`, `AI_FALLBACK_MODEL`, `AI_MODEL`**
+  (29.10.2026). All three used to go to the primary, and since 30.07.2026 qwen3
+  routinely runs past its 30 s cap — a retry on the same model inside the same
+  minute mostly timed out again, spending another 30 s of the tick deadline on
+  nothing (§3.8). The second attempt now runs on a different model on separate
+  capacity. The third goes **back** to the primary rather than staying on the
+  fallback: the fallback is the less proven extractor, and one that rejects the
+  schema outright (5024/5025, as both other Phase 0 candidates did on every call)
+  must cost one quick attempt, not two of the primary's three. Any failure moves
+  on — timeout, binding error, unparseable JSON or a zod mismatch. Unset, empty
+  or equal to `AI_MODEL`, every attempt is `AI_MODEL` as before.
+  Every successful parse logs its model (`[ai] parsed by … (FALLBACK model)`),
+  so a fallback parse is findable in the tail; it is not persisted on the alert.
+- **Fallback model: `@cf/google/gemma-4-26b-a4b-it`**, a `vars` entry like the
+  primary. Chosen from the live catalog (29.10.2026) as: a different family on
+  separate capacity; slightly smaller (26B total, 4B active, MoE); multilingual
+  (pre-trained on 140+ languages, Bulgarian among them); accepts the same
+  `messages` + `response_format` input (Mistral Small 3.1 takes `guided_json`
+  instead, and Granite 4.0 Micro lists no Bulgarian); cheaper output tokens
+  than qwen3 ($0.30 vs $0.335 per M). The Llama family is out on Phase 0's
+  evidence (5025, and 5024 on nullable unions). **Unvalidated:** Cloudflare's
+  JSON-mode page does not list it (nor qwen3, which works), so whether its
+  decoder handles `["string","null"]` is unknown until `spikes/ai-eval` runs
+  it — it is in the harness's candidate list for that. Until then the design
+  bounds the risk: one attempt in three, and **the deterministic guards
+  (`normalize.ts`, §1.7) apply to its output exactly as to the primary's** —
+  they are decided from the source text, never from which model spoke
+  (`test/ai.spec.ts` drives an invented district through A10).
 
 - **Model: `@cf/qwen/qwen3-30b-a3b-fp8`**, a `vars` entry so it can be swapped
   without a code change. It was the only Phase 0 candidate that both supports
@@ -1140,7 +1214,7 @@ any failure — the source then skips the message and retries next tick.
   model and at the default 2,000 it burns the budget thinking and returns no
   JSON. Spike 2 sized this at 8,000; raised to 10,000 on 31.07.2026 so a long
   message with many locations cannot get truncated mid-JSON.
-- The AI binding accepts no `AbortSignal`, so each run is wrapped in a **30 s**
+- The AI binding accepts no `AbortSignal`, so each run (on either model) is wrapped in a **30 s**
   timeout (legitimate parses clock 4–21 s), bounded further by the remaining tick
   deadline. Starting an inference that cannot be waited out only burns neurons.
 - Zod schemas mirror the original Pydantic models, including fields hidden from
@@ -1155,8 +1229,8 @@ any failure — the source then skips the message and retries next tick.
   constrained decoder handles the *constructs* it uses (`["string","null"]`, an
   array of `string`, a `boolean`) — not that the bytes are load-bearing. A change
   that adds no new construct is re-validated by `spikes/ai-eval/run-eval.mjs`,
-  which imports the production prompt and schema directly: **3 runs × 3 candidate
-  models, compared per case id** (the key format changes with the shape, so
+  which imports the production prompt and schema directly: **3 runs × each
+  candidate model (both production models among them), compared per case id** (the key format changes with the shape, so
   matching pass *totals* can hide two cases swapping), reporting worst-of-3 and
   gating on "no case green in the baseline may regress". Three runs minimum
   because qwen3 deviates on roughly one run in five (§1.7's A3).
@@ -1472,7 +1546,8 @@ Live operational risks worth keeping in view:
   alarm. A source that returns 200 and nothing useful is the failure mode to
   watch for (§3.8).
 - **Shared free services.** Nominatim rate-limits and sheds load; it is treated
-  as best-effort and degrades to "no pin". Overpass was the other one until it
+  as best-effort, falls back to Photon on a transient failure for forward
+  lookups, and past that degrades to the settlement centroid or "no pin" (§1.5). Overpass was the other one until it
   took polygons down for two months (§1.9); it is no longer called at runtime,
   only by the seed sweep on a developer machine.
 - **Cron schedule drift.** The Cloudflare schedules API has reported schedules
@@ -1510,6 +1585,7 @@ Location is the sensitive item and is collected only through the explicit
 | **OneSignal** (US) | `user_id` as external id, device push registration, notification content | Accept OneSignal's **DPA**, record its transfer mechanism (DPF or SCCs), list it in the policy. Never receives location, email or preferences |
 | **Google / Firebase (FCM)** | The Android delivery channel beneath OneSignal | Accept Google's **Data Processing Terms** in the Firebase console; list Google as a processor |
 | **OSM Foundation (Nominatim)** | ⚠️ The user's **precise coordinates** on `PUT /api/auth/location`, and street names during ingest | No DPA exists. Handled by: explicit disclosure and consent in the location flow; requests carrying no user identifier and originating from Cloudflare's IP, not the user's; a link to OSMF's privacy policy. **Documented decision: keep Nominatim and disclose.** A fully clean alternative is self-hosting or a commercial EU geocoder with a DPA |
+| **komoot (Photon)** — forward-geocode fallback only (§1.5) | Place and street names from public alert texts, and only while Nominatim is failing. Never user coordinates: reverse geocoding has no fallback | No personal data; fair-use compliance only (descriptive User-Agent, ≥1.1 s spacing, cached hits) |
 | **Overpass** (seed sweep only, from a developer machine) | Nothing from this service — it is asked for OSM street geometry when the seed is rebuilt, never by the Worker (§1.9) | No personal data; fair-use compliance only |
 | **Mail provider** | Recipient address + message body | **None engaged** — delivery is mocked (§1.13). Before those flows go live: accept the DPA, confirm the processing location, add it to `/privacy` *and* compliance.md, and widen the Play Data Safety purpose for email to include Account management |
 
@@ -1587,7 +1663,9 @@ compliance.md §2–3, as Art. 5(2) accountability expects.
   grows, move to a provider with a free tier (Carto, Stadia, MapTiler) rather than
   hammering osm.org.
 - **Nominatim usage policy:** ≤1 req/s, descriptive User-Agent, caching — all
-  satisfied structurally by §1.5. Keep it that way.
+  satisfied structurally by §1.5. Keep it that way. The Photon fallback is held
+  to the same shape (same User-Agent, its own ≥1.1 s chain, cached hits), and is
+  OSM data too, so the existing attribution covers it.
 - **Scraped sources:** short factual public-safety announcements from official
   operators. Facts are not copyrightable, volumes are trivial, and the EU DSM
   Art. 4 text-and-data-mining exception covers automated extraction; full
@@ -1826,8 +1904,8 @@ DNS rebinding.
   signature, and it is a `SELECT` rather than a 15-minute `wrangler tail` vigil —
   which matters more than usual here, given historical logs are not queryable at
   all (below). `GET /api/health` (ingest key) returns it alongside every cursor's
-  age and the messages the pre-store cap gave up on; hang an external uptime ping
-  off it to be told rather than to look.
+  age, the messages the pre-store cap gave up on and the silent sources (below);
+  hang an external uptime ping off it to be told rather than to look.
 - **The signature of a stalled ingest** is a `crawl_state.updated_at` that has not
   moved while the source has published ids above the cursor. Two queries settle
   it: `SELECT source, last_id, updated_at FROM crawl_state`, then fetch
@@ -1867,6 +1945,37 @@ DNS rebinding.
   Both source-side ingestion outages so far (epro's contract change, ViK's
   region-scoped listing) looked healthy in the logs. Periodically compare what the
   app shows against the source websites.
+  **The tick now watches for the parser half of it** (29.10.2026, migration
+  0022, `ingestion/silence.ts`). Every source run returns what its parser found
+  — `items` (with a count), `empty`, `parse_error` or `fetch_error`, the first
+  failure winning — and the runner upserts it into `source_health` straight
+  after that source, so a later source's CPU kill cannot lose it. `items_at`
+  moves only on an `items` run. A source is **silent** once
+  `now − (items_at ?? first_run_at)` exceeds its quiet spell; judged from
+  timestamps, so a source whose every run is killed (the 13.08 heating shape)
+  still turns silent. Silence is logged as `Source '<name>' has found NOTHING
+  for N h` on each run past the limit, and `GET /api/health` returns
+  `silent_sources` (empty = healthy — **the field for an uptime checker**:
+  `status` also folds in the 6 h cursor check, which heating and vt trip on an
+  ordinary quiet week) plus a `source_runs` row per source. Failures past the
+  parser — AI, store, push — are not the source's and do not count; a run that
+  threw or never looked (unreadable cursor) records nothing.
+  What counts as an item decides the threshold more than how often a source
+  publishes, so the spells differ. **Recorded as ranges** (working-practices);
+  the value sits at the end that cries wolf less:
+
+  | Source | An item is | Evidence | Works across | Chosen |
+  |---|---|---|---|---|
+  | `heating` | a message link on the listing — an archive, never legitimately empty | 15 links in the captured listing; polled every 4 h; the 13.08 outage ran 18 days | 8–48 h (2–12 polls) | **24 h** |
+  | `epro` | an entry in the region's active / next-48 h lists, which carry planned cuts days ahead | 93 alerts in 02–08.08.2026 (~13/day) | 12–48 h | **24 h** |
+  | `vik` | a **newly published** message the id probe parsed (the probe never sees old ones) | 36 alerts in 02–08.08.2026 (~5/day); night and weekend gaps unmeasured | 24–72 h | **48 h** |
+  | `vt` | an accordion entry | 5 in the captured page; whether the page is ever legitimately empty is unmeasured | 48 h–7 d | **72 h** — a conservative default, not a measurement |
+
+  ViK is the weak one: its parser seeing nothing new is also its normal idle
+  tick, so a broken message layout surfaces only after 48 h — and meanwhile the
+  6 h `stepOverDeadIds` escape hatch may jump the cursor past ids it cannot
+  parse. Re-measure the vik and vt spells from `source_health` once a few
+  weeks of rows exist.
 - **A tick's wall time is now the number to watch, not its CPU.** Since 30.07.2026
   `AI.run` frequently exceeds its 30 s cap (§1.8) — 6 timeouts against 8 ingested
   messages over three ticks — and retries are serial, so a tick reached 175.9 s of

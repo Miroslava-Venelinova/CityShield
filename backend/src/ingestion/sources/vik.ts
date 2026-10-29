@@ -8,12 +8,13 @@
 
 import type { Env } from "../../env";
 import { vikParseMessage, vikParsePage } from "../scrape";
+import type { SourceObservation } from "../silence";
 import { crawlIdProbe } from "./id-probe";
 
 const VIK_URL_PATTERN = /(\d+)\.html/;
 
-export async function run(env: Env, deadline: number): Promise<void> {
-  await crawlIdProbe(env, deadline, {
+export async function run(env: Env, deadline: number): Promise<SourceObservation | null> {
+  return crawlIdProbe(env, deadline, {
     tag: "VIK",
     category: "vik",
     // Bare <id>.html. The query parameters the listing hangs off its links

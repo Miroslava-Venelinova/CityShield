@@ -113,4 +113,18 @@ describe("vt route changes", () => {
     const row = await env.DB.prepare("SELECT * FROM alerts").first();
     expect(row).toBeNull();
   });
+
+  // Source silence (silence.ts): what the run reports. The accordion's entries
+  // count whether or not they are new; a page without the accordion is the
+  // layout-change signature.
+  it("reports the accordion's entries, or a parse error when the accordion is gone", async () => {
+    mockPage();
+    mockAI({ bus_lines: null, schedule: { from_date: null, to_date: null, windows: [] } });
+    expect(await run(env, Date.now() + 30_000)).toMatchObject({ outcome: "items" });
+
+    fetchMock.get("https://www.varnatraffic.com")
+      .intercept({ path: /.*/, method: "GET" })
+      .reply(200, "<html><body>Redesigned</body></html>", { headers: { "Content-Type": "text/html" } });
+    expect(await run(env, Date.now() + 30_000)).toMatchObject({ outcome: "parse_error" });
+  });
 });

@@ -19,10 +19,16 @@
 // result, not a status code, and the walk simply stops after
 // MAX_CONSECUTIVE_MISSES of them. Holes below a message need no handling: a
 // success writes the cursor to that id, stepping over anything dead beneath it.
+//
+// Returns what the parser found (silence.ts): how many probed ids held a
+// message. Unlike a listing this sees only what is NEW, so an `empty` run is the
+// normal idle tick and silence is judged against ViK's publishing rate — and a
+// message page whose layout changed reads as exactly that, every tick.
 
 import type { Env } from "../../env";
 import { processOutageMessage } from "../pipeline";
 import { fetchPage, readCapped, resolveSameHost } from "../scrape";
+import { found, type SourceObservation } from "../silence";
 import {
   claimAttempt, getLastId, getLastIdUpdatedAt, hasStateRow, MAX_PRE_STORE_ATTEMPTS,
   recordSkip, releaseAttempts, writeLastId,
@@ -69,7 +75,9 @@ export interface IdProbeOptions {
   processImpl?: (env: Env, tag: string, category: string, title: string, content: string, msgRef: string, deadline?: number) => Promise<boolean>;
 }
 
-export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOptions): Promise<void> {
+export async function crawlIdProbe(
+  env: Env, deadline: number, opts: IdProbeOptions,
+): Promise<SourceObservation | null> {
   const { tag, category } = opts;
   const fetchImpl = opts.fetchImpl ?? fetchPage;
   const processImpl = opts.processImpl ?? processOutageMessage;
@@ -79,32 +87,35 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
     // Treating an unreadable cursor as 0 would walk the id space from the
     // beginning, re-ingesting — and re-notifying — years of messages.
     console.error(`[${tag}] Could not read the stored cursor. Skipping this tick.`);
-    return;
+    return null;
   }
 
   // First run ever: seed the cursor at the newest published id without
   // processing. Probing forward from 0 would otherwise crawl the entire
   // history, and there is no listing link to bound it.
   if (cursor === 0 && !(await hasStateRow(env, category))) {
-    const ids = await listedIds(env, deadline, opts, fetchImpl);
-    if (ids === null || ids.length === 0) {
+    const listed = await listedIds(env, deadline, opts, fetchImpl);
+    if ("failed" in listed || listed.ids.length === 0) {
       console.error(`[${tag}] First run — could not read the listing to seed the cursor. Retrying next tick.`);
-      return;
+      return "failed" in listed ? listed.failed : found(0);
     }
-    const newest = Math.max(...ids);
+    const newest = Math.max(...listed.ids);
     console.log(`[${tag}] First run — seeding cursor at ${newest} without processing history.`);
     await writeLastId(env, category, newest);
-    return;
+    return found(listed.ids.length);
   }
 
   let id = cursor + 1;
   let misses = 0;
   let processed = 0;
+  // Probed ids that held a message, whatever became of it afterwards.
+  let messages = 0;
+  let probed = 0;
 
   while (processed < MAX_MESSAGES_PER_TICK && misses < MAX_CONSECUTIVE_MISSES) {
     if (Date.now() >= deadline) {
       console.warn(`[${tag}] Deadline reached; id=${id} waits for the next tick.`);
-      return;
+      return probed > 0 ? found(messages) : null;
     }
 
     let html: string;
@@ -117,8 +128,9 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
       // an attempt either: the claim below sits after the fetch so transient
       // network trouble cannot spend a message's strikes.
       console.error(`[${tag}] Failed to fetch message (id=${id}): ${e}. Stopping.`);
-      return;
+      return messages > 0 ? found(messages) : { outcome: "fetch_error", detail: `message id=${id}: ${e}` };
     }
+    probed++;
 
     // Claim the attempt BEFORE the parse-and-process, and after the fetch. The
     // ordering is the whole point: whatever kills an isolate mid-message does
@@ -152,6 +164,7 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
       continue;
     }
     misses = 0;
+    messages++;
 
     let submitted = false;
     try {
@@ -164,7 +177,8 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
       console.warn(
         `[${tag}] Stopping at id=${id}; it will be retried next run ` +
         `(attempt ${attempts}/${MAX_PRE_STORE_ATTEMPTS}).`);
-      return;
+      // The page parsed; what failed is downstream (AI, store, push).
+      return found(messages);
     }
     await releaseAttempts(env, category, String(id));
 
@@ -180,8 +194,10 @@ export async function crawlIdProbe(env: Env, deadline: number, opts: IdProbeOpti
   // always that just means no new messages; rarely it means a hole too wide to
   // probe across, which would wedge the source permanently.
   if (processed === 0 && misses >= MAX_CONSECUTIVE_MISSES) {
-    await stepOverDeadIds(env, deadline, opts, cursor, fetchImpl);
+    // A listing it could not read is the more specific thing to report.
+    return (await stepOverDeadIds(env, deadline, opts, cursor, fetchImpl)) ?? found(messages);
   }
+  return found(messages);
 }
 
 /**
@@ -204,51 +220,53 @@ async function stepOverDeadIds(
   opts: IdProbeOptions,
   cursor: number,
   fetchImpl: NonNullable<IdProbeOptions["fetchImpl"]>,
-): Promise<void> {
+): Promise<SourceObservation | null> {
   const { tag, category } = opts;
 
   const updatedAt = await getLastIdUpdatedAt(env, category);
-  if (updatedAt === null) return;
+  if (updatedAt === null) return null;
   const age = Date.now() - Date.parse(updatedAt);
-  if (!Number.isFinite(age) || age < STALE_CURSOR_MS) return;
+  if (!Number.isFinite(age) || age < STALE_CURSOR_MS) return null;
 
-  const ids = await listedIds(env, deadline, opts, fetchImpl);
-  if (ids === null) return;
+  const listed = await listedIds(env, deadline, opts, fetchImpl);
+  if ("failed" in listed) return listed.failed;
+  const ids = listed.ids;
 
   // Oldest id the listing knows about that we have not passed yet.
   const above = ids.filter((candidate) => candidate > cursor);
-  if (above.length === 0) return;
+  if (above.length === 0) return null;
   const target = Math.min(...above);
 
   // Inside the window we just probed, so it is not a hole — the id was
   // unreadable for some other reason, and jumping would skip a real message.
-  if (target <= cursor + MAX_CONSECUTIVE_MISSES) return;
+  if (target <= cursor + MAX_CONSECUTIVE_MISSES) return null;
 
   console.warn(
     `[${tag}] Cursor stuck at ${cursor} for ${Math.round(age / 3600_000)} h with ids ` +
     `${cursor + 1}–${cursor + MAX_CONSECUTIVE_MISSES} empty; stepping over to ${target}.`);
   await writeLastId(env, category, target - 1);
+  return null;
 }
 
-/** Every numeric id on the listing page, or null when it could not be read. */
+/** Every numeric id on the listing page, or why it could not be read. */
 async function listedIds(
   env: Env,
   deadline: number,
   opts: IdProbeOptions,
   fetchImpl: NonNullable<IdProbeOptions["fetchImpl"]>,
-): Promise<number[] | null> {
+): Promise<{ ids: number[] } | { failed: SourceObservation }> {
   let html: string;
   try {
     html = await readCapped(await fetchImpl(opts.listingUrl, undefined, deadline));
   } catch (e) {
     console.error(`[${opts.tag}] Failed to fetch listing page: ${e}.`);
-    return null;
+    return { failed: { outcome: "fetch_error", detail: `listing: ${e}` } };
   }
 
   const urls = opts.parsePage(html);
   if (urls === null) {
     console.error(`[${opts.tag}] Could not parse message URLs from the listing page.`);
-    return null;
+    return { failed: { outcome: "parse_error", detail: "listing: no message links recognised" } };
   }
 
   const ids: number[] = [];
@@ -265,5 +283,5 @@ async function listedIds(
     const match = opts.idPattern.exec(target);
     if (match) ids.push(Number(match[1]));
   }
-  return ids;
+  return { ids };
 }

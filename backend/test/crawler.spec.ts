@@ -176,6 +176,45 @@ describe("crawlIdListing cursor semantics", () => {
     expect(processedIds).toEqual([1053]);
     expect(await getLastId(env, "vik")).toBe(1053);
   });
+
+  // What the run reports for source silence (silence.ts). A layout change makes
+  // the listing parse to nothing, which used to read exactly like a quiet day.
+  describe("reports what its parsers found", () => {
+    it("counts every link on the listing, not only the new ones", async () => {
+      await writeLastId(env, "vik", 1053);
+      const { opts } = makeOpts(listing([1053, 1052, 1051]), {});
+      expect(await crawlIdListing(env, deadline(), opts)).toEqual({ outcome: "items", items: 3 });
+    });
+
+    it("an empty listing is `empty`, an unrecognised one a parse error", async () => {
+      await writeLastId(env, "vik", 1053);
+      const empty = makeOpts([], {});
+      expect(await crawlIdListing(env, deadline(), empty.opts)).toEqual({ outcome: "empty" });
+
+      const broken = makeOpts([], {});
+      broken.opts.parsePage = () => null;
+      expect(await crawlIdListing(env, deadline(), broken.opts))
+        .toMatchObject({ outcome: "parse_error" });
+    });
+
+    it("a message page the parser no longer recognises is a parse error", async () => {
+      await writeLastId(env, "vik", 1050);
+      const { opts } = makeOpts(listing([1051]), {});
+      opts.parseMessage = async () => null;
+      expect(await crawlIdListing(env, deadline(), opts))
+        .toEqual({ outcome: "parse_error", detail: "message id=1051: content not recognised" });
+    });
+
+    it("an unreachable listing is a fetch error; a failed AI/store is not the source's", async () => {
+      await writeLastId(env, "vik", 1050);
+      const down = makeOpts(listing([1051]), {});
+      down.opts.fetchImpl = async () => { throw new Error("HTTP 503"); };
+      expect(await crawlIdListing(env, deadline(), down.opts)).toMatchObject({ outcome: "fetch_error" });
+
+      const aiDown = makeOpts(listing([1051]), { 1051: false });
+      expect(await crawlIdListing(env, deadline(), aiDown.opts)).toEqual({ outcome: "items", items: 1 });
+    });
+  });
 });
 
 describe("crawlIdProbe cursor semantics", () => {
@@ -363,6 +402,49 @@ describe("crawlIdProbe cursor semantics", () => {
     const { opts } = makeOpts([], { listed: [1040, 1030] });
     await crawlIdProbe(env, deadline(), opts);
     expect(await getLastId(env, CATEGORY)).toBe(1050);
+  });
+
+  // The probe sees only NEW messages, so `empty` is its ordinary idle tick —
+  // and also exactly what a changed message layout produces, every tick. The
+  // per-source quiet spell (silence.ts) is what tells the two apart.
+  describe("reports what its parser found", () => {
+    it("counts the probed ids that held a message", async () => {
+      await writeLastId(env, CATEGORY, 1050);
+      const { opts } = makeOpts([1051, 1052]);
+      expect(await crawlIdProbe(env, deadline(), opts)).toEqual({ outcome: "items", items: 2 });
+    });
+
+    it("counts a message even when its processing failed", async () => {
+      await writeLastId(env, CATEGORY, 1050);
+      const { opts } = makeOpts([1051], { outcomes: { 1051: false } });
+      expect(await crawlIdProbe(env, deadline(), opts)).toEqual({ outcome: "items", items: 1 });
+    });
+
+    it("a walk of empty ids is `empty`", async () => {
+      await writeLastId(env, CATEGORY, 1050);
+      const { opts } = makeOpts([]);
+      expect(await crawlIdProbe(env, deadline(), opts)).toEqual({ outcome: "empty" });
+    });
+
+    it("a failed fetch is a fetch error, not a quiet tick", async () => {
+      await writeLastId(env, CATEGORY, 1050);
+      const { opts } = makeOpts([1051], { failing: [1051] });
+      expect(await crawlIdProbe(env, deadline(), opts)).toMatchObject({ outcome: "fetch_error" });
+    });
+
+    it("a stale cursor whose listing no longer parses reports the parse error", async () => {
+      await writeLastId(env, CATEGORY, 1050);
+      await ageCursor(STALE_CURSOR_MS + 60_000);
+      const { opts } = makeOpts([]);
+      opts.parsePage = () => null;
+      expect(await crawlIdProbe(env, deadline(), opts)).toMatchObject({ outcome: "parse_error" });
+    });
+
+    it("reports nothing when it never got to look", async () => {
+      await writeLastId(env, CATEGORY, 1050);
+      const { opts } = makeOpts([1051]);
+      expect(await crawlIdProbe(env, Date.now() - 1, opts)).toBeNull();
+    });
   });
 });
 

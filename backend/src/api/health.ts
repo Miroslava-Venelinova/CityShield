@@ -16,9 +16,19 @@
 //   2. a cursor that has not moved in hours → the source is wedged, or quiet.
 //   3. skipped messages → the pre-store attempt cap gave up on something and a
 //      human should know which (migration 0018).
+//   4. a SILENT source → its parser has found nothing for longer than that
+//      source's normal quiet spell, which is what a layout change on the site
+//      looks like (migration 0022, ingestion/silence.ts).
+//
+// For an external uptime checker, `silent_sources` is the field to watch: an
+// empty array is healthy. `status` also folds in the 6 h cursor check, which
+// heating and vt trip on any ordinary quiet week.
 
 import { Hono } from "hono";
-import { getCrawlStateRows, getIngestHealth, getSkippedIngests } from "../db/queries";
+import {
+  getCrawlStateRows, getIngestHealth, getSkippedIngests, getSourceHealthRows,
+} from "../db/queries";
+import { assessSilence } from "../ingestion/silence";
 import type { AppEnv } from "./middleware";
 
 export const healthRoutes = new Hono<AppEnv>();
@@ -36,10 +46,11 @@ const hoursSince = (iso: string | null): number | null => {
 };
 
 healthRoutes.get("/", async (c) => {
-  const [health, cursors, skipped] = await Promise.all([
+  const [health, cursors, skipped, runs] = await Promise.all([
     getIngestHealth(c.env),
     getCrawlStateRows(c.env),
     getSkippedIngests(c.env, SKIPPED_LIMIT),
+    getSourceHealthRows(c.env),
   ]);
 
   const ticks = health.map((row) => ({
@@ -68,14 +79,32 @@ healthRoutes.get("/", async (c) => {
     stalled: Date.now() - Date.parse(row.updated_at) > CURSOR_STALL_MS,
   }));
 
+  // Judged here from timestamps, not read from a flag the tick wrote: a source
+  // whose every run is killed never writes again, and must still turn silent.
+  const sourceRuns = runs.map((row) => ({
+    source: row.source,
+    last_run_at: row.run_at,
+    last_outcome: row.outcome,
+    last_items: row.items,
+    last_detail: row.detail,
+    items_found_at: row.items_at,
+    ...assessSilence(row),
+  }));
+  const silentSources = sourceRuns.filter((s) => s.silent).map((s) => s.source);
+
   const degraded = ticks.some((t) => t.started_but_never_completed)
-    || sources.some((s) => s.stalled);
+    || sources.some((s) => s.stalled)
+    || silentSources.length > 0;
 
   return c.json({
     status: degraded ? "degraded" : "ok",
     checked_at: new Date().toISOString(),
+    // The layout-change alarm. Empty when every source's parser has found
+    // something within its quiet spell.
+    silent_sources: silentSources,
     ticks,
     sources,
+    source_runs: sourceRuns,
     // Messages the pre-store cap gave up on: deliberately not delivered, and
     // the one thing here that no other signal would ever surface.
     skipped_messages: skipped.map((row) => ({

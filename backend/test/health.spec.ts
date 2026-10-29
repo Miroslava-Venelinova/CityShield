@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   getIngestHealth, markTickCompleted, markTickStarted,
 } from "../src/db/queries";
+import { found, recordObservation } from "../src/ingestion/silence";
 import { claimAttempt, recordSkip, writeLastId } from "../src/ingestion/state";
 import { api } from "./helpers";
 
@@ -79,6 +80,39 @@ describe("tick heartbeat", () => {
     expect(body.skipped_messages).toEqual([
       expect.objectContaining({ source: "vik", ref: "17373", attempts: 1 }),
     ]);
+  });
+
+  // A layout change makes a parser find nothing, which looked exactly like a
+  // quiet day — epro's API change and the ~18-day heating outage were both found
+  // by a person. A source silent past its own quiet spell now says so here,
+  // where an uptime checker can see it.
+  it("lists a source silent past its quiet spell, and only that one", async () => {
+    await env.DB.prepare("DELETE FROM source_health").run();
+    await recordObservation(env, "heating", found(15));
+    await recordObservation(env, "epro", found(4));
+    // heating's parser last found anything 30 h ago (quiet spell: 24 h)...
+    await env.DB.prepare("UPDATE source_health SET items_at = ? WHERE source = 'heating'")
+      .bind(new Date(Date.now() - 30 * 3600 * 1000).toISOString()).run();
+    await recordObservation(env, "heating", { outcome: "parse_error", detail: "listing: no message links recognised" });
+
+    const body = await (await api("/api/health", withKey())).json() as any;
+    expect(body.silent_sources).toEqual(["heating"]);
+    expect(body.status).toBe("degraded");
+    const heating = body.source_runs.find((s: any) => s.source === "heating");
+    expect(heating).toMatchObject({
+      silent: true, quiet_limit_hours: 24, last_outcome: "parse_error",
+      last_detail: "listing: no message links recognised",
+    });
+    expect(heating.hours_without_items).toBeGreaterThan(29);
+    expect(body.source_runs.find((s: any) => s.source === "epro").silent).toBe(false);
+  });
+
+  it("reports no silent sources when every parser found something recently", async () => {
+    await env.DB.prepare("DELETE FROM source_health").run();
+    await recordObservation(env, "vik", found(1));
+    const body = await (await api("/api/health", withKey())).json() as any;
+    expect(body.silent_sources).toEqual([]);
+    expect(body.status).toBe("ok");
   });
 
   it("is not public", async () => {

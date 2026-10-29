@@ -28,6 +28,9 @@ const CANDIDATES = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   "@cf/meta/llama-3.1-8b-instruct-fp8",
   "@cf/qwen/qwen3-30b-a3b-fp8",
+  // AI_FALLBACK_MODEL since 29.10.2026 (docs/specification.md §1.8) — chosen
+  // from the catalog, not yet graded here. Run it before trusting it.
+  "@cf/google/gemma-4-26b-a4b-it",
 ];
 
 const KINDS = {

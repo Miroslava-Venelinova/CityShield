@@ -1,6 +1,7 @@
 // All D1 SQL in one place (docs/specification.md §1.1 — no ORM). Timestamps are
 // new Date().toISOString() strings, which sort correctly lexicographically.
 
+import type { GeocodeProvider } from "../core/geocoding";
 import type { Env } from "../env";
 
 export interface UserRow {
@@ -654,6 +655,48 @@ export async function getIngestHealth(env: Env): Promise<IngestHealthRow[]> {
   return results;
 }
 
+// ── Source silence (migration 0022; ingestion/silence.ts) ───────────────────
+
+export interface SourceHealthRow {
+  source: string;
+  first_run_at: string;
+  run_at: string;
+  outcome: string;
+  items: number | null;
+  detail: string | null;
+  items_at: string | null;
+}
+
+/**
+ * Record what one run of a source's parser found, and return the row as it now
+ * stands — one statement, so the caller can judge silence without a second read.
+ * `items_at` only ever moves forward on an `items` run; every other outcome
+ * leaves it where it was, which is what lets the silence clock run.
+ */
+export async function recordSourceRun(
+  env: Env, source: string, outcome: string, items: number | null, detail: string | null,
+): Promise<SourceHealthRow | null> {
+  const now = nowIso();
+  return env.DB.prepare(
+    `INSERT INTO source_health (source, first_run_at, run_at, outcome, items, detail, items_at)
+     VALUES (?1, ?2, ?2, ?3, ?4, ?5, CASE WHEN ?3 = 'items' THEN ?2 END)
+     ON CONFLICT(source) DO UPDATE SET
+       run_at   = excluded.run_at,
+       outcome  = excluded.outcome,
+       items    = excluded.items,
+       detail   = excluded.detail,
+       items_at = COALESCE(excluded.items_at, source_health.items_at)
+     RETURNING *`,
+  ).bind(source, now, outcome, items, detail).first<SourceHealthRow>();
+}
+
+export async function getSourceHealthRows(env: Env): Promise<SourceHealthRow[]> {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM source_health ORDER BY source",
+  ).all<SourceHealthRow>();
+  return results;
+}
+
 /** Every source's cursor and when it last moved — the other half of the health view. */
 export async function getCrawlStateRows(
   env: Env,
@@ -815,22 +858,24 @@ export async function deleteUserRefreshTokens(env: Env, userId: string): Promise
 /**
  * A cached forward geocode: undefined when the query was never looked up, a row
  * with NULL coordinates when it was and Nominatim had no answer (misses are
- * cached too).
+ * cached too). `provider` is which geocoder answered (migration 0021); NULL on
+ * rows written before it, all of which came from Nominatim.
  */
 export async function getCachedGeocode(
   env: Env, query: string,
-): Promise<{ lat: number | null; lng: number | null } | undefined> {
-  const row = await env.DB.prepare("SELECT lat, lng FROM geocode_cache WHERE query = ?")
-    .bind(query).first<{ lat: number | null; lng: number | null }>();
+): Promise<{ lat: number | null; lng: number | null; provider: GeocodeProvider | null } | undefined> {
+  const row = await env.DB.prepare("SELECT lat, lng, provider FROM geocode_cache WHERE query = ?")
+    .bind(query).first<{ lat: number | null; lng: number | null; provider: GeocodeProvider | null }>();
   return row ?? undefined;
 }
 
 export async function putCachedGeocode(
-  env: Env, query: string, point: { lat: number; lng: number } | null,
+  env: Env, query: string, point: { lat: number; lng: number } | null, provider: GeocodeProvider,
 ): Promise<void> {
   await env.DB.prepare(
-    "INSERT OR REPLACE INTO geocode_cache (query, lat, lng, resolved_at) VALUES (?, ?, ?, ?)",
-  ).bind(query, point?.lat ?? null, point?.lng ?? null, nowIso()).run();
+    `INSERT OR REPLACE INTO geocode_cache (query, lat, lng, resolved_at, provider)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).bind(query, point?.lat ?? null, point?.lng ?? null, nowIso(), provider).run();
 }
 
 // ── Retention (daily cleanup cron, §1.10) ───────────────────────────────────

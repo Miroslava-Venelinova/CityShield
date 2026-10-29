@@ -52,6 +52,12 @@
     // Spike 2 verdict (spikes/RESULTS.md): qwen3-30b is the only candidate that passes
     // JSON-schema mode on our nullable-union schemas, and the cheapest. Needs a generous max_tokens (10k).
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    // The second of three attempts after AI_MODEL fails or times out (§1.8,
+    // ingestion/ai.ts). Gemma 4 26B-A4B: a different family on separate
+    // capacity, slightly smaller (26B total), multilingual, takes the same
+    // `response_format` json_schema parameter. NOT yet run through
+    // spikes/ai-eval — do that before trusting it; remove this line to disable.
+    "AI_FALLBACK_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     // region_id=0 is the whole municipality; region_id=15 was the city of Varna
     // alone. Only used to seed the cursor on a fresh DB — the crawl itself walks
     // ids off VIK_MESSAGE_BASE_URL.
@@ -67,6 +73,9 @@
     "HEATING_BASE_URL": "https://energy-varna.bg",
     "HEATING_URL": "https://energy-varna.bg/bg/съобщения-за-аварии-0",
     "NOMINATIM_URL": "https://nominatim.openstreetmap.org",
+    // Forward-geocode fallback, asked only when Nominatim fails transiently
+    // (§1.5). Base URL; the client appends /api/. Remove to disable.
+    "PHOTON_URL": "https://photon.komoot.io",
     "JWT_ISSUER": "CityShield",
     "JWT_AUDIENCE": "CityShield Users",
     "JWT_EXPIRE_MINUTES": "60",

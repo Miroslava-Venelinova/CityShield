@@ -60,6 +60,8 @@ export interface AlertLocationDTO {
    *
    *   `seed`       a seeded region/street centroid — deterministic, ours
    *   `nominatim`  an external lookup that answered, and passed `plausible`
+   *   `photon`     the same, from the Photon fallback because Nominatim was
+   *                down (§1.5) — kept apart so an outage-era pin stays findable
    *   `settlement` NOTHING specific resolved; this is the settlement centroid,
    *                which is a coarse pin standing in for a place we lost
    *   `none`       no coordinate at all
@@ -69,7 +71,7 @@ export interface AlertLocationDTO {
    * that currently miss would remove most of today's fallbacks but not the
    * class — the next unseeded name falls back just as silently.
    */
-  coords_source?: "seed" | "nominatim" | "settlement" | "none";
+  coords_source?: "seed" | "nominatim" | "photon" | "settlement" | "none";
 }
 
 export type Json = Record<string, unknown>;

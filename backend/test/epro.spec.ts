@@ -5,7 +5,7 @@
 
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { fetchVarnaEntries, type FetchImpl } from "../src/ingestion/sources/epro";
+import { fetchVarnaEntries, run, type FetchImpl } from "../src/ingestion/sources/epro";
 
 const jsonResponse = (body: unknown): Response =>
   new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
@@ -69,5 +69,33 @@ describe("epro fetchVarnaEntries (new region_id + type contract)", () => {
     const fetchImpl: FetchImpl = async () => jsonResponse({ error: "nope" });
     // Both types return a bad shape → no region matched → null.
     expect(await fetchVarnaEntries(env, Date.now() + 5000, fetchImpl)).toBeNull();
+  });
+});
+
+// What run() reports for source silence (silence.ts). The pre-26.07.2026
+// contract change is the case this exists for: every bucket came back empty, the
+// logs looked healthy, and epro delivered nothing until someone noticed.
+describe("epro run() reports what its parser found", () => {
+  const deadline = () => Date.now() + 5000;
+
+  it("counts the region's whole active list", async () => {
+    const fetchImpl: FetchImpl = async () => jsonResponse(areasWith([entry("a", "ул. A"), entry("b", "ул. B")]));
+    // No state row, so this is the bootstrap path: nothing is processed.
+    expect(await run(env, deadline(), fetchImpl)).toEqual({ outcome: "items", items: 2 });
+  });
+
+  it("reads the empty-bucket shape of the contract change as `empty`", async () => {
+    const fetchImpl: FetchImpl = async () => jsonResponse(areasWith([]));
+    expect(await run(env, deadline(), fetchImpl)).toEqual({ outcome: "empty" });
+  });
+
+  it("a 200 that is not JSON is a parse error, not a network blip", async () => {
+    const fetchImpl: FetchImpl = async () => new Response("<html>new site</html>");
+    expect(await run(env, deadline(), fetchImpl)).toMatchObject({ outcome: "parse_error" });
+  });
+
+  it("an unreachable endpoint is a fetch error", async () => {
+    const fetchImpl: FetchImpl = async () => { throw new Error("network down"); };
+    expect(await run(env, deadline(), fetchImpl)).toMatchObject({ outcome: "fetch_error" });
   });
 });

@@ -37,7 +37,7 @@ backend/            the Worker — the entire server side
                     refresh-tokens, mailer, bus-lines
   src/db/queries.ts every prepared statement, in one place
   src/ingestion/    runner, schedule, pipeline, normalize, ai, polygon, scrape,
-                    state, sources/
+                    state, silence, sources/
   src/shared/       schemas, constants (AI prompts), datetime, deadline
   test/             vitest suite + HTML/Overpass fixtures
 frontend/           React Native 0.85 Android app (see frontend/SETUP.md)

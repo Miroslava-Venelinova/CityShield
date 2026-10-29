@@ -10,13 +10,20 @@ import { markTickCompleted, markTickStarted, RETENTION_JOBS, runRetentionJob } f
 import type { Env } from "../env";
 import { withTimeout } from "../shared/deadline";
 import { TICK_MINUTES, isDue } from "./schedule";
+import { recordObservation, type SourceObservation } from "./silence";
 import { getLastIdUpdatedAt } from "./state";
 import * as epro from "./sources/epro";
 import * as heating from "./sources/heating";
 import * as vik from "./sources/vik";
 import * as vt from "./sources/vt";
 
-const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promise<void> }> = [
+/**
+ * A source runs, and reports what its parser found (silence.ts) — or null when
+ * it never got to look, e.g. its cursor was unreadable.
+ */
+export type SourceRun = (env: Env, deadline: number) => Promise<SourceObservation | null>;
+
+const SOURCES: Array<{ name: string; run: SourceRun }> = [
   { name: "vik", run: vik.run },
   { name: "heating", run: heating.run },
   { name: "epro", run: epro.run },
@@ -35,15 +42,15 @@ const SOURCES: Array<{ name: string; run: (env: Env, deadline: number) => Promis
 const DEADLINE_MS = 300_000;
 const TICK_INTERVAL_MS = TICK_MINUTES * 60 * 1000;
 
-export async function runIngestion(env: Env): Promise<void> {
+export async function runIngestion(env: Env, sources = SOURCES): Promise<void> {
   const now = Date.now();
   const deadline = now + DEADLINE_MS;
   const tick = Math.floor(now / TICK_INTERVAL_MS);
-  const rotated = [...SOURCES.slice(tick % SOURCES.length), ...SOURCES.slice(0, tick % SOURCES.length)];
+  const rotated = [...sources.slice(tick % sources.length), ...sources.slice(0, tick % sources.length)];
 
   // Index in SOURCES (not the rotated order) is the stagger phase, so a
   // source's due ticks don't shift as the rotation moves.
-  const order = rotated.filter((s) => isDue(s.name, SOURCES.indexOf(s), now));
+  const order = rotated.filter((s) => isDue(s.name, sources.indexOf(s), now));
   if (order.length === 0) {
     console.log("[runner] No source due this tick.");
     return;
@@ -60,7 +67,13 @@ export async function runIngestion(env: Env): Promise<void> {
       // source that somehow blocks past the budget must not take the remaining
       // sources down with it, so the whole tick finishes well inside the 15-min
       // cron cadence and the next tick never overlaps it.
-      await withTimeout(source.run(env, deadline), deadline - startedAt, undefined, `source '${source.name}'`);
+      const observed = await withTimeout(
+        source.run(env, deadline), deadline - startedAt, undefined, `source '${source.name}'`);
+      // Recorded straight after the source, not at the end of the tick: a later
+      // source killed on the CPU cap must not take this one's record with it.
+      // A source that threw or timed out records nothing, so its silence clock
+      // keeps running — which is right, since nobody saw it parse anything.
+      if (observed) await recordObservation(env, source.name, observed);
     } catch (e) {
       console.error(`[runner] Source '${source.name}' failed after ${Date.now() - startedAt} ms: ${e}`);
     }

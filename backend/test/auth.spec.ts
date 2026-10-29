@@ -3,7 +3,7 @@
 import { env, fetchMock } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  nominatimSlotsGranted, resetNominatimThrottle, reverseGeocode,
+  nominatimSlotsGranted, resetGeocodeThrottles, reverseGeocode,
 } from "../src/core/geocoding";
 import { clearRefCaches } from "../src/db/queries";
 import { api, jsonInit, registerAndLogin } from "./helpers";
@@ -19,7 +19,7 @@ beforeAll(() => {
 // throttle test past its timeout and starved reverseGeocode of its budget in
 // the location test, both of which then failed depending only on what ran
 // before them. Start every test from a cold throttle instead.
-beforeEach(resetNominatimThrottle);
+beforeEach(resetGeocodeThrottles);
 
 afterEach(() => fetchMock.assertNoPendingInterceptors());
 
@@ -125,7 +125,7 @@ describe("rate limiting", () => {
       // near a window boundary rolls over mid-test, hands the 6th call a fresh
       // allowance and gets a 200 instead of the 429. This test is about the
       // limiter, not the throttle, so the delay is only a source of flakes.
-      resetNominatimThrottle();
+      resetGeocodeThrottles();
       last = await api("/api/auth/location",
         jsonInit("PUT", { latitude: 43.2, longitude: 27.9 }, token));
     }
@@ -261,7 +261,7 @@ describe("PUT /api/auth/location", () => {
     await api("/api/auth/location", jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
 
     // Same user moves a few metres; this time Nominatim is down.
-    resetNominatimThrottle();
+    resetGeocodeThrottles();
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/reverse") })
       .reply(429, "rate limited");
@@ -292,7 +292,7 @@ describe("PUT /api/auth/location", () => {
 
     await api("/api/auth/location", jsonInit("PUT", { latitude: 43.1864, longitude: 27.9151 }, token));
 
-    resetNominatimThrottle();
+    resetGeocodeThrottles();
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/reverse") })
       .reply(200, JSON.stringify({ address: { village: "Някъде другаде" } }),
@@ -367,7 +367,7 @@ describe("Nominatim rate policy", () => {
   // I/O boundaries instead of continuously, so a stopwatch assertion here passes
   // whether or not the throttle is wired up (it did, before this was rewritten).
   it("takes a throttle slot for a reverse lookup", async () => {
-    resetNominatimThrottle();
+    resetGeocodeThrottles();
     fetchMock.get("https://nominatim.openstreetmap.org")
       .intercept({ path: (p) => p.startsWith("/reverse") })
       .reply(200, JSON.stringify({ address: { city: "Варна" } }),
