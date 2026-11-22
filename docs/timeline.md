@@ -113,6 +113,13 @@ up in [incidents.md](incidents.md).
   `/api/health` every 30 minutes, and a weekly encrypted D1 export kept 30
   days. Both wait on repo secrets ([todo.md](todo.md) §7.3).
 
+- **20.11**: Cloudflare deprecates `qwen3-30b-a3b-fp8`. Every ViK and ePRO
+  parse fails, and the gemma-4 fallback turns out never to have worked. Found on
+  22.11 by a manual health check ([incidents.md](incidents.md)).
+- **22.11**: `AI_MODEL` → `gpt-oss-120b`, `AI_FALLBACK_MODEL` → `qwen3.8-27b`,
+  and both reply shapes are read (`ingestion/ai-output.ts`). The 17 ViK
+  messages skipped in between stay skipped.
+
 ## Where the deployment stands (last known, 31.08.2026)
 
 - Worker: `https://cityshield.cityshield-varna.workers.dev`, D1 in `weur`.

@@ -114,9 +114,13 @@ when the envelope loses some. The model is never asked for both, because it
 would contradict itself. **Ref:** §1.7.
 
 ### Workers AI model and limits
-`@cf/qwen/qwen3-30b-a3b-fp8` was the only candidate that supports JSON-schema
-mode with nullable unions, and it is also the cheapest. It is a reasoning
-model, so it needs `max_tokens: 10000`. Each run has a 30 s timeout.
+`@cf/openai/gpt-oss-120b` since 22.11.2026, with `@cf/qwen/qwen3.8-27b` as
+the fallback. Until then the primary was `@cf/qwen/qwen3-30b-a3b-fp8`, which
+Cloudflare deprecated on 20.11.2026. The pick is on **neurons first**: the
+free tier is 10,000 a day, and qwen3.8 as primary (307 a parse against 141)
+would cross it on a busy ePRO day, after which every parse fails until
+midnight UTC. Both are reasoning models, so they need `max_tokens: 10000`.
+Each run has a 30 s timeout.
 **Do not simply raise the timeout:** that starves the other sources within
 the tick deadline. **Ref:** §1.8,
 [RESULTS.md](../backend/spikes/RESULTS.md).

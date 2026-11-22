@@ -263,7 +263,29 @@ end-to-end test that needs no deployed ingest key. Nothing is stored.
 schema: 3 runs × 3 candidate models, compared **per case id**, gated on "no
 case that passes in the baseline may regress". Use at least three runs,
 because qwen3 deviates in about one run in five. It needs Workers AI
-credentials.
+credentials — wrangler's OAuth token works (see
+[Check Workers AI usage](#check-workers-ai-usage)), and so does the budget
+note there.
+
+## Check Workers AI usage
+
+Neurons per day and model, against the free 10,000 a day. Wrangler's own
+OAuth token carries the scope, so no API token is needed (run
+`npx wrangler whoami` first to refresh it; the token is `oauth_token` in
+wrangler's `default.toml`, the account id is what `whoami` prints):
+
+```sh
+curl -s https://api.cloudflare.com/client/v4/graphql \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"query{viewer{accounts(filter:{accountTag:\"<account id>\"}){aiInferenceAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-11-20T00:00:00Z\"},orderBy:[date_ASC]){sum{totalNeurons} count dimensions{date modelId}}}}}"}'
+```
+
+A model with a high `count` and 0 neurons is failing every call (that is how
+the deprecated qwen3-30b looked from 20.11.2026). The figures lag by several
+minutes. The same token runs `spikes/ai-eval` over REST
+(`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`). A full eval costs
+neurons too: the system prompt alone is ~3.1k tokens, so 25 cases on
+gpt-oss-120b is ~3.5k neurons. Slice it across days if production needs the rest.
 
 ## Rotate a secret
 

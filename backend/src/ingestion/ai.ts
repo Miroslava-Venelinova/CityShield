@@ -8,6 +8,7 @@
 
 import type { Env } from "../env";
 import { expired, sleepWithin, withTimeout } from "../shared/deadline";
+import { aiOutput } from "./ai-output";
 
 // Spike 2 (spikes/RESULTS.md): qwen3-30b is a reasoning model — at the
 // default 2000 tokens it burns the budget thinking and returns no JSON.
@@ -74,12 +75,11 @@ export async function aiParse<T>(
           ],
           response_format: { type: "json_schema", json_schema: jsonSchema },
           max_tokens: MAX_TOKENS,
-        }) as Promise<{ response?: unknown }>,
+        }) as Promise<unknown>,
         runTimeoutMs, deadline, `AI.run(${model})`,
       );
 
-      const raw = typeof res.response === "string" ? JSON.parse(res.response) : res.response;
-      const parsed = zodSchema.parse(raw);
+      const parsed = zodSchema.parse(aiOutput(res));
       // Every parse names its model, so a fallback parse is findable in the
       // tail — it is the less proven of the two, and the one to check first
       // when an alert reads oddly.

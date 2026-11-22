@@ -9,6 +9,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { aiParse, attemptModels } from "../src/ingestion/ai";
+import { aiOutput } from "../src/ingestion/ai-output";
 import { processOutageMessage } from "../src/ingestion/pipeline";
 
 const PRIMARY = "@cf/test/primary";
@@ -99,6 +100,53 @@ describe("aiParse model fallback", () => {
     expect(await parse()).toBeNull();
     expect(called).toEqual([PRIMARY, FALLBACK, PRIMARY]);
   }, 15_000);
+});
+
+// The reply shape (ingestion/ai-output.ts). gemma-4, qwen3.8 and gpt-oss answer
+// in the OpenAI chat-completion shape with no `response` field; reading only
+// `response` made every gemma-4 fallback parse a zod "Required" error from
+// 29.10.2026, which nobody saw until qwen3-30b was deprecated on 20.11.2026 and
+// 17 ViK messages and every ePRO message after it failed all three attempts.
+describe("aiOutput reads both reply shapes", () => {
+  const real = { AI: env.AI, AI_MODEL: env.AI_MODEL, AI_FALLBACK_MODEL: env.AI_FALLBACK_MODEL };
+  afterEach(() => Object.assign(env, real));
+
+  const chat = (content: string) => ({
+    id: "chatcmpl-1", object: "chat.completion",
+    choices: [{ index: 0, message: { role: "assistant", content, reasoning: "…" } }],
+  });
+
+  it("reads `response` as an object or a string, and `choices[0].message.content`", () => {
+    expect(aiOutput({ response: { answer: "a" } })).toEqual({ answer: "a" });
+    expect(aiOutput({ response: '{"answer":"b"}' })).toEqual({ answer: "b" });
+    expect(aiOutput(chat('{\n  "answer": "c"\n}'))).toEqual({ answer: "c" });
+  });
+
+  it("yields nothing for a reply of neither shape, and throws on text that is not JSON", () => {
+    expect(aiOutput(null)).toBeUndefined();
+    expect(aiOutput({ choices: [] })).toBeUndefined();
+    expect(() => aiOutput(chat("Sorry, I cannot help with that."))).toThrow();
+  });
+
+  // The 20.11.2026 failure end to end: the primary is gone (5028) and the
+  // fallback answers in the chat shape. It must parse on the second attempt.
+  it("parses a chat-shaped fallback answer after the primary is deprecated", async () => {
+    const called: string[] = [];
+    Object.assign(env, {
+      AI_MODEL: PRIMARY,
+      AI_FALLBACK_MODEL: FALLBACK,
+      AI: {
+        run: async (model: string) => {
+          called.push(model);
+          if (model === PRIMARY) throw new Error(`AiError: 5028: ${PRIMARY} was deprecated on 2026-11-20.`);
+          return chat(JSON.stringify({ answer: "fallback, chat shape" }));
+        },
+      },
+    });
+    expect(await aiParse(env, "system", "user", {}, schema, undefined, 50))
+      .toEqual({ answer: "fallback, chat shape" });
+    expect(called).toEqual([PRIMARY, FALLBACK]);
+  }, 10_000);
 });
 
 // The deterministic guards are the safety net for BOTH models: the fallback is

@@ -87,10 +87,25 @@ A tick ran out of its 5-minute budget, almost always because of AI timeouts
 provided a later tick has room. Do not raise `RUN_TIMEOUT_MS`.
 
 ### AI parsing fails for every message
-- After 00:00 UTC the cause may be the neuron cap (10,000 a day). The cursor
-  holds and the messages go through after the reset. No action is needed.
+- **`AiError: 5028: <model> was deprecated on <date>`** — Cloudflare retired
+  the model. Every parse on it fails, and the ticks still end `outcome: ok`.
+  Pick a replacement from `npx wrangler ai models` (spec §1.8 has the
+  cost/latency table) and set `AI_MODEL` / `AI_FALLBACK_MODEL` in
+  `wrangler.jsonc`. This happened on 20.11.2026 ([incidents.md](incidents.md)).
+  Look for `planned_deprecation_date` in the catalog to see the next one coming.
+- **zod `"expected": "object", "received": "undefined"`, path `[]`** — the
+  model answered in a reply shape `ingestion/ai-output.ts` does not read. Log
+  the raw reply's keys and add the shape there; the eval imports the same
+  function.
+- **The neuron cap** (10,000 a day, reset 00:00 UTC). Check usage per model
+  with the GraphQL query in the [runbook](runbook.md#check-workers-ai-usage).
+  The cursor does **not** simply hold: each failed parse is a pre-store strike,
+  and after five a message is skipped for good. A fallback that fails on every
+  call spends the budget too.
 - `AiError 5024/5025` means the schema uses a construct the model cannot
   decode. Re-run `spikes/ai-eval/run-eval.mjs`.
+- **Messages "given up on" in `/api/health`** in a run: if many come from one
+  source back to back, it is this section, not a bad message.
 - Local dev makes **real** AI calls and spends real neurons.
 
 ## Placement and targeting

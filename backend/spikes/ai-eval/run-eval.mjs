@@ -21,15 +21,15 @@ import {
 } from "./prompts.mjs";
 // The production normalizer, so times are graded on what would be stored.
 import { normalizeSchedule } from "../../src/shared/datetime.ts";
+import { aiOutput } from "../../src/ingestion/ai-output.ts";
 
-// Verified against the live catalog (list-models.mjs, July 2026):
-// llama-3.1-8b-instruct was deprecated 2026-05-30 → fp8 variant instead.
+// Verified against the live catalog (`wrangler ai models`, 22.11.2026).
+// qwen3-30b-a3b-fp8, AI_MODEL until then, was deprecated on 20.11.2026 and now
+// answers every call with error 5028; llama-3.1-8b-instruct-fp8 is gone too.
 const CANDIDATES = [
-  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  "@cf/meta/llama-3.1-8b-instruct-fp8",
-  "@cf/qwen/qwen3-30b-a3b-fp8",
-  // AI_FALLBACK_MODEL since 29.10.2026 (docs/specification.md §1.8) — chosen
-  // from the catalog, not yet graded here. Run it before trusting it.
+  "@cf/qwen/qwen3.8-27b",
+  "@cf/openai/gpt-oss-120b",
+  "@cf/mistralai/mistral-small-3.1-24b-instruct",
   "@cf/google/gemma-4-26b-a4b-it",
 ];
 
@@ -187,11 +187,12 @@ const GRADERS = { outage: gradeOutage, roads: gradeRoads, vt: gradeVt };
 // --- run --------------------------------------------------------------------
 
 function extractJson(res) {
-  // Workers AI JSON mode may return the object directly in `response`, or a string.
-  const raw = res?.response ?? res;
-  if (typeof raw === "object" && raw !== null) return raw;
+  // The production extractor (ingestion/ai.ts), so the eval reads a reply
+  // exactly as ingestion would: `response` as an object or a string, or the
+  // OpenAI-style `choices[0].message.content` that the newer catalog models
+  // (gemma-4, qwen3.8, gpt-oss) return instead.
   try {
-    return JSON.parse(raw);
+    return aiOutput(res) ?? null;
   } catch {
     return null;
   }
@@ -211,6 +212,7 @@ for (const model of models) {
       { role: "user", content: testCase.input },
     ];
     let outcome;
+    const t0 = Date.now();
     try {
       const res = await aiRun(model, messages, { type: "json_schema", json_schema: kind.schema });
       const parsed = extractJson(res);
@@ -231,11 +233,18 @@ for (const model of models) {
       outcome = { status: "error", detail: String(err).slice(0, 300) };
       entry.errors++;
     }
+    outcome.ms = Date.now() - t0;
     entry.cases[testCase.id] = outcome;
     const mark = outcome.status === "pass" ? "PASS" : outcome.status === "fail" ? "FAIL" : "ERR ";
     console.log(`  [${mark}] ${testCase.id}${outcome.diffs ? " — " + outcome.diffs.join("; ") : ""}${outcome.detail ? " — " + outcome.detail : ""}`);
   }
-  console.log(`  => ${entry.passed} pass / ${entry.failed} fail / ${entry.errors} error of ${corpus.cases.length}`);
+  // Latency matters as much as accuracy: ingestion abandons a call at 30 s
+  // (RUN_TIMEOUT_MS in ingestion/ai.ts), so a model that is right in 34 s is a
+  // timeout in production.
+  const ms = Object.values(entry.cases).map((c) => c.ms).sort((a, b) => a - b);
+  entry.latency = { p50: ms[Math.floor(ms.length / 2)], max: ms[ms.length - 1], over30s: ms.filter((m) => m > 30_000).length };
+  console.log(`  => ${entry.passed} pass / ${entry.failed} fail / ${entry.errors} error of ${corpus.cases.length}`
+    + ` · p50 ${entry.latency.p50} ms, max ${entry.latency.max} ms, ${entry.latency.over30s} over 30 s`);
 }
 
 mkdirSync(new URL("./out/", import.meta.url), { recursive: true });

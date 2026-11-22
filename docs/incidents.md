@@ -8,6 +8,7 @@ diagnose something live, start with
 
 | Date | What broke | Duration | Found by |
 |---|---|---|---|
+| 20.11–22.11.2026 | ViK + ePRO: every parse failed, AI model deprecated | ~2.5 days | A person asking "is everything working?" |
 | ~09.2026–26.10.2026 | Polygons: 1 of 47 built, Overpass down | ~2 months | The 26.10 polygon review |
 | 28.08–31.08.2026 | All ingestion: CPU kill in `cheerio.load()` | ~21 h, then fixed 31.08 | A person looking |
 | ~13.08–31.08.2026 | heating ingestion only, silently | ~18 days | Found while fixing the 28.08 outage |
@@ -25,6 +26,44 @@ there is a heartbeat (`GET /api/health`), but nothing pings it yet
 ([open-questions.md](open-questions.md)).
 
 ---
+
+## 20.11–22.11.2026: the AI model is deprecated, and the fallback never worked
+
+**Symptom.** No ViK or ePRO alert was stored after 19.11.2026 23:15 UTC. Every
+tick still ended `outcome: ok`, the heartbeat stayed fresh, and the uptime
+check stayed green. The ViK cursor even kept moving: 17 messages
+(17877–17893, 20.11–22.11) each failed six times and were skipped by the
+pre-store cap, among them real outages such as с. Комарево on 22.11. ePRO's
+cursor stood still from 19.11 10:00 while its parser saw 68 items every run.
+
+**Cause.** Two faults, the second hidden behind the first:
+
+1. Cloudflare deprecated `@cf/qwen/qwen3-30b-a3b-fp8`, `AI_MODEL`, on
+   20.11.2026. Every call answered `AiError: 5028: … was deprecated on
+   2026-11-20`.
+2. The fallback added on 29.10, `@cf/google/gemma-4-26b-a4b-it`, answers in the
+   OpenAI chat-completion shape (`choices[0].message.content`) with no
+   `response` field. `ai.ts` read only `response`, so every gemma parse was a
+   zod "Required" error, and the rest ran 26–34 s into the 30 s cap. It had
+   never parsed a message: while qwen3 worked, the fallback was rarely reached.
+   Its eval had been owed since 29.10 (todo §9.1), and that eval would have
+   caught both faults.
+
+The failing fallback was not free either. It spent 7,138, 10,011 and 7,497
+neurons on 20, 21 and 22.11, which was the whole free tier on 21.11.
+
+**Fix (22.11.2026).** `ingestion/ai-output.ts` reads both reply shapes, and
+the eval harness imports it. `AI_MODEL` → `@cf/openai/gpt-oss-120b`,
+`AI_FALLBACK_MODEL` → `@cf/qwen/qwen3.8-27b`, chosen on neurons and latency
+(spec §1.8). The 17 skipped ViK messages stay skipped by the owner's decision:
+by then most of those outages were over, and a two-day-old push is noise.
+
+**Lesson.** A fallback that has never succeeded is not a fallback: run the
+eval before relying on one, and let a test drive the real reply shape. And
+"every parse failed" looks healthy to every monitor we have, because a tick
+that parses nothing still completes. `/api/health` reports given-up messages
+only as a warning. A burst of them from one source is an outage
+([todo.md](todo.md) §9.1).
 
 ## 09–10.2026: polygons stop being built (Overpass)
 

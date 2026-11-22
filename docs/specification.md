@@ -1187,32 +1187,54 @@ pre-store strike counter, §1.7, counts it exactly as before).
   or equal to `AI_MODEL`, every attempt is `AI_MODEL` as before.
   Every successful parse logs its model (`[ai] parsed by … (FALLBACK model)`),
   so a fallback parse is findable in the tail; it is not persisted on the alert.
-- **Fallback model: `@cf/google/gemma-4-26b-a4b-it`**, a `vars` entry like the
-  primary. Chosen from the live catalog (29.10.2026) as: a different family on
-  separate capacity; slightly smaller (26B total, 4B active, MoE); multilingual
-  (pre-trained on 140+ languages, Bulgarian among them); accepts the same
-  `messages` + `response_format` input (Mistral Small 3.1 takes `guided_json`
-  instead, and Granite 4.0 Micro lists no Bulgarian); cheaper output tokens
-  than qwen3 ($0.30 vs $0.335 per M). The Llama family is out on Phase 0's
-  evidence (5025, and 5024 on nullable unions). **Unvalidated:** Cloudflare's
-  JSON-mode page does not list it (nor qwen3, which works), so whether its
-  decoder handles `["string","null"]` is unknown until `spikes/ai-eval` runs
-  it — it is in the harness's candidate list for that. Until then the design
-  bounds the risk: one attempt in three, and **the deterministic guards
-  (`normalize.ts`, §1.7) apply to its output exactly as to the primary's** —
-  they are decided from the source text, never from which model spoke
-  (`test/ai.spec.ts` drives an invented district through A10).
+- **Model: `@cf/openai/gpt-oss-120b`** (since 22.11.2026), a `vars` entry so it
+  can be swapped without a code change. The primary until then,
+  `@cf/qwen/qwen3-30b-a3b-fp8`, was **deprecated by Cloudflare on 20.11.2026**
+  and answers every call with `AiError: 5028` — see
+  [incidents.md](incidents.md). The replacement was picked on **cost and
+  latency first**, measured on one corpus case with the production prompt and
+  schema (all five returned the same correct JSON):
 
-- **Model: `@cf/qwen/qwen3-30b-a3b-fp8`**, a `vars` entry so it can be swapped
-  without a code change. It was the only Phase 0 candidate that both supports
-  JSON-schema mode and handles nullable type unions, and it is also the cheapest
-  (`spikes/RESULTS.md`): `llama-3.1-8b-instruct-fp8` rejects JSON schemas
-  outright (error 5025), and `llama-3.3-70b-instruct-fp8-fast` fails on
-  `"type":["string","null"]` (error 5024), which all three production schemas
-  use.
-- **`max_tokens: 10000`** — a generous ceiling is required: qwen3 is a reasoning
-  model and at the default 2,000 it burns the budget thinking and returns no
-  JSON. Spike 2 sized this at 8,000; raised to 10,000 on 31.07.2026 so a long
+  | Model | Neurons/parse | Time |
+  |---|---:|---:|
+  | qwen3-30b (gone; 16–19.11 average) | ~40 | 4–21 s |
+  | `google/gemma-4-26b-a4b-it` | 67 | 26–34 s |
+  | `openai/gpt-oss-20b` | 81 | 7 s |
+  | `mistralai/mistral-small-3.1-24b-instruct` | 111 | 4 s |
+  | **`openai/gpt-oss-120b`** | **141** | 11 s |
+  | `qwen/qwen3.8-27b` | 307 | 13 s |
+
+  The free tier is 10,000 neurons a day and qwen3-30b ran 15–27 parses a day
+  (busy ePRO days twice that). At 141 a normal day is ~2–4k and a busy one ~7k;
+  qwen3.8 as primary would be 5–8k on a normal day and ~15k on a busy one, and
+  past the cap every parse fails until 00:00 UTC. The owner's call (22.11.2026):
+  gpt-oss-120b primary, qwen3.8 fallback, and swap only if the eval shows
+  qwen3.8 clearly better *and* the account moves to the paid plan.
+  **Neither is graded by `spikes/ai-eval` yet** — the head-to-head on the
+  outage cases (~7k neurons) is owed (todo §9.1). The guards (§1.7) bound the
+  risk meanwhile, as below.
+- **Fallback model: `@cf/qwen/qwen3.8-27b`** (since 22.11.2026), a `vars` entry
+  like the primary: a different family on separate capacity, 13 s per parse.
+  Its 307 neurons are affordable on one attempt in three and not as the
+  primary. It replaced `@cf/google/gemma-4-26b-a4b-it` (29.10–22.11.2026),
+  which never parsed a single message in production: it answered in the
+  chat-completion shape the code did not read (below), and when it did not,
+  it ran 26–34 s against the 30 s cap. The design bounds a fallback's risk:
+  one attempt in three, and **the deterministic guards (`normalize.ts`, §1.7)
+  apply to its output exactly as to the primary's** — they are decided from the
+  source text, never from which model spoke (`test/ai.spec.ts` drives an
+  invented district through A10). The Llama family stays out on Phase 0's
+  evidence (5025, and 5024 on nullable unions).
+- **Two reply shapes** (`ingestion/ai-output.ts`). The Phase 0 models answer
+  `{ response }`, an object or a JSON string. The newer catalog models
+  (gpt-oss, qwen3.8, gemma-4, glm) answer in the OpenAI chat-completion shape,
+  `choices[0].message.content`, with no `response` field at all. Both are read,
+  by the same function the eval harness imports, so the eval grades a reply
+  exactly as ingestion reads it.
+- **`max_tokens: 10000`** — a generous ceiling is required: both production
+  models reason before answering (gpt-oss ~600 completion tokens on a short
+  message), and qwen3-30b at the default 2,000 burned the budget thinking and
+  returned no JSON. Spike 2 sized this at 8,000; raised to 10,000 on 31.07.2026 so a long
   message with many locations cannot get truncated mid-JSON.
 - The AI binding accepts no `AbortSignal`, so each run (on either model) is wrapped in a **30 s**
   timeout (legitimate parses clock 4–21 s), bounded further by the remaining tick
@@ -1234,10 +1256,15 @@ pre-store strike counter, §1.7, counts it exactly as before).
   matching pass *totals* can hide two cases swapping), reporting worst-of-3 and
   gating on "no case green in the baseline may regress". Three runs minimum
   because qwen3 deviates on roughly one run in five (§1.7's A3).
-- Budget: tens of messages a day at ~1–2k tokens each, comfortably inside 10,000
-  neurons/day. If the cap is ever hit, `AI.run` fails, the cursor holds, and the
-  messages are processed after the 00:00 UTC reset — acceptable degradation, no
-  code needed.
+- Budget: tens of messages a day at ~3.1k prompt tokens each (the system
+  prompt is most of it). Under qwen3-30b that was ~1k neurons a day; at
+  gpt-oss-120b's 141 it is ~2–4k, still inside 10,000 neurons/day but no longer
+  "comfortably" on a busy day. **A failing fallback spends the budget too:**
+  from 20.11.2026 every message cost a gemma-4 attempt every tick, 7–10k neurons
+  a day for nothing. If the cap is hit, `AI.run` fails and the pre-store strikes
+  (§1.7) count it like any other failure — five ticks later the message is
+  skipped, not held until the 00:00 UTC reset. Daily usage per model is in the
+  GraphQL dataset `aiInferenceAdaptiveGroups` ([runbook](runbook.md)).
 - Optional: route calls through a free **AI Gateway** for request logs and replay.
 
 ### 1.9 Polygon builder (`ingestion/polygon.ts`)
